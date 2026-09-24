@@ -14,7 +14,7 @@ from typing import Any
 from tableforge.capability.discovery import LocalCapabilityDiscovery
 from tableforge.capability.evaluator import assess_compatibility
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
-from tableforge.coordinator.experiments import ExperimentService
+from tableforge.composition import Services, build_services
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.capabilities import CompatibilityStatus, NodeCapability
 from tableforge.domain.ids import (
@@ -29,13 +29,8 @@ from tableforge.domain.ids import (
 from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.league import MatrixCell
 from tableforge.domain.simulation import SimulationJobPayload
-from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.node_identity import NodeIdentityStore
-from tableforge.infrastructure.sqlite.auth import SQLiteAuthRepository
-from tableforge.infrastructure.sqlite.checkpoints import SQLiteCheckpointRepository
-from tableforge.infrastructure.sqlite.experiments import SQLiteExperimentRepository
-from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
-from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
+from tableforge.settings import Settings, SettingsError, load_settings
 from tableforge.transport.client import enroll
 from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.server import start_server
@@ -49,6 +44,7 @@ from tableforge.worker.simulation import SimulationExecutor
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tableforge")
     parser.add_argument("--data-dir", type=Path, default=Path(".tableforge"))
+    parser.add_argument("--config", type=Path)
     subparsers = parser.add_subparsers(dest="command", required=True)
     doctor = subparsers.add_parser("doctor")
     doctor.add_argument("--json", action="store_true", dest="as_json")
@@ -71,9 +67,9 @@ def main() -> None:
     worker_subparsers.add_parser("run-once")
     worker_start = worker_subparsers.add_parser("start")
     worker_start.add_argument("--max-jobs", type=int)
-    worker_start.add_argument("--idle-seconds", type=float, default=1.0)
+    worker_start.add_argument("--idle-seconds", type=float)
     worker_start.add_argument("--remote", action="store_true")
-    worker_start.add_argument("--lease-seconds", type=float, default=300.0)
+    worker_start.add_argument("--lease-seconds", type=float)
 
     coordinator = subparsers.add_parser("coordinator")
     coordinator_subparsers = coordinator.add_subparsers(
@@ -82,9 +78,9 @@ def main() -> None:
     coordinator_init = coordinator_subparsers.add_parser("init")
     coordinator_init.add_argument("--host", action="append", default=[])
     coordinator_serve = coordinator_subparsers.add_parser("serve")
-    coordinator_serve.add_argument("--listen", default="0.0.0.0:7443")
+    coordinator_serve.add_argument("--listen")
     coordinator_serve.add_argument("--insecure", action="store_true")
-    coordinator_serve.add_argument("--reconcile-seconds", type=float, default=2.0)
+    coordinator_serve.add_argument("--reconcile-seconds", type=float)
     enrollment = coordinator_subparsers.add_parser("enrollment-token")
     enrollment.add_argument("--ttl-minutes", type=int, default=60)
 
@@ -128,6 +124,19 @@ def main() -> None:
     league_matrix.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args()
+    try:
+        settings = load_settings(
+            args.data_dir,
+            config_file=args.config,
+            overrides={
+                "worker.lease_seconds": getattr(args, "lease_seconds", None),
+                "worker.idle_seconds": getattr(args, "idle_seconds", None),
+                "coordinator.listen": getattr(args, "listen", None),
+                "coordinator.reconcile_seconds": getattr(args, "reconcile_seconds", None),
+            },
+        )
+    except SettingsError as error:
+        raise SystemExit(f"configuration error: {error}") from error
     if args.command == "doctor":
         exit_code = run_doctor(args.data_path, args.as_json)
         raise SystemExit(exit_code)
@@ -136,18 +145,17 @@ def main() -> None:
         return
     if args.command == "worker" and args.worker_command == "start" and args.remote:
         _run_worker(
-            RemoteCredentials.load(args.data_dir / "coordinator.json").client(
-                args.data_dir / "artifact-cache"
+            RemoteCredentials.load(settings.data_dir / "coordinator.json").client(
+                settings.data_dir / "artifact-cache", settings.worker.cache_max_bytes
             ),
-            args.data_dir,
+            settings,
             args.max_jobs,
-            args.idle_seconds,
-            timedelta(seconds=args.lease_seconds),
         )
         return
-    service = _local_service(args.data_dir)
+    services = build_services(settings)
+    service = services.coordinator
     if args.command == "coordinator":
-        _coordinator_command(args, service)
+        _coordinator_command(args, services)
         return
     if args.command == "job" and args.job_command == "submit-simulation":
         created_job = submit_simulation(
@@ -187,21 +195,19 @@ def main() -> None:
         cancelled = service.cancel_job(JobId(args.job_id), datetime.now(UTC))
         print(f"{cancelled.spec.job_id}\t{cancelled.status.value}")
     elif args.command == "worker" and args.worker_command == "run-once":
-        runtime = _local_worker(service, args.data_dir)
+        runtime = _local_worker(service, settings)
         lease = runtime.run_once()
         print("idle" if lease is None else lease.job.spec.job_id)
     elif args.command == "worker" and args.worker_command == "start":
-        experiments = _experiment_service(service, args.data_dir)
+        experiments = services.experiments
         _run_worker(
             service,
-            args.data_dir,
+            settings,
             args.max_jobs,
-            args.idle_seconds,
-            timedelta(seconds=args.lease_seconds),
             on_idle=lambda: experiments.reconcile_all(datetime.now(UTC)) > 0,
         )
     elif args.command == "experiment":
-        experiments = _experiment_service(service, args.data_dir)
+        experiments = services.experiments
         now = datetime.now(UTC)
         if args.experiment_command == "create":
             created_experiment = experiments.create(args.preset, now)
@@ -233,7 +239,7 @@ def main() -> None:
             for current in experiments.list_experiments():
                 print(f"{current.experiment_id}\t{current.status.value}")
     elif args.command == "league":
-        matrix = _experiment_service(service, args.data_dir).league_matrix(
+        matrix = services.experiments.league_matrix(
             ExperimentId(args.experiment_id)
         )
         if matrix is None:
@@ -251,7 +257,7 @@ def main() -> None:
         else:
             print(_format_matrix(matrix))
     elif args.command == "checkpoint":
-        checkpoints = SQLiteCheckpointRepository(args.data_dir / "tableforge.db")
+        checkpoints = services.repositories.checkpoints
         if args.checkpoint_command == "list":
             agent = AgentId(args.agent) if args.agent else None
             for item in checkpoints.list_checkpoints(agent):
@@ -280,7 +286,7 @@ def main() -> None:
                 )
             )
     elif args.command == "node" and args.node_command == "init":
-        capability = _discover_local_worker(args.data_dir)
+        capability = _discover_local_worker(settings.data_dir)
         service.register_node(capability, datetime.now(UTC))
         print(f"{capability.node_id}\trevision={capability.revision}")
     elif args.command == "node" and args.node_command == "status":
@@ -322,16 +328,6 @@ def submit_simulation(
     )
 
 
-def _local_service(data_dir: Path) -> CoordinatorService:
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return CoordinatorService(
-        jobs=SQLiteJobRepository(data_dir / "tableforge.db"),
-        artifacts=LocalArtifactStore(data_dir / "artifacts"),
-        workloads=BUILTIN_WORKLOADS,
-        nodes=SQLiteNodeRepository(data_dir / "tableforge.db"),
-    )
-
-
 def _learning_available() -> bool:
     import importlib.util
 
@@ -365,16 +361,6 @@ def _learning_executors(
     return learning_executors(service.read_artifact)
 
 
-def _experiment_service(
-    coordinator: CoordinatorService, data_dir: Path
-) -> ExperimentService:
-    return ExperimentService(
-        experiments=SQLiteExperimentRepository(data_dir / "tableforge.db"),
-        coordinator=coordinator,
-        checkpoints=SQLiteCheckpointRepository(data_dir / "tableforge.db"),
-    )
-
-
 def _stop_event() -> threading.Event:
     stop = threading.Event()
 
@@ -390,10 +376,8 @@ def _stop_event() -> threading.Event:
 
 def _run_worker(
     coordinator: CoordinatorClient,
-    data_dir: Path,
+    settings: Settings,
     max_jobs: int | None,
-    idle_seconds: float,
-    lease_duration: timedelta = timedelta(minutes=5),
     on_idle: Callable[[], bool] | None = None,
 ) -> None:
     stop = _stop_event()
@@ -401,18 +385,21 @@ def _run_worker(
     def interruptible_sleep(seconds: float) -> None:
         stop.wait(seconds)
 
+    runtime = _local_worker(coordinator, settings)
     WorkerLoop(
-        runtime=_local_worker(coordinator, data_dir, lease_duration),
-        logger=JsonLineLogger(),
-        idle_seconds=idle_seconds,
+        runtime=runtime,
+        logger=JsonLineLogger().bind(component="worker", node_id=str(runtime.node_id)),
+        idle_seconds=settings.worker.idle_seconds,
         sleep=interruptible_sleep,
         on_idle=on_idle,
     ).run(should_stop=stop.is_set, max_jobs=max_jobs)
 
 
-def _coordinator_command(args: argparse.Namespace, service: CoordinatorService) -> None:
-    data_dir: Path = args.data_dir
-    auth = SQLiteAuthRepository(data_dir / "tableforge.db")
+def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
+    settings = services.settings
+    data_dir = settings.data_dir
+    auth = services.repositories.auth
+    service = services.coordinator
     if args.coordinator_command == "init":
         material = generate_self_signed(data_dir / "tls", tuple(args.host))
         print(material.certificate_path)
@@ -429,12 +416,17 @@ def _coordinator_command(args: argparse.Namespace, service: CoordinatorService) 
             if not material.certificate_path.exists():
                 raise SystemExit("run 'tableforge coordinator init' first or pass --insecure")
             tls = material
-        running = start_server(service, auth, SystemClock(), args.listen, tls)
-        logger = JsonLineLogger()
-        logger.emit("coordinator_started", port=running.port, tls=tls is not None)
-        experiments = _experiment_service(service, data_dir)
+        running = start_server(service, auth, SystemClock(), settings.coordinator.listen, tls)
+        logger = JsonLineLogger().bind(component="coordinator")
+        logger.emit(
+            "coordinator_started",
+            port=running.port,
+            tls=tls is not None,
+            settings=settings.redacted(),
+        )
+        experiments = services.experiments
         stop = _stop_event()
-        while not stop.wait(args.reconcile_seconds):
+        while not stop.wait(settings.coordinator.reconcile_seconds):
             try:
                 advanced = experiments.reconcile_all(datetime.now(UTC))
             except Exception as error:
@@ -458,12 +450,9 @@ def _enroll_node(args: argparse.Namespace) -> None:
     print(f"{node_id}\tenrolled\texpires={expires_at.isoformat()}")
 
 
-def _local_worker(
-    service: CoordinatorClient,
-    data_dir: Path,
-    lease_duration: timedelta = timedelta(minutes=5),
-) -> WorkerRuntime:
-    capability = _discover_local_worker(data_dir)
+def _local_worker(service: CoordinatorClient, settings: Settings) -> WorkerRuntime:
+    lease_duration = timedelta(seconds=settings.worker.lease_seconds)
+    capability = _discover_local_worker(settings.data_dir)
     return WorkerRuntime(
         node_id=capability.node_id,
         capability=capability,

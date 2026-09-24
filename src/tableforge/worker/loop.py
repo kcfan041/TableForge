@@ -4,6 +4,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from tableforge.worker.runtime import WorkerRuntime
@@ -16,9 +17,20 @@ class EventLogger(Protocol):
 @dataclass(frozen=True, slots=True)
 class JsonLineLogger:
     sink: Callable[[str], None] = print
+    context: tuple[tuple[str, object], ...] = ()
 
     def emit(self, event: str, **fields: object) -> None:
-        self.sink(json.dumps({"event": event, **fields}, sort_keys=True, default=str))
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            **dict(self.context),
+            "event": event,
+            **fields,
+        }
+        self.sink(json.dumps(record, sort_keys=True, default=str))
+
+    def bind(self, **fields: object) -> JsonLineLogger:
+        merged = {**dict(self.context), **fields}
+        return JsonLineLogger(self.sink, tuple(sorted(merged.items())))
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +64,10 @@ class WorkerLoop:
             self.logger.emit(
                 "job_finished",
                 attempt_id=str(lease.attempt_id),
+                experiment_id=str(lease.job.spec.experiment_id),
                 job_id=str(lease.job.spec.job_id),
+                node_id=str(self.runtime.node_id),
+                payload_type=lease.job.spec.payload_type,
                 status=job.status.value,
             )
             if max_jobs is not None and completed >= max_jobs:

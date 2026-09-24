@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tableforge.domain.auth import AuthenticationError, IssuedSession
 from tableforge.domain.ids import NodeId
+
+__all__ = ["AuthenticationError", "IssuedSession", "SQLiteAuthRepository"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS enrollment_tokens (
@@ -25,17 +27,6 @@ CREATE TABLE IF NOT EXISTS node_sessions (
     revoked INTEGER NOT NULL DEFAULT 0
 );
 """
-
-
-class AuthenticationError(Exception):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class IssuedSession:
-    token: str
-    node_id: NodeId
-    expires_at: datetime
 
 
 class SQLiteAuthRepository:

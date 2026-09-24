@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import secrets
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -21,6 +23,7 @@ from tableforge.transport.errors import (
     EXCEPTIONS_BY_CODE,
     RemoteCoordinatorError,
 )
+from tableforge.worker.cache import enforce_cache_limit
 
 T = TypeVar("T")
 CHUNK_SIZE = 1024 * 1024
@@ -82,8 +85,10 @@ class GrpcCoordinatorClient:
         retry: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
         cache_dir: Path | None = None,
+        cache_max_bytes: int | None = None,
     ) -> None:
         self._cache_dir = cache_dir
+        self._cache_max_bytes = cache_max_bytes
         self._stub = coordinator_pb2_grpc.CoordinatorServiceStub(channel)
         self._artifacts = coordinator_pb2_grpc.ArtifactServiceStub(channel)
         self._metadata = (("authorization", f"Bearer {session_token}"),)
@@ -282,7 +287,10 @@ class GrpcCoordinatorClient:
         if self._cache_dir is None:
             raise RemoteCoordinatorError("NO_CACHE", "artifact cache directory is not configured")
         _, path = self.download_artifact(artifact_id, self._cache_dir)
-        return path.read_bytes()
+        content = path.read_bytes()
+        if self._cache_max_bytes is not None:
+            enforce_cache_limit(self._cache_dir, self._cache_max_bytes)
+        return content
 
     def download_artifact(self, artifact_id: str, cache_dir: Path) -> tuple[Artifact, Path]:
         request = coordinator_pb2.DownloadArtifactRequest(artifact_id=artifact_id)
@@ -306,7 +314,7 @@ class GrpcCoordinatorClient:
         cache_dir.mkdir(parents=True, exist_ok=True)
         path = cache_dir / artifact.sha256
         if not path.exists():
-            temporary = path.with_suffix(".part")
+            temporary = cache_dir / f"{artifact.sha256}.{secrets.token_hex(6)}.part"
             temporary.write_bytes(body)
-            temporary.replace(path)
+            os.replace(temporary, path)
         return artifact, path

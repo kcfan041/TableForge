@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 
-from tableforge.application.ports import ExperimentRepository
+from tableforge.application.ports import CheckpointRepository, ExperimentRepository
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.nfsp_iterative import (
     IterativeNfspOrchestrator,
@@ -29,7 +29,6 @@ from tableforge.domain.learning import (
     NfspTrainingPayload,
 )
 from tableforge.domain.simulation import SimulationJobPayload
-from tableforge.infrastructure.sqlite.checkpoints import SQLiteCheckpointRepository
 
 _TERMINAL = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
 
@@ -45,7 +44,7 @@ def _profile(payload_type: str, key: str | None = None) -> WorkloadProfile:
 class ExperimentService:
     experiments: ExperimentRepository
     coordinator: CoordinatorService
-    checkpoints: SQLiteCheckpointRepository | None = None
+    checkpoints: CheckpointRepository | None = None
 
     def _orchestrator(self) -> IterativeNfspOrchestrator:
         if self.checkpoints is None:

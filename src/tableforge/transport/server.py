@@ -14,9 +14,10 @@ from tableforge._generated.tableforge.v1 import (
     coordinator_pb2,
     coordinator_pb2_grpc,
 )
+from tableforge.application.ports import AuthRepository
 from tableforge.coordinator.service import CoordinatorService
+from tableforge.domain.auth import AuthenticationError
 from tableforge.domain.ids import JobId, NodeId
-from tableforge.infrastructure.sqlite.auth import AuthenticationError, SQLiteAuthRepository
 from tableforge.transport import convert
 from tableforge.transport.errors import ERROR_CODES, ERROR_METADATA_KEY
 from tableforge.transport.tls import TlsMaterial
@@ -37,7 +38,7 @@ class ServerConfig:
 
 
 def _authenticate(
-    auth: SQLiteAuthRepository, context: grpc.ServicerContext, now: datetime
+    auth: AuthRepository, context: grpc.ServicerContext, now: datetime
 ) -> NodeId:
     metadata = dict(context.invocation_metadata())
     header = metadata.get("authorization", "")
@@ -99,7 +100,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
     def __init__(
         self,
         service: CoordinatorService,
-        auth: SQLiteAuthRepository,
+        auth: AuthRepository,
         clock: Clock,
         config: ServerConfig,
     ) -> None:
@@ -251,7 +252,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
 
 class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
     def __init__(
-        self, service: CoordinatorService, auth: SQLiteAuthRepository, clock: Clock
+        self, service: CoordinatorService, auth: AuthRepository, clock: Clock
     ) -> None:
         self._service = service
         self._auth = auth
@@ -341,7 +342,7 @@ class RunningServer:
 
 def start_server(
     service: CoordinatorService,
-    auth: SQLiteAuthRepository,
+    auth: AuthRepository,
     clock: Clock,
     address: str,
     tls: TlsMaterial | None,

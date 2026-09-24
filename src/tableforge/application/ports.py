@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
+from tableforge.domain.auth import IssuedSession
 from tableforge.domain.capabilities import NodeCapability
+from tableforge.domain.checkpoints import Checkpoint
 from tableforge.domain.experiments import Experiment, ExperimentConfig, ExperimentStatus
-from tableforge.domain.ids import ExperimentId, JobId, NodeId
+from tableforge.domain.ids import AgentId, CheckpointId, ExperimentId, JobId, NodeId
 from tableforge.domain.jobs import (
     Job,
     JobAttemptError,
@@ -147,6 +149,36 @@ class NodeRepository(Protocol):
     def get(self, node_id: NodeId) -> RegisteredNode | None: ...
 
     def list_nodes(self) -> tuple[RegisteredNode, ...]: ...
+
+
+class CheckpointRepository(Protocol):
+    def register_candidate(self, checkpoint: Checkpoint) -> Checkpoint: ...
+
+    def decide(
+        self, checkpoint_id: CheckpointId, promote: bool, reason: str, now: datetime
+    ) -> Checkpoint: ...
+
+    def get(self, checkpoint_id: CheckpointId) -> Checkpoint | None: ...
+
+    def active(self, agent_id: AgentId) -> Checkpoint | None: ...
+
+    def list_checkpoints(self, agent_id: AgentId | None = None) -> tuple[Checkpoint, ...]: ...
+
+
+class AuthRepository(Protocol):
+    def create_enrollment_token(self, now: datetime, ttl: timedelta) -> str: ...
+
+    def enroll(
+        self,
+        enrollment_token: str,
+        node_id: NodeId,
+        now: datetime,
+        session_ttl: timedelta,
+    ) -> IssuedSession: ...
+
+    def authenticate(self, session_token: str, now: datetime) -> NodeId: ...
+
+    def revoke_node(self, node_id: NodeId) -> int: ...
 
 
 class ArtifactStore(Protocol):

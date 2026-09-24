@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from tableforge.application.ports import CheckpointRepository
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor, ArtifactKind
 from tableforge.domain.capabilities import WorkloadProfile
@@ -45,7 +46,6 @@ from tableforge.domain.nfsp_pipeline import (
     promotion_decision,
     snapshot_bytes,
 )
-from tableforge.infrastructure.sqlite.checkpoints import SQLiteCheckpointRepository
 
 
 class PipelineFailedError(Exception):
@@ -67,7 +67,7 @@ def _content_id(content: bytes) -> ArtifactId:
 @dataclass(frozen=True, slots=True)
 class IterativeNfspOrchestrator:
     coordinator: CoordinatorService
-    checkpoints: SQLiteCheckpointRepository
+    checkpoints: CheckpointRepository
     profile_for: Callable[[str], WorkloadProfile]
 
     def reconcile(self, experiment: Experiment, now: datetime) -> bool:
