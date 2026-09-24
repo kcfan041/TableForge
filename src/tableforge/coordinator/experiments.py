@@ -6,6 +6,10 @@ from datetime import datetime
 
 from tableforge.application.ports import ExperimentRepository
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
+from tableforge.coordinator.nfsp_iterative import (
+    IterativeNfspOrchestrator,
+    PipelineFailedError,
+)
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.capabilities import WorkloadProfile
 from tableforge.domain.experiments import (
@@ -24,6 +28,7 @@ from tableforge.domain.learning import (
     NfspTrainingPayload,
 )
 from tableforge.domain.simulation import SimulationJobPayload
+from tableforge.infrastructure.sqlite.checkpoints import SQLiteCheckpointRepository
 
 _TERMINAL = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
 
@@ -39,6 +44,23 @@ def _profile(payload_type: str, key: str | None = None) -> WorkloadProfile:
 class ExperimentService:
     experiments: ExperimentRepository
     coordinator: CoordinatorService
+    checkpoints: SQLiteCheckpointRepository | None = None
+
+    def _orchestrator(self) -> IterativeNfspOrchestrator:
+        if self.checkpoints is None:
+            raise ValueError("iterative NFSP experiments require a checkpoint repository")
+        return IterativeNfspOrchestrator(self.coordinator, self.checkpoints, _profile)
+
+    def reconcile_all(self, now: datetime) -> int:
+        advanced = 0
+        for experiment in self.experiments.list_experiments():
+            if experiment.status is ExperimentStatus.RUNNING:
+                before = len(self.coordinator.jobs.list_jobs(experiment.experiment_id))
+                after_experiment = self.status(experiment.experiment_id, now)
+                after = len(self.coordinator.jobs.list_jobs(experiment.experiment_id))
+                if after != before or after_experiment.status is not ExperimentStatus.RUNNING:
+                    advanced += 1
+        return advanced
 
     def create(self, preset_key: str, now: datetime) -> Experiment:
         preset = _preset(preset_key)
@@ -52,14 +74,19 @@ class ExperimentService:
             raise ValueError(f"cannot start experiment in {experiment.status.value}")
         if experiment.config.kind is ExperimentKind.NFSP_PIPELINE:
             self._create_training_job(experiment)
+        elif experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
+            self._orchestrator()
         else:
             self._create_simulation_jobs(experiment)
-        return self.experiments.update_status(
+        running = self.experiments.update_status(
             experiment_id,
             experiment.revision,
             ExperimentStatus.RUNNING,
             now,
         )
+        if experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
+            self._orchestrator().reconcile(running, now)
+        return running
 
     def _create_simulation_jobs(self, experiment: Experiment) -> None:
         profile = _profile("tableforge.v1.SimulationJobPayload")
@@ -145,6 +172,18 @@ class ExperimentService:
         experiment = self.experiments.get(experiment_id)
         if experiment.status is not ExperimentStatus.RUNNING:
             return experiment
+        if experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
+            try:
+                finished = self._orchestrator().reconcile(experiment, now)
+            except PipelineFailedError:
+                return self.experiments.update_status(
+                    experiment_id, experiment.revision, ExperimentStatus.FAILED, now
+                )
+            if not finished:
+                return experiment
+            return self.experiments.update_status(
+                experiment_id, experiment.revision, ExperimentStatus.COMPLETED, now
+            )
         jobs = self.coordinator.jobs.list_jobs(experiment_id)
         if experiment.config.kind is ExperimentKind.NFSP_PIPELINE:
             self._advance_pipeline(experiment, jobs)
@@ -167,7 +206,11 @@ class ExperimentService:
 
     def stop(self, experiment_id: ExperimentId, now: datetime) -> Experiment:
         experiment = self.experiments.get(experiment_id)
-        if experiment.status in (ExperimentStatus.STOPPED, ExperimentStatus.COMPLETED):
+        if experiment.status in (
+            ExperimentStatus.STOPPED,
+            ExperimentStatus.COMPLETED,
+            ExperimentStatus.FAILED,
+        ):
             return experiment
         for job in self.coordinator.jobs.list_jobs(experiment_id):
             if job.status not in _TERMINAL:

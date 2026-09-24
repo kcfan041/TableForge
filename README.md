@@ -40,18 +40,22 @@ uv run tableforge experiment status <experiment-id>
 
 ## NFSP
 
+多輪訓練（每輪：Actor 對打產生資料 → Learner 訓練 → candidate 與目前 active 對打 → 決定是否升級）：
+
 ```
-uv run tableforge experiment create --preset hu-nfsp-cpu-smoke
+uv run tableforge experiment create --preset hu-nfsp-cpu-iterative
 uv run tableforge experiment start <experiment-id>
-uv run tableforge worker start --max-jobs 1 --idle-seconds 0
+uv run tableforge worker start --max-jobs 100 --idle-seconds 0
 uv run tableforge experiment status <experiment-id>
-uv run tableforge worker start --max-jobs 1 --idle-seconds 0
-uv run tableforge experiment status <experiment-id>
+uv run tableforge checkpoint list
+uv run tableforge checkpoint show <checkpoint-id>
 ```
 
-第一次 `worker start` 執行訓練；第一次 `experiment status` 會建立評估 Job；第二次 `worker start` 執行評估；最後的 `status` 顯示對各 Rule Bot 的 bb/100 與 95% 信賴區間。
+Worker 閒置時會自動推進實驗到下一階段，一次 `worker start` 就能跑完 3 輪。`checkpoint show` 會顯示升級或拒絕的原因。規則是只有 candidate 確定比目前 active 差（95% 信賴區間上限 < 0）時才拒絕。
 
-Smoke preset 只訓練 2,000 手，信賴區間非常寬，只能確認流程正常，**不能用來判斷模型強弱**。
+快速檢查用的 `hu-nfsp-cpu-smoke` 只有一次訓練加一次對 Rule Bots 的評估，結果會顯示在 `experiment status` 的 `evaluation` 欄位。
+
+這兩個 preset 都是小規模設定，信賴區間很寬，只能確認流程正常，**不能用來判斷模型強弱**。
 
 ## 兩台電腦
 
@@ -75,7 +79,7 @@ uv run tableforge node enroll --coordinator <IP>:7443 --token <註冊碼> --ca-f
 uv run tableforge worker start --remote
 ```
 
-Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。兩台電腦必須能互相連線；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
+`coordinator serve` 會在背景自動推進實驗，多台 Worker 可平行執行同一輪的 Actor Job。Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。兩台電腦必須能互相連線；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
 
 ## 常用指令
 
@@ -87,6 +91,7 @@ Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。兩台電腦
 | `worker run-once` | 只執行一個 Job |
 | `job submit-simulation/list/status/cancel` | 直接操作 Job |
 | `node init/status/enroll` | 節點註冊與狀態 |
+| `checkpoint list/show` | 查看 NFSP checkpoint 與升級紀錄 |
 | `coordinator init/serve/enrollment-token` | 遠端 Coordinator |
 
 ## 開發

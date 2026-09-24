@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
 
@@ -162,26 +163,16 @@ class SQLiteExperimentRepository:
 
 
 def _config_json(config: ExperimentConfig) -> str:
-    return json.dumps(
-        {
-            "evaluation_deals": config.evaluation_deals,
-            "hands": config.hands,
-            "hands_per_job": config.hands_per_job,
-            "kind": config.kind.value,
-            "preset_key": config.preset_key,
-            "preset_version": config.preset_version,
-            "schema_version": config.schema_version,
-            "seed_start": config.seed_start,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    data = asdict(config)
+    data["kind"] = config.kind.value
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
 def _row_to_experiment(row: sqlite3.Row) -> Experiment:
     data = json.loads(row["config_json"])
     data["kind"] = ExperimentKind(data.get("kind", ExperimentKind.RULE_SIMULATION.value))
-    data.setdefault("evaluation_deals", 0)
+    known = {field.name for field in fields(ExperimentConfig)}
+    data = {key: value for key, value in data.items() if key in known}
     return Experiment(
         experiment_id=ExperimentId(row["experiment_id"]),
         revision=row["current_revision"],

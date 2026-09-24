@@ -27,6 +27,7 @@ class WorkerLoop:
     logger: EventLogger
     idle_seconds: float = 1.0
     sleep: Callable[[float], None] = time.sleep
+    on_idle: Callable[[], bool] | None = None
 
     def run(
         self,
@@ -38,6 +39,9 @@ class WorkerLoop:
         while not should_stop():
             lease = self.runtime.run_once()
             if lease is None:
+                if self.on_idle is not None and self.on_idle():
+                    self.logger.emit("experiments_advanced", node_id=str(self.runtime.node_id))
+                    continue
                 self.logger.emit("worker_idle", node_id=str(self.runtime.node_id))
                 if max_jobs is not None:
                     break

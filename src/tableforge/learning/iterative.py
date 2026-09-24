@@ -14,6 +14,7 @@ from tableforge.domain.learning import (
     NfspLearnerPayload,
     NfspMatchPayload,
 )
+from tableforge.domain.nfsp_pipeline import promotion_decision
 from tableforge.learning.buffers import PolicySample, Transition
 from tableforge.learning.executors import opponent_factory
 from tableforge.learning.experience import (
@@ -122,7 +123,7 @@ class NfspLearnerExecutor:
             {
                 "parent_sha256": payload.checkpoint_sha256,
                 "round_index": payload.round_index,
-                "snapshot_sha256": payload.snapshot_sha256,
+                "shard_sha256": [reference.sha256 for reference in snapshot.shards],
             }
         )
 
@@ -192,12 +193,10 @@ class NfspMatchExecutor:
         ).encode()
 
 
-def promotion_decision(result: dict[str, object]) -> tuple[bool, str]:
-    head = result["head_to_head"]
-    if not isinstance(head, dict):
-        raise ValueError("match result is missing head_to_head")
-    high = float(head["confidence_high"])
-    mean = float(head["bb_per_100"])
-    if high < 0:
-        return False, f"significantly worse than active: {mean:.1f} bb/100, CI high {high:.1f}"
-    return True, f"not significantly worse than active: {mean:.1f} bb/100, CI high {high:.1f}"
+__all__ = [
+    "NfspActorExecutor",
+    "NfspInitExecutor",
+    "NfspLearnerExecutor",
+    "NfspMatchExecutor",
+    "promotion_decision",
+]

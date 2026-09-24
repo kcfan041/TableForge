@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from tableforge.domain.nfsp_pipeline import SNAPSHOT_SCHEMA, snapshot_bytes
 from tableforge.learning.actions import ACTION_COUNT
 from tableforge.learning.buffers import PolicySample, Transition
 from tableforge.learning.bundle import (
@@ -19,7 +20,6 @@ from tableforge.learning.encoding import FEATURE_SIZE
 from tableforge.learning.encoding import SCHEMA as OBSERVATION_SCHEMA
 
 SHARD_SCHEMA = "tableforge.nfsp-experience-shard.v1"
-SNAPSHOT_SCHEMA = "tableforge.nfsp-dataset-snapshot.v1"
 _SHARD_ENTRIES = frozenset(
     {
         "manifest.json",
@@ -161,16 +161,10 @@ class DatasetSnapshot:
             object.__setattr__(self, "shards", ordered)
 
     def to_bytes(self) -> bytes:
-        return json_bytes(
-            {
-                "checkpoint_sha256": self.checkpoint_sha256,
-                "round_index": self.round_index,
-                "schema_version": SNAPSHOT_SCHEMA,
-                "shards": [
-                    {"artifact_id": shard.artifact_id, "sha256": shard.sha256}
-                    for shard in self.shards
-                ],
-            }
+        return snapshot_bytes(
+            self.checkpoint_sha256,
+            self.round_index,
+            [(shard.artifact_id, shard.sha256) for shard in self.shards],
         )
 
     @classmethod

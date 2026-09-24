@@ -12,6 +12,7 @@ from tableforge.domain.learning import (  # noqa: E402
     NfspLearnerPayload,
     NfspMatchPayload,
 )
+from tableforge.domain.nfsp_pipeline import promotion_decision  # noqa: E402
 from tableforge.learning.experience import (  # noqa: E402
     DatasetSnapshot,
     ExperienceShard,
@@ -22,7 +23,6 @@ from tableforge.learning.iterative import (  # noqa: E402
     NfspInitExecutor,
     NfspLearnerExecutor,
     NfspMatchExecutor,
-    promotion_decision,
 )
 from tableforge.learning.nfsp import NfspAgent, checkpoint_manifest  # noqa: E402
 
@@ -104,7 +104,8 @@ def test_learner_is_deterministic_and_records_lineage() -> None:
     manifest = checkpoint_manifest(first)
     assert manifest["train_steps"] == 50
     assert manifest["metadata"]["parent_sha256"] == checkpoint[1]
-    assert manifest["metadata"]["snapshot_sha256"] == data[1]
+    shards = DatasetSnapshot.from_bytes(store.fetch(data[0])).shards
+    assert manifest["metadata"]["shard_sha256"] == [shard.sha256 for shard in shards]
     assert len(NfspAgent.from_bundle(first).sl_buffer) > 0
 
 

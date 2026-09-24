@@ -12,11 +12,13 @@ class ExperimentStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     STOPPED = "stopped"
+    FAILED = "failed"
 
 
 class ExperimentKind(StrEnum):
     RULE_SIMULATION = "rule_simulation"
     NFSP_PIPELINE = "nfsp_pipeline"
+    NFSP_ITERATIVE = "nfsp_iterative"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +31,11 @@ class ExperimentConfig:
     seed_start: int
     kind: ExperimentKind = ExperimentKind.RULE_SIMULATION
     evaluation_deals: int = 0
+    rounds: int = 0
+    actors_per_round: int = 0
+    train_steps_per_round: int = 0
+    max_evaluation_deals: int = 0
+    target_ci_width: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.schema_version or not self.preset_key or not self.preset_version:
@@ -37,6 +44,13 @@ class ExperimentConfig:
             raise ValueError("hand counts must be positive")
         if self.kind is ExperimentKind.NFSP_PIPELINE and self.evaluation_deals < 2:
             raise ValueError("NFSP pipeline requires at least two evaluation deals")
+        if self.kind is ExperimentKind.NFSP_ITERATIVE:
+            if min(self.rounds, self.actors_per_round, self.train_steps_per_round) < 1:
+                raise ValueError("iterative NFSP requires positive rounds, actors, and steps")
+            if self.evaluation_deals < 2 or self.max_evaluation_deals < self.evaluation_deals:
+                raise ValueError("iterative NFSP requires valid evaluation deal limits")
+            if self.target_ci_width < 0:
+                raise ValueError("target_ci_width cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +78,11 @@ class ExperimentPreset:
     seed_start: int = 0
     kind: ExperimentKind = ExperimentKind.RULE_SIMULATION
     evaluation_deals: int = 0
+    rounds: int = 0
+    actors_per_round: int = 0
+    train_steps_per_round: int = 0
+    max_evaluation_deals: int = 0
+    target_ci_width: float = 0.0
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -75,6 +94,11 @@ class ExperimentPreset:
             seed_start=self.seed_start,
             kind=self.kind,
             evaluation_deals=self.evaluation_deals,
+            rounds=self.rounds,
+            actors_per_round=self.actors_per_round,
+            train_steps_per_round=self.train_steps_per_round,
+            max_evaluation_deals=self.max_evaluation_deals,
+            target_ci_width=self.target_ci_width,
         )
 
 
@@ -88,5 +112,18 @@ BUILTIN_PRESETS = (
         hands_per_job=2_000,
         kind=ExperimentKind.NFSP_PIPELINE,
         evaluation_deals=500,
+    ),
+    ExperimentPreset(
+        "hu-nfsp-cpu-iterative",
+        "1",
+        hands=1_000,
+        hands_per_job=1_000,
+        kind=ExperimentKind.NFSP_ITERATIVE,
+        evaluation_deals=200,
+        rounds=3,
+        actors_per_round=2,
+        train_steps_per_round=400,
+        max_evaluation_deals=1_000,
+        target_ci_width=150.0,
     ),
 )

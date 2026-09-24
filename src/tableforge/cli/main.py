@@ -4,6 +4,7 @@ import argparse
 import json
 import signal
 import threading
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -40,7 +41,7 @@ from tableforge.transport.server import start_server
 from tableforge.transport.tls import TlsMaterial, generate_self_signed
 from tableforge.worker.client import CoordinatorClient
 from tableforge.worker.loop import JsonLineLogger, WorkerLoop
-from tableforge.worker.runtime import OutputSpec, RegisteredExecutor, WorkerRuntime
+from tableforge.worker.runtime import RegisteredExecutor, WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
 
@@ -82,6 +83,7 @@ def main() -> None:
     coordinator_serve = coordinator_subparsers.add_parser("serve")
     coordinator_serve.add_argument("--listen", default="0.0.0.0:7443")
     coordinator_serve.add_argument("--insecure", action="store_true")
+    coordinator_serve.add_argument("--reconcile-seconds", type=float, default=2.0)
     enrollment = coordinator_subparsers.add_parser("enrollment-token")
     enrollment.add_argument("--ttl-minutes", type=int, default=60)
 
@@ -182,12 +184,14 @@ def main() -> None:
         lease = runtime.run_once()
         print("idle" if lease is None else lease.job.spec.job_id)
     elif args.command == "worker" and args.worker_command == "start":
+        experiments = _experiment_service(service, args.data_dir)
         _run_worker(
             service,
             args.data_dir,
             args.max_jobs,
             args.idle_seconds,
             timedelta(seconds=args.lease_seconds),
+            on_idle=lambda: experiments.reconcile_all(datetime.now(UTC)) > 0,
         )
     elif args.command == "experiment":
         experiments = _experiment_service(service, args.data_dir)
@@ -313,7 +317,7 @@ def _learning_available() -> bool:
 
 def _worker_roles() -> tuple[str, ...]:
     if _learning_available():
-        return ("simulation", "evaluation", "nfsp_learner")
+        return ("simulation", "evaluation", "nfsp_learner", "nfsp_actor")
     return ("simulation",)
 
 
@@ -331,23 +335,9 @@ def _learning_executors(
 ) -> dict[str, RegisteredExecutor]:
     if not _learning_available():
         return {}
-    from tableforge.domain.learning import EVALUATION_PAYLOAD_TYPE, TRAINING_PAYLOAD_TYPE
-    from tableforge.learning.executors import NfspEvaluationExecutor, NfspTrainingExecutor
+    from tableforge.learning.registry import learning_executors
 
-    training = NfspTrainingExecutor()
-    evaluation = NfspEvaluationExecutor(service.read_artifact)
-    return {
-        TRAINING_PAYLOAD_TYPE: RegisteredExecutor(
-            training,
-            OutputSpec(training.output_kind, training.output_media_type, training.output_schema),
-        ),
-        EVALUATION_PAYLOAD_TYPE: RegisteredExecutor(
-            evaluation,
-            OutputSpec(
-                evaluation.output_kind, evaluation.output_media_type, evaluation.output_schema
-            ),
-        ),
-    }
+    return learning_executors(service.read_artifact)
 
 
 def _experiment_service(
@@ -356,6 +346,7 @@ def _experiment_service(
     return ExperimentService(
         experiments=SQLiteExperimentRepository(data_dir / "tableforge.db"),
         coordinator=coordinator,
+        checkpoints=SQLiteCheckpointRepository(data_dir / "tableforge.db"),
     )
 
 
@@ -378,6 +369,7 @@ def _run_worker(
     max_jobs: int | None,
     idle_seconds: float,
     lease_duration: timedelta = timedelta(minutes=5),
+    on_idle: Callable[[], bool] | None = None,
 ) -> None:
     stop = _stop_event()
 
@@ -389,6 +381,7 @@ def _run_worker(
         logger=JsonLineLogger(),
         idle_seconds=idle_seconds,
         sleep=interruptible_sleep,
+        on_idle=on_idle,
     ).run(should_stop=stop.is_set, max_jobs=max_jobs)
 
 
@@ -414,9 +407,16 @@ def _coordinator_command(args: argparse.Namespace, service: CoordinatorService) 
         running = start_server(service, auth, SystemClock(), args.listen, tls)
         logger = JsonLineLogger()
         logger.emit("coordinator_started", port=running.port, tls=tls is not None)
+        experiments = _experiment_service(service, data_dir)
         stop = _stop_event()
-        while not stop.wait(1.0):
-            pass
+        while not stop.wait(args.reconcile_seconds):
+            try:
+                advanced = experiments.reconcile_all(datetime.now(UTC))
+            except Exception as error:
+                logger.emit("reconcile_failed", error=type(error).__name__, detail=str(error))
+                continue
+            if advanced:
+                logger.emit("experiments_reconciled", count=advanced)
         running.stop(5.0)
         logger.emit("coordinator_stopped")
 

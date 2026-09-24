@@ -15,6 +15,7 @@ class ArtifactKind(StrEnum):
     HAND_HISTORY = "hand_history"
     EVALUATION_RESULT = "evaluation_result"
     DIAGNOSTIC = "diagnostic"
+    DATASET_SNAPSHOT = "dataset_snapshot"
 
 
 class ArtifactStatus(StrEnum):

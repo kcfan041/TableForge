@@ -168,3 +168,55 @@ def test_killed_remote_worker_job_is_recovered(
     assert '"status": "succeeded"' in output
     assert status["status"] == "succeeded"
     assert len(status["outputs"]) == 1
+
+
+def test_background_reconciler_drives_iterative_nfsp_with_two_workers(
+    coordinator: tuple[Path, str], tmp_path: Path
+) -> None:
+    pytest.importorskip("torch")
+    coordinator_dir, target = coordinator
+    experiment_id = cli(
+        coordinator_dir, "experiment", "create", "--preset", "hu-nfsp-cpu-iterative"
+    )
+    cli(coordinator_dir, "experiment", "start", experiment_id)
+    workers = []
+    for name in ("worker-a", "worker-b"):
+        worker_dir = tmp_path / name
+        enroll_worker(coordinator_dir, target, worker_dir)
+        workers.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "tableforge.cli.main",
+                    "--data-dir",
+                    str(worker_dir),
+                    "worker",
+                    "start",
+                    "--remote",
+                    "--idle-seconds",
+                    "0.5",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+    deadline = time.monotonic() + 600
+    status: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        status = json.loads(cli(coordinator_dir, "experiment", "status", experiment_id))
+        if status["status"] != "running":
+            break
+        time.sleep(2)
+    for process in workers:
+        process.kill()
+        process.wait(timeout=30)
+
+    assert status["status"] == "completed", status
+    assert status["jobs"] == {"succeeded": 13}
+    checkpoints = cli(coordinator_dir, "checkpoint", "list").splitlines()
+    rounds = [line.split("\t")[2] for line in checkpoints]
+    assert rounds == ["round=0", "round=1", "round=2", "round=3"]
+    assert sum(line.endswith("\tactive") for line in checkpoints) == 1
+    nodes = cli(coordinator_dir, "node", "status").splitlines()
+    assert len(nodes) == 2

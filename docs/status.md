@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：commit `5abd094` 之後。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：M4 補齊階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -25,11 +25,11 @@
 | M3a 第 2 階段 | Mac 實機驗證、跨平台結果一致性 | 延後 | 需在 Mac 上執行 |
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
 | M3b | PostgreSQL、MinIO、Docker | 未開始 | |
-| M4 | NFSP 訓練與評估（CPU） | 部分完成 | `5abd094` |
+| M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 未開始 | |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：156 個測試全部通過，Ruff、mypy strict 通過。
+目前測試：177 個測試全部通過，Ruff、mypy strict 通過。
 
 ## 已完成項目與驗收方式
 
@@ -68,21 +68,26 @@
 - 網路錯誤指數退避重試；lease 失效等錯誤轉成明確例外，不盲目重試。
 - 驗收：TLS 與非 TLS 兩種模式的整合測試；**真實多程序測試**：Coordinator 與 Worker 分開執行、強制關閉 Worker 後由另一個 Worker 接手完成；README 兩節點流程在乾淨目錄實跑通過。
 
-## M4 NFSP：部分完成
-
-已完成：
+### M4 NFSP（CPU）
 - 固定長度狀態編碼 `poker-hunlhe-vector-v1`，測試確認不含對手手牌與未發公牌。
 - 抽象動作 `nlhe-discrete-v1`（fold、check/call、半池、滿池、all-in），測試確認一律轉成合法下注。
 - NFSP：Q 網路、平均策略網路、circular replay、reservoir buffer。
-- Training Job 輸出 checkpoint；推論權重與訓練狀態分開存；固定 seed 產生位元相同的 checkpoint。
-- Evaluation Job：交換座位、95% 信賴區間。
-- `hu-nfsp-cpu-smoke` preset 自動依序訓練、評估，CLI 實跑約 10 秒。
+- **Checkpoint bundle v2**：分成 `actor`（Q＋平均策略）、`inference`（只有平均策略）、`training`（優化器、target 網路、reservoir buffer、RNG）。可完整接續訓練，接續後結果與不中斷訓練位元相同。
+- **Actor/learner 分離**：Actor Job 讀取 checkpoint 自我對打，輸出 experience shard；Coordinator 產生固定的 dataset snapshot；Learner Job 只讀 snapshot 訓練。Shard 或 snapshot 與 checkpoint 不一致、或 artifact 被竄改都會被拒絕。
+- **Checkpoint registry**：記錄 parent、輪次、hash、狀態（candidate、active、rejected、retired），每個 agent 同時只有一個 active。CLI `checkpoint list/show`。
+- **評估與 promotion**：Candidate 與 active 直接對打，分批評估直到信賴區間寬度達標或到上限；另對 Rule Bots 評估作為參考。規則：只有 candidate 的 95% 信賴區間上限 < 0（確定比較差）才拒絕；被拒絕時下一輪從原 active 重新訓練。
+- **背景推進**：`coordinator serve` 內建 reconciler；單機模式由閒置的 Worker 推進。不再需要查詢 status。
+- Preset：`hu-nfsp-cpu-smoke`（單一 Job，快速檢查）、`hu-nfsp-cpu-iterative`（3 輪，每輪 2 個 Actor Job）。
+- 驗收：
+  - 同一設定跑兩次，每一輪的 checkpoint hash 完全相同。
+  - Reconciler 重複執行、Coordinator 重啟後不會重複建立 Job。
+  - 強制拒絕 candidate 時，下一輪正確以原 active 為 parent。
+  - Job 失敗時實驗標記為 failed。
+  - **真實多程序測試**：`coordinator serve` 加上兩個遠端 Worker 程序，不需人工介入完成 3 輪、13 個 Job。
+  - 單機 CLI 一次 `worker start` 完成 3 輪，約 19 秒。
 
-尚缺：
-- 訓練讀取 simulation 產生的 experience shard 與 dataset snapshot（見「與規格的差異」）。
-- Checkpoint registry、candidate promotion。
-- Evaluation 依信賴區間寬度決定停止條件。
-- 可證明模型確實變強的長時間訓練與評估。Smoke 設定只有 2,000 手，信賴區間約 ±300 bb/100，只能證明流程正確。
+限制：
+- CPU 小型設定只能證明流程正確，不能證明模型變強。實測第 3 輪 candidate 對 active 為 -65.2 bb/100，信賴區間上限 45.6，依規則仍升級。要評估真正的學習效果需要更長的訓練和更多評估手數。
 
 ## 延後項目
 
@@ -106,18 +111,19 @@ uv run tableforge doctor
 
 | 項目 | 規格 | 目前實作 |
 |---|---|---|
-| NFSP 訓練資料 | Simulation 產生 experience shard，訓練讀取固定的 dataset snapshot | 訓練 Job 自己對打並學習 |
 | Artifact 傳輸 | Coordinator 不轉送大型 artifact，Worker 直接連 storage | 經由 Coordinator 的 gRPC 串流，單檔上限 1 GiB |
 | 事件 | 狀態變更與 outbox 事件同一個 transaction | 尚無 outbox 表 |
 | 兩節點 metadata | PostgreSQL | 仍為 SQLite（單一 Coordinator 可運作） |
-| Experiment 狀態推進 | 由 Coordinator 背景處理 | 查詢 `experiment status` 時才推進 NFSP 管線下一階段 |
+| Experience 格式 | Parquet shard | NPZ 形式的 zip（規格允許的替代格式，避免新增 pyarrow） |
+| RL buffer 跨輪保留 | 保留最近幾輪資料 | 每輪只使用當輪 shard；reservoir buffer 跨輪保留 |
+
+已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進。
 
 ## 下一步候選
 
 依建議優先順序：
 
-1. **M4 補齊**：訓練改讀 simulation 資料、checkpoint registry、promotion。
-2. **Experiment 背景推進**：不需查詢 status 也能自動進入下一階段。
-3. **M3b**：PostgreSQL、MinIO、Docker。
-4. **C2/C4**：NVIDIA 偵測與降級執行計畫。GPU 相關驗證需要有 GPU 的節點。
-5. **M5 League**。
+1. **M5 League**：歷史 checkpoint 對手池、matchmaking、matchup matrix。已具備 checkpoint registry，可直接開始。
+2. **M3b**：PostgreSQL、MinIO、Docker。
+3. **C2/C4**：NVIDIA 偵測與降級執行計畫。GPU 相關驗證需要有 GPU 的節點。
+4. **學習效果驗證**：較長的訓練與評估設定，確認模型相對 Rule Bots 有顯著進步。

@@ -3,6 +3,35 @@ from __future__ import annotations
 from tableforge.domain.capabilities import WorkloadProfile
 from tableforge.domain.jobs import ResourceRequest
 
+GIB = 1024**3
+
+
+def _cpu_profile(
+    key: str,
+    payload: str,
+    role: str,
+    minimum: tuple[int, int, int],
+    recommended: tuple[int, int, int],
+) -> WorkloadProfile:
+    def request(values: tuple[int, int, int]) -> ResourceRequest:
+        cores, memory_gib, storage_gib = values
+        return ResourceRequest(
+            cpu_cores=cores,
+            memory_bytes=memory_gib * GIB,
+            storage_bytes=storage_gib * GIB,
+            required_role=role,
+        )
+
+    return WorkloadProfile(
+        schema_version="1.0",
+        key=key,
+        version="1",
+        payload_type=f"tableforge.v1.{payload}",
+        minimum=request(minimum),
+        recommended=request(recommended),
+        supported_runtimes=("cpu",),
+    )
+
 BUILTIN_WORKLOADS = (
     WorkloadProfile(
         schema_version="1.0",
@@ -61,6 +90,12 @@ BUILTIN_WORKLOADS = (
         ),
         supported_runtimes=("cpu",),
     ),
+    _cpu_profile("hu-nfsp-init", "NfspInitJobPayload", "nfsp_learner", (1, 1, 1), (1, 2, 1)),
+    _cpu_profile("hu-nfsp-actor", "NfspActorJobPayload", "nfsp_actor", (1, 2, 1), (2, 4, 2)),
+    _cpu_profile(
+        "hu-nfsp-learner", "NfspLearnerJobPayload", "nfsp_learner", (2, 4, 2), (4, 8, 10)
+    ),
+    _cpu_profile("hu-nfsp-match", "NfspMatchJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)),
     WorkloadProfile(
         schema_version="1.0",
         key="hu-nfsp-small-gpu",
