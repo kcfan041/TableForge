@@ -90,6 +90,10 @@ class RecordingClient:
         self.calls.append("upload_artifact")
         return self.inner.upload_artifact(descriptor, content)
 
+    def read_artifact(self, artifact_id: str) -> bytes:
+        self.calls.append("read_artifact")
+        return self.inner.read_artifact(artifact_id)
+
 
 class Clock:
     def now(self) -> datetime:

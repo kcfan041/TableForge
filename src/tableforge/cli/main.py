@@ -31,7 +31,7 @@ from tableforge.transport.server import start_server
 from tableforge.transport.tls import TlsMaterial, generate_self_signed
 from tableforge.worker.client import CoordinatorClient
 from tableforge.worker.loop import JsonLineLogger, WorkerLoop
-from tableforge.worker.runtime import WorkerRuntime
+from tableforge.worker.runtime import OutputSpec, RegisteredExecutor, WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
 
@@ -109,7 +109,9 @@ def main() -> None:
         return
     if args.command == "worker" and args.worker_command == "start" and args.remote:
         _run_worker(
-            RemoteCredentials.load(args.data_dir / "coordinator.json").client(),
+            RemoteCredentials.load(args.data_dir / "coordinator.json").client(
+                args.data_dir / "artifact-cache"
+            ),
             args.data_dir,
             args.max_jobs,
             args.idle_seconds,
@@ -181,21 +183,20 @@ def main() -> None:
         elif args.experiment_command == "status":
             current = experiments.status(ExperimentId(args.experiment_id), now)
             jobs = service.jobs.list_jobs(current.experiment_id)
-            print(
-                json.dumps(
-                    {
-                        "experiment_id": str(current.experiment_id),
-                        "jobs": {
-                            status: sum(job.status.value == status for job in jobs)
-                            for status in sorted({job.status.value for job in jobs})
-                        },
-                        "preset": current.config.preset_key,
-                        "revision": current.revision,
-                        "status": current.status.value,
-                    },
-                    sort_keys=True,
-                )
-            )
+            report: dict[str, object] = {
+                "experiment_id": str(current.experiment_id),
+                "jobs": {
+                    status: sum(job.status.value == status for job in jobs)
+                    for status in sorted({job.status.value for job in jobs})
+                },
+                "preset": current.config.preset_key,
+                "revision": current.revision,
+                "status": current.status.value,
+            }
+            evaluation = experiments.evaluation_result(current.experiment_id)
+            if evaluation is not None:
+                report["evaluation"] = evaluation
+            print(json.dumps(report, sort_keys=True))
         elif args.experiment_command == "stop":
             stopped = experiments.stop(ExperimentId(args.experiment_id), now)
             print(f"{stopped.experiment_id}\t{stopped.status.value}")
@@ -255,13 +256,51 @@ def _local_service(data_dir: Path) -> CoordinatorService:
     )
 
 
+def _learning_available() -> bool:
+    import importlib.util
+
+    return all(
+        importlib.util.find_spec(name) is not None for name in ("torch", "safetensors")
+    )
+
+
+def _worker_roles() -> tuple[str, ...]:
+    if _learning_available():
+        return ("simulation", "evaluation", "nfsp_learner")
+    return ("simulation",)
+
+
 def _discover_local_worker(data_dir: Path) -> NodeCapability:
     node_id = NodeIdentityStore(data_dir / "node-id").load_or_create()
     return LocalCapabilityDiscovery(
         node_id=node_id,
-        roles=("simulation",),
+        roles=_worker_roles(),
         storage_path=data_dir,
     ).discover()
+
+
+def _learning_executors(
+    service: CoordinatorClient,
+) -> dict[str, RegisteredExecutor]:
+    if not _learning_available():
+        return {}
+    from tableforge.domain.learning import EVALUATION_PAYLOAD_TYPE, TRAINING_PAYLOAD_TYPE
+    from tableforge.learning.executors import NfspEvaluationExecutor, NfspTrainingExecutor
+
+    training = NfspTrainingExecutor()
+    evaluation = NfspEvaluationExecutor(service.read_artifact)
+    return {
+        TRAINING_PAYLOAD_TYPE: RegisteredExecutor(
+            training,
+            OutputSpec(training.output_kind, training.output_media_type, training.output_schema),
+        ),
+        EVALUATION_PAYLOAD_TYPE: RegisteredExecutor(
+            evaluation,
+            OutputSpec(
+                evaluation.output_kind, evaluation.output_media_type, evaluation.output_schema
+            ),
+        ),
+    }
 
 
 def _experiment_service(
@@ -361,6 +400,7 @@ def _local_worker(
         lease_duration=lease_duration,
         simulation_executor=SimulationExecutor(),
         renew_margin=min(timedelta(seconds=30), lease_duration / 2),
+        extra_executors=_learning_executors(service),
     )
 
 

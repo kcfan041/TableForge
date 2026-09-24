@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -24,6 +24,27 @@ class JobExecutor(Protocol):
     ) -> bytes: ...
 
 
+SIMULATION_PAYLOAD_TYPE = "tableforge.v1.SimulationJobPayload"
+
+
+@dataclass(frozen=True, slots=True)
+class OutputSpec:
+    kind: ArtifactKind
+    media_type: str
+    schema_version: str
+
+
+SIMULATION_OUTPUT = OutputSpec(
+    ArtifactKind.EVALUATION_RESULT, "application/json", "tableforge.simulation-summary.v1"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredExecutor:
+    executor: JobExecutor
+    output: OutputSpec
+
+
 class JobCancelledError(Exception):
     pass
 
@@ -37,6 +58,12 @@ class WorkerRuntime:
     lease_duration: timedelta
     simulation_executor: JobExecutor
     renew_margin: timedelta = timedelta(seconds=30)
+    extra_executors: Mapping[str, RegisteredExecutor] = field(default_factory=dict)
+
+    def _executor_for(self, payload_type: str) -> RegisteredExecutor | None:
+        if payload_type == SIMULATION_PAYLOAD_TYPE:
+            return RegisteredExecutor(self.simulation_executor, SIMULATION_OUTPUT)
+        return self.extra_executors.get(payload_type)
 
     def run_once(self) -> JobLease | None:
         now = self.clock.now()
@@ -50,7 +77,8 @@ class WorkerRuntime:
         )
         if lease is None:
             return None
-        if lease.job.spec.payload_type != "tableforge.v1.SimulationJobPayload":
+        registered = self._executor_for(lease.job.spec.payload_type)
+        if registered is None:
             self.coordinator.fail_job(
                 lease.job.spec.job_id,
                 lease.token,
@@ -78,7 +106,7 @@ class WorkerRuntime:
                 )
 
         try:
-            output = self.simulation_executor.execute(lease.job.spec.payload, heartbeat)
+            output = registered.executor.execute(lease.job.spec.payload, heartbeat)
         except JobCancelledError:
             self.coordinator.acknowledge_cancel(
                 current_lease.job.spec.job_id,
@@ -109,9 +137,9 @@ class WorkerRuntime:
         artifact = self.coordinator.upload_artifact(
             ArtifactDescriptor(
                 artifact_id=new_artifact_id(),
-                kind=ArtifactKind.EVALUATION_RESULT,
-                media_type="application/json",
-                schema_version="tableforge.simulation-summary.v1",
+                kind=registered.output.kind,
+                media_type=registered.output.media_type,
+                schema_version=registered.output.schema_version,
             ),
             output,
         )

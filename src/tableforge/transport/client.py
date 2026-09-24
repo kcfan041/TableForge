@@ -81,7 +81,9 @@ class GrpcCoordinatorClient:
         session_token: str,
         retry: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        cache_dir: Path | None = None,
     ) -> None:
+        self._cache_dir = cache_dir
         self._stub = coordinator_pb2_grpc.CoordinatorServiceStub(channel)
         self._artifacts = coordinator_pb2_grpc.ArtifactServiceStub(channel)
         self._metadata = (("authorization", f"Bearer {session_token}"),)
@@ -275,6 +277,12 @@ class GrpcCoordinatorClient:
         if artifact.sha256 != ref.sha256:
             raise RemoteCoordinatorError("ARTIFACT_HASH_MISMATCH", "server stored different bytes")
         return artifact
+
+    def read_artifact(self, artifact_id: str) -> bytes:
+        if self._cache_dir is None:
+            raise RemoteCoordinatorError("NO_CACHE", "artifact cache directory is not configured")
+        _, path = self.download_artifact(artifact_id, self._cache_dir)
+        return path.read_bytes()
 
     def download_artifact(self, artifact_id: str, cache_dir: Path) -> tuple[Artifact, Path]:
         request = coordinator_pb2.DownloadArtifactRequest(artifact_id=artifact_id)

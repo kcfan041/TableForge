@@ -9,6 +9,7 @@ from tableforge.application.ports import IdempotencyConflictError, JobNotFoundEr
 from tableforge.domain.experiments import (
     Experiment,
     ExperimentConfig,
+    ExperimentKind,
     ExperimentStatus,
 )
 from tableforge.domain.ids import ExperimentId
@@ -163,8 +164,10 @@ class SQLiteExperimentRepository:
 def _config_json(config: ExperimentConfig) -> str:
     return json.dumps(
         {
+            "evaluation_deals": config.evaluation_deals,
             "hands": config.hands,
             "hands_per_job": config.hands_per_job,
+            "kind": config.kind.value,
             "preset_key": config.preset_key,
             "preset_version": config.preset_version,
             "schema_version": config.schema_version,
@@ -177,6 +180,8 @@ def _config_json(config: ExperimentConfig) -> str:
 
 def _row_to_experiment(row: sqlite3.Row) -> Experiment:
     data = json.loads(row["config_json"])
+    data["kind"] = ExperimentKind(data.get("kind", ExperimentKind.RULE_SIMULATION.value))
+    data.setdefault("evaluation_deals", 0)
     return Experiment(
         experiment_id=ExperimentId(row["experiment_id"]),
         revision=row["current_revision"],

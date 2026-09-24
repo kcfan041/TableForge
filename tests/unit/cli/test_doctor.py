@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.cli.main import run_doctor
 
 
@@ -16,7 +17,7 @@ def test_doctor_json_has_versioned_capability_and_workloads(
     assert exit_code in (0, 2)
     assert report["schema_version"] == "1.0"
     assert report["capability"]["schema_version"] == "1.0"
-    assert len(report["workloads"]) == 3
+    assert len(report["workloads"]) == len(BUILTIN_WORKLOADS)
     assert {item["status"] for item in report["workloads"]} <= {
         "supported",
         "degraded",

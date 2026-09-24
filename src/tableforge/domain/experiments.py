@@ -14,6 +14,11 @@ class ExperimentStatus(StrEnum):
     STOPPED = "stopped"
 
 
+class ExperimentKind(StrEnum):
+    RULE_SIMULATION = "rule_simulation"
+    NFSP_PIPELINE = "nfsp_pipeline"
+
+
 @dataclass(frozen=True, slots=True)
 class ExperimentConfig:
     schema_version: str
@@ -22,12 +27,16 @@ class ExperimentConfig:
     hands: int
     hands_per_job: int
     seed_start: int
+    kind: ExperimentKind = ExperimentKind.RULE_SIMULATION
+    evaluation_deals: int = 0
 
     def __post_init__(self) -> None:
         if not self.schema_version or not self.preset_key or not self.preset_version:
             raise ValueError("experiment config identity cannot be empty")
         if self.hands < 1 or self.hands_per_job < 1:
             raise ValueError("hand counts must be positive")
+        if self.kind is ExperimentKind.NFSP_PIPELINE and self.evaluation_deals < 2:
+            raise ValueError("NFSP pipeline requires at least two evaluation deals")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +62,8 @@ class ExperimentPreset:
     hands: int
     hands_per_job: int
     seed_start: int = 0
+    kind: ExperimentKind = ExperimentKind.RULE_SIMULATION
+    evaluation_deals: int = 0
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -62,10 +73,20 @@ class ExperimentPreset:
             hands=self.hands,
             hands_per_job=self.hands_per_job,
             seed_start=self.seed_start,
+            kind=self.kind,
+            evaluation_deals=self.evaluation_deals,
         )
 
 
 BUILTIN_PRESETS = (
     ExperimentPreset("hu-rule-smoke", "1", hands=1_000, hands_per_job=250),
     ExperimentPreset("hu-rule-soak", "1", hands=1_000_000, hands_per_job=10_000),
+    ExperimentPreset(
+        "hu-nfsp-cpu-smoke",
+        "1",
+        hands=2_000,
+        hands_per_job=2_000,
+        kind=ExperimentKind.NFSP_PIPELINE,
+        evaluation_deals=500,
+    ),
 )

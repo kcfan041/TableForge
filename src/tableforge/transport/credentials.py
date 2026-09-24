@@ -43,5 +43,5 @@ class RemoteCredentials:
         ca = self.ca_certificate.encode() if self.ca_certificate else None
         return create_channel(self.target, ca)
 
-    def client(self) -> GrpcCoordinatorClient:
-        return GrpcCoordinatorClient(self.channel(), self.session_token)
+    def client(self, cache_dir: Path | None = None) -> GrpcCoordinatorClient:
+        return GrpcCoordinatorClient(self.channel(), self.session_token, cache_dir=cache_dir)

@@ -44,6 +44,25 @@ BUILTIN_WORKLOADS = (
     ),
     WorkloadProfile(
         schema_version="1.0",
+        key="hu-nfsp-evaluation",
+        version="1",
+        payload_type="tableforge.v1.NfspEvaluationJobPayload",
+        minimum=ResourceRequest(
+            cpu_cores=1,
+            memory_bytes=2 * 1024**3,
+            storage_bytes=1024**3,
+            required_role="evaluation",
+        ),
+        recommended=ResourceRequest(
+            cpu_cores=2,
+            memory_bytes=4 * 1024**3,
+            storage_bytes=2 * 1024**3,
+            required_role="evaluation",
+        ),
+        supported_runtimes=("cpu",),
+    ),
+    WorkloadProfile(
+        schema_version="1.0",
         key="hu-nfsp-small-gpu",
         version="1",
         payload_type="tableforge.v1.NfspTrainingJobPayload",

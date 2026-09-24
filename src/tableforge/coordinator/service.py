@@ -159,6 +159,9 @@ class CoordinatorService:
         sha256, size = self.artifacts.write_upload(grant, io.BytesIO(content))
         return self.artifacts.commit_upload(grant, sha256, size)
 
+    def read_artifact(self, artifact_id: str) -> bytes:
+        return self.artifacts.get_download(artifact_id).path.read_bytes()
+
     def _workload_for(self, spec: JobSpec) -> WorkloadProfile:
         for workload in self.workloads:
             if workload.payload_type == spec.payload_type:
