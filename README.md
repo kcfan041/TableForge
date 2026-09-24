@@ -1,0 +1,113 @@
+# TableForge
+
+分散式多代理德州撲克 AI 訓練與評估框架。目前支援 Heads-Up No-Limit Hold'em、Rule Bots、NFSP（CPU），以及單一 Coordinator 搭配多個 Worker 的遠端執行。
+
+- 開發進度：[docs/status.md](docs/status.md)
+- 架構規格：[docs/architecture/README.md](docs/architecture/README.md)
+
+## 安裝
+
+需要 [uv](https://docs.astral.sh/uv/)，它會自動下載 Python 3.12。
+
+```
+git clone https://github.com/kcfan041/TableForge.git
+cd TableForge
+uv sync --extra learning
+```
+
+`--extra learning` 會安裝 PyTorch，用來訓練和評估 NFSP。只執行 simulation 的節點（例如一台筆電）可以省略，改用 `uv sync`。
+
+> 注意：之後若只執行 `uv sync` 而沒有加 `--extra learning`，PyTorch 會被移除，NFSP 相關測試會顯示為略過而不是失敗。
+
+## 單機快速開始
+
+檢查這台電腦能執行哪些工作：
+
+```
+uv run tableforge doctor
+```
+
+跑一個 Rule Bot simulation 實驗（1,000 手，分成 4 個 Job）：
+
+```
+uv run tableforge experiment create --preset hu-rule-smoke
+uv run tableforge experiment start <experiment-id>
+uv run tableforge worker start --max-jobs 10 --idle-seconds 0
+uv run tableforge experiment status <experiment-id>
+```
+
+資料預設存在目前目錄的 `.tableforge/`，可用 `--data-dir <路徑>` 指定，這個選項要放在子指令之前。
+
+## NFSP
+
+```
+uv run tableforge experiment create --preset hu-nfsp-cpu-smoke
+uv run tableforge experiment start <experiment-id>
+uv run tableforge worker start --max-jobs 1 --idle-seconds 0
+uv run tableforge experiment status <experiment-id>
+uv run tableforge worker start --max-jobs 1 --idle-seconds 0
+uv run tableforge experiment status <experiment-id>
+```
+
+第一次 `worker start` 執行訓練；第一次 `experiment status` 會建立評估 Job；第二次 `worker start` 執行評估；最後的 `status` 顯示對各 Rule Bot 的 bb/100 與 95% 信賴區間。
+
+Smoke preset 只訓練 2,000 手，信賴區間非常寬，只能確認流程正常，**不能用來判斷模型強弱**。
+
+## 兩台電腦
+
+在 Coordinator 電腦上：
+
+```
+uv run tableforge coordinator init --host <這台電腦的 IP 或主機名稱>
+uv run tableforge coordinator serve --listen 0.0.0.0:7443
+```
+
+在另一個終端機產生一次性註冊碼，預設 60 分鐘內有效：
+
+```
+uv run tableforge coordinator enrollment-token
+```
+
+把 `.tableforge/tls/server.crt` 複製到 Worker 電腦，然後在 Worker 電腦上：
+
+```
+uv run tableforge node enroll --coordinator <IP>:7443 --token <註冊碼> --ca-file server.crt
+uv run tableforge worker start --remote
+```
+
+Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。兩台電腦必須能互相連線；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
+
+## 常用指令
+
+| 指令 | 說明 |
+|---|---|
+| `doctor [--json]` | 偵測硬體並列出可執行的 workload |
+| `experiment create/start/status/stop/list` | 管理實驗 |
+| `worker start [--remote] [--max-jobs N]` | 持續領取並執行 Job，`Ctrl+C` 停止 |
+| `worker run-once` | 只執行一個 Job |
+| `job submit-simulation/list/status/cancel` | 直接操作 Job |
+| `node init/status/enroll` | 節點註冊與狀態 |
+| `coordinator init/serve/enrollment-token` | 遠端 Coordinator |
+
+## 開發
+
+```
+uv run pytest
+uv run ruff check .
+uv run mypy
+```
+
+修改 `proto/` 之後重新產生 gRPC 程式碼：
+
+```
+uv run python scripts/generate_protos.py
+```
+
+產生的程式碼放在 `src/tableforge/_generated/`，已 commit 進 repo。
+
+## 已知限制
+
+- 只支援 Heads-Up；6-Max、Deep CFR、PPO 尚未實作。
+- NFSP 目前只在 CPU 上訓練，尚未偵測 NVIDIA GPU。
+- Metadata 使用 SQLite，適合單一 Coordinator。
+- 完整清單見 [docs/status.md](docs/status.md)。
