@@ -29,7 +29,7 @@
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：190 個測試全部通過，Ruff、mypy strict 通過。
+目前測試：189 個測試全部通過，Ruff、mypy strict 通過。
 
 ## 已完成項目與驗收方式
 
