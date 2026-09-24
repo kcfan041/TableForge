@@ -12,7 +12,7 @@ from tableforge.domain.capabilities import (
     WorkloadProfile,
 )
 from tableforge.domain.ids import JobId, NodeId
-from tableforge.domain.jobs import Job, JobLease, JobOutput, JobSpec
+from tableforge.domain.jobs import Job, JobAttemptError, JobLease, JobOutput, JobSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +63,35 @@ class CoordinatorService:
 
     def list_jobs(self) -> tuple[Job, ...]:
         return self.jobs.list_jobs()
+
+    def fail_job(
+        self,
+        job_id: JobId,
+        token: str,
+        now: datetime,
+        error_code: str,
+        error_summary: str,
+        retryable: bool,
+        diagnostic_artifact_id: str | None = None,
+    ) -> Job:
+        return self.jobs.fail(
+            job_id,
+            token,
+            now,
+            error_code,
+            error_summary,
+            retryable,
+            diagnostic_artifact_id,
+        )
+
+    def cancel_job(self, job_id: JobId, now: datetime) -> Job:
+        return self.jobs.cancel(job_id, now)
+
+    def acknowledge_cancel(self, job_id: JobId, token: str, now: datetime) -> Job:
+        return self.jobs.acknowledge_cancel(job_id, token, now)
+
+    def job_attempt_errors(self, job_id: JobId) -> tuple[JobAttemptError, ...]:
+        return self.jobs.attempt_errors(job_id)
 
     def job_outputs(self, job_id: JobId) -> tuple[JobOutput, ...]:
         return self.jobs.outputs(job_id)

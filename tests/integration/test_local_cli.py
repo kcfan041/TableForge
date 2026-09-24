@@ -43,3 +43,31 @@ def test_cli_submit_run_and_status(
     status = json.loads(status_output)
     assert status["status"] == "succeeded"
     assert len(status["outputs"]) == 1
+
+
+def test_cli_cancels_queued_job(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    base = ["--data-dir", str(tmp_path)]
+    job_id = invoke(
+        monkeypatch,
+        capsys,
+        [
+            *base,
+            "job",
+            "submit-simulation",
+            "--hands",
+            "10",
+            "--idempotency-key",
+            "cancel-test",
+        ],
+    )
+
+    cancelled = invoke(monkeypatch, capsys, [*base, "job", "cancel", job_id])
+    status = json.loads(invoke(monkeypatch, capsys, [*base, "job", "status", job_id]))
+
+    assert cancelled == f"{job_id}\tcancelled"
+    assert status["status"] == "cancelled"
+    assert status["errors"] == []

@@ -27,6 +27,7 @@ from tableforge.domain.ids import (
 )
 from tableforge.domain.jobs import (
     Job,
+    JobAttemptError,
     JobLease,
     JobOutput,
     JobSpec,
@@ -64,6 +65,11 @@ CREATE TABLE IF NOT EXISTS job_attempts (
     expires_at TEXT NOT NULL,
     completed_at TEXT,
     result_hash TEXT,
+    error_code TEXT,
+    error_summary TEXT,
+    retryable INTEGER,
+    failed_at TEXT,
+    diagnostic_artifact_id TEXT,
     active INTEGER NOT NULL,
     FOREIGN KEY (job_id) REFERENCES jobs(job_id),
     UNIQUE (job_id, attempt_number)
@@ -101,6 +107,22 @@ class SQLiteJobRepository:
         self._database.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(job_attempts)").fetchall()
+            }
+            additions = {
+                "error_code": "TEXT",
+                "error_summary": "TEXT",
+                "retryable": "INTEGER",
+                "failed_at": "TEXT",
+                "diagnostic_artifact_id": "TEXT",
+            }
+            for name, column_type in additions.items():
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE job_attempts ADD COLUMN {name} {column_type}"
+                    )
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -250,6 +272,11 @@ class SQLiteJobRepository:
         _validate_lease_time(now, duration)
         with self._transaction() as connection:
             attempt = self._active_attempt(connection, job_id, token, now)
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            if JobStatus(row["status"]) is not JobStatus.LEASED:
+                raise LeaseConflictError(str(job_id))
             expires_at = now + duration
             connection.execute(
                 "UPDATE job_attempts SET expires_at = ? WHERE attempt_id = ?",
@@ -297,6 +324,11 @@ class SQLiteJobRepository:
                 return _row_to_job(row)
             if not attempt["active"] or datetime.fromisoformat(attempt["expires_at"]) <= now:
                 raise LeaseFencedError(str(job_id))
+            job_row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            if JobStatus(job_row["status"]) is not JobStatus.LEASED:
+                raise LeaseConflictError(str(job_id))
             connection.execute(
                 """
                 UPDATE job_attempts
@@ -335,6 +367,138 @@ class SQLiteJobRepository:
             ).fetchone()
             return _row_to_job(row)
 
+    def fail(
+        self,
+        job_id: JobId,
+        token: str,
+        now: datetime,
+        error_code: str,
+        error_summary: str,
+        retryable: bool,
+        diagnostic_artifact_id: str | None = None,
+    ) -> Job:
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        if not error_code or not error_summary:
+            raise ValueError("error code and summary cannot be empty")
+        with self._transaction() as connection:
+            attempt = self._active_attempt(connection, job_id, token, now)
+            job_row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            current_status = JobStatus(job_row["status"])
+            if current_status is JobStatus.CANCEL_REQUESTED:
+                next_status = JobStatus.CANCELLED
+            elif current_status is not JobStatus.LEASED:
+                raise LeaseConflictError(str(job_id))
+            else:
+                next_status = (
+                    JobStatus.QUEUED
+                    if retryable and attempt["attempt_number"] < job_row["max_attempts"]
+                    else JobStatus.FAILED
+                )
+            connection.execute(
+                """
+                UPDATE job_attempts
+                SET active = 0, error_code = ?, error_summary = ?, retryable = ?,
+                    failed_at = ?, diagnostic_artifact_id = ?
+                WHERE attempt_id = ?
+                """,
+                (
+                    error_code,
+                    error_summary,
+                    int(retryable),
+                    now.isoformat(),
+                    diagnostic_artifact_id,
+                    attempt["attempt_id"],
+                ),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+                (next_status.value, str(job_id)),
+            )
+            updated = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            return _row_to_job(updated)
+
+    def cancel(self, job_id: JobId, now: datetime) -> Job:
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            if row is None:
+                raise JobNotFoundError(str(job_id))
+            status = JobStatus(row["status"])
+            if status is JobStatus.QUEUED:
+                next_status = JobStatus.CANCELLED
+            elif status in (JobStatus.LEASED, JobStatus.RUNNING):
+                next_status = JobStatus.CANCEL_REQUESTED
+            elif status in (
+                JobStatus.CANCEL_REQUESTED,
+                JobStatus.CANCELLED,
+                JobStatus.SUCCEEDED,
+                JobStatus.FAILED,
+            ):
+                return _row_to_job(row)
+            else:
+                next_status = JobStatus.CANCELLED
+            connection.execute(
+                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+                (next_status.value, str(job_id)),
+            )
+            updated = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            return _row_to_job(updated)
+
+    def acknowledge_cancel(self, job_id: JobId, token: str, now: datetime) -> Job:
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        with self._transaction() as connection:
+            attempt = self._active_attempt(connection, job_id, token, now)
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            if JobStatus(row["status"]) is not JobStatus.CANCEL_REQUESTED:
+                raise LeaseConflictError(str(job_id))
+            connection.execute(
+                "UPDATE job_attempts SET active = 0 WHERE attempt_id = ?",
+                (attempt["attempt_id"],),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+                (JobStatus.CANCELLED.value, str(job_id)),
+            )
+            updated = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            return _row_to_job(updated)
+
+    def attempt_errors(self, job_id: JobId) -> tuple[JobAttemptError, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM job_attempts
+                WHERE job_id = ? AND error_code IS NOT NULL
+                ORDER BY attempt_number
+                """,
+                (str(job_id),),
+            ).fetchall()
+        return tuple(
+            JobAttemptError(
+                attempt_id=AttemptId(row["attempt_id"]),
+                error_code=row["error_code"],
+                error_summary=row["error_summary"],
+                retryable=bool(row["retryable"]),
+                failed_at=datetime.fromisoformat(row["failed_at"]),
+                diagnostic_artifact_id=row["diagnostic_artifact_id"],
+            )
+            for row in rows
+        )
+
     def outputs(self, job_id: JobId) -> tuple[JobOutput, ...]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -369,7 +533,8 @@ class SQLiteJobRepository:
     def _requeue_expired(self, connection: sqlite3.Connection, now: datetime) -> int:
         attempts = connection.execute(
             """
-            SELECT a.attempt_id, a.job_id, a.attempt_number, j.max_attempts
+            SELECT a.attempt_id, a.job_id, a.attempt_number, j.max_attempts,
+                   j.status AS job_status
             FROM job_attempts a
             JOIN jobs j ON j.job_id = a.job_id
             WHERE a.active = 1 AND a.expires_at <= ?
@@ -377,11 +542,15 @@ class SQLiteJobRepository:
             (now.isoformat(),),
         ).fetchall()
         for attempt in attempts:
-            status = (
-                JobStatus.FAILED
-                if attempt["attempt_number"] >= attempt["max_attempts"]
-                else JobStatus.QUEUED
-            )
+            current_status = JobStatus(attempt["job_status"])
+            if current_status is JobStatus.CANCEL_REQUESTED:
+                status = JobStatus.CANCELLED
+            else:
+                status = (
+                    JobStatus.FAILED
+                    if attempt["attempt_number"] >= attempt["max_attempts"]
+                    else JobStatus.QUEUED
+                )
             connection.execute(
                 "UPDATE job_attempts SET active = 0 WHERE attempt_id = ?",
                 (attempt["attempt_id"],),

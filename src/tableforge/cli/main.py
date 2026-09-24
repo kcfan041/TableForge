@@ -39,6 +39,8 @@ def main() -> None:
     job_subparsers.add_parser("list")
     status = job_subparsers.add_parser("status")
     status.add_argument("job_id")
+    cancel = job_subparsers.add_parser("cancel")
+    cancel.add_argument("job_id")
 
     worker = subparsers.add_parser("worker")
     worker_subparsers = worker.add_subparsers(dest="worker_command", required=True)
@@ -63,9 +65,18 @@ def main() -> None:
     elif args.command == "job" and args.job_command == "status":
         selected = service.get_job(JobId(args.job_id))
         outputs = service.job_outputs(selected.spec.job_id)
+        errors = service.job_attempt_errors(selected.spec.job_id)
         print(
             json.dumps(
                 {
+                    "errors": [
+                        {
+                            "code": error.error_code,
+                            "retryable": error.retryable,
+                            "summary": error.error_summary,
+                        }
+                        for error in errors
+                    ],
                     "job_id": str(selected.spec.job_id),
                     "outputs": [str(output.artifact.descriptor.artifact_id) for output in outputs],
                     "status": selected.status.value,
@@ -74,6 +85,9 @@ def main() -> None:
                 sort_keys=True,
             )
         )
+    elif args.command == "job" and args.job_command == "cancel":
+        cancelled = service.cancel_job(JobId(args.job_id), datetime.now(UTC))
+        print(f"{cancelled.spec.job_id}\t{cancelled.status.value}")
     elif args.command == "worker" and args.worker_command == "run-once":
         runtime = _local_worker(service, args.data_dir)
         lease = runtime.run_once()

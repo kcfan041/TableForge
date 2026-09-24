@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,33 @@ def make_spec(priority: int = 0, max_attempts: int = 3) -> JobSpec:
 
 def repository(tmp_path: Path) -> SQLiteJobRepository:
     return SQLiteJobRepository(tmp_path / "tableforge.db")
+
+
+def test_existing_attempt_table_gets_additive_error_columns(tmp_path: Path) -> None:
+    database = tmp_path / "legacy.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE job_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                leased_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                completed_at TEXT,
+                result_hash TEXT,
+                active INTEGER NOT NULL
+            )
+            """
+        )
+
+    SQLiteJobRepository(database)
+
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(job_attempts)")}
+    assert {"error_code", "error_summary", "retryable", "failed_at"} <= columns
 
 
 def test_claim_prefers_higher_priority(tmp_path: Path) -> None:
@@ -172,6 +200,113 @@ def test_complete_conflicts_when_result_changes(tmp_path: Path) -> None:
 
     with pytest.raises(LeaseConflictError):
         jobs.complete(spec.job_id, lease.token, NOW + timedelta(minutes=2), "result-b")
+
+
+def test_retryable_failure_requeues_and_records_error(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    spec = make_spec()
+    jobs.create(spec)
+    lease = jobs.claim_next(NodeId("node-a"), NOW, LEASE)
+    assert lease is not None
+
+    failed = jobs.fail(
+        spec.job_id,
+        lease.token,
+        NOW + timedelta(minutes=1),
+        "TEMPORARY_IO",
+        "temporary object store error",
+        retryable=True,
+    )
+
+    assert failed.status is JobStatus.QUEUED
+    errors = jobs.attempt_errors(spec.job_id)
+    assert len(errors) == 1
+    assert errors[0].error_code == "TEMPORARY_IO"
+    assert errors[0].retryable
+    with pytest.raises(LeaseFencedError):
+        jobs.complete(spec.job_id, lease.token, NOW + timedelta(minutes=2), "late")
+
+
+def test_non_retryable_failure_is_terminal(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    spec = make_spec()
+    jobs.create(spec)
+    lease = jobs.claim_next(NodeId("node-a"), NOW, LEASE)
+    assert lease is not None
+
+    failed = jobs.fail(
+        spec.job_id,
+        lease.token,
+        NOW + timedelta(minutes=1),
+        "INVALID_SCHEMA",
+        "payload schema is invalid",
+        retryable=False,
+    )
+
+    assert failed.status is JobStatus.FAILED
+    assert jobs.claim_next(NodeId("node-b"), NOW + timedelta(minutes=2), LEASE) is None
+
+
+def test_retryable_failure_respects_max_attempts(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    spec = make_spec(max_attempts=1)
+    jobs.create(spec)
+    lease = jobs.claim_next(NodeId("node-a"), NOW, LEASE)
+    assert lease is not None
+
+    failed = jobs.fail(
+        spec.job_id,
+        lease.token,
+        NOW + timedelta(minutes=1),
+        "TEMPORARY_IO",
+        "still failed",
+        retryable=True,
+    )
+
+    assert failed.status is JobStatus.FAILED
+
+
+def test_queued_job_cancels_immediately(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    spec = make_spec()
+    jobs.create(spec)
+
+    cancelled = jobs.cancel(spec.job_id, NOW)
+
+    assert cancelled.status is JobStatus.CANCELLED
+    assert jobs.cancel(spec.job_id, NOW) == cancelled
+
+
+def test_leased_job_uses_cooperative_cancellation(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    spec = make_spec()
+    jobs.create(spec)
+    lease = jobs.claim_next(NodeId("node-a"), NOW, LEASE)
+    assert lease is not None
+
+    requested = jobs.cancel(spec.job_id, NOW + timedelta(minutes=1))
+    assert requested.status is JobStatus.CANCEL_REQUESTED
+    with pytest.raises(LeaseConflictError):
+        jobs.complete(spec.job_id, lease.token, NOW + timedelta(minutes=2), "result")
+
+    cancelled = jobs.acknowledge_cancel(
+        spec.job_id,
+        lease.token,
+        NOW + timedelta(minutes=2),
+    )
+    assert cancelled.status is JobStatus.CANCELLED
+
+
+def test_cancel_requested_job_expires_to_cancelled(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    spec = make_spec()
+    jobs.create(spec)
+    lease = jobs.claim_next(NodeId("node-a"), NOW, LEASE)
+    assert lease is not None
+    jobs.cancel(spec.job_id, NOW + timedelta(minutes=1))
+
+    assert jobs.requeue_expired(NOW + LEASE) == 1
+    assert jobs.get(spec.job_id).status is JobStatus.CANCELLED
 
 
 def test_not_before_job_is_not_claimed_early(tmp_path: Path) -> None:

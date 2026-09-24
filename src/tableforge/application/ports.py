@@ -8,7 +8,7 @@ from typing import BinaryIO, Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.ids import ExperimentId, JobId, NodeId
-from tableforge.domain.jobs import Job, JobLease, JobOutput, JobSpec
+from tableforge.domain.jobs import Job, JobAttemptError, JobLease, JobOutput, JobSpec
 
 
 class IdempotencyConflictError(Exception):
@@ -72,6 +72,23 @@ class JobRepository(Protocol):
         result_hash: str,
         outputs: tuple[Artifact, ...] = (),
     ) -> Job: ...
+
+    def fail(
+        self,
+        job_id: JobId,
+        token: str,
+        now: datetime,
+        error_code: str,
+        error_summary: str,
+        retryable: bool,
+        diagnostic_artifact_id: str | None = None,
+    ) -> Job: ...
+
+    def cancel(self, job_id: JobId, now: datetime) -> Job: ...
+
+    def acknowledge_cancel(self, job_id: JobId, token: str, now: datetime) -> Job: ...
+
+    def attempt_errors(self, job_id: JobId) -> tuple[JobAttemptError, ...]: ...
 
     def outputs(self, job_id: JobId) -> tuple[JobOutput, ...]: ...
 

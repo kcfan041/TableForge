@@ -22,6 +22,7 @@ class JobStatus(StrEnum):
     RETRY_WAIT = "retry_wait"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCEL_REQUESTED = "cancel_requested"
     CANCELLED = "cancelled"
 
 
@@ -92,6 +93,22 @@ class Job:
     def __post_init__(self) -> None:
         if self.version < 0:
             raise ValueError("version cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class JobAttemptError:
+    attempt_id: AttemptId
+    error_code: str
+    error_summary: str
+    retryable: bool
+    failed_at: datetime
+    diagnostic_artifact_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.error_code or not self.error_summary:
+            raise ValueError("error code and summary cannot be empty")
+        if self.failed_at.tzinfo is None:
+            raise ValueError("failed_at must be timezone-aware")
 
 
 @dataclass(frozen=True, slots=True)

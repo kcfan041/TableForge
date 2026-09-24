@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.capabilities import (
@@ -45,7 +43,7 @@ class AdvancingClock:
         return current
 
 
-class FailingExecutor(SimulationExecutor):
+class FailingExecutor:
     def execute(
         self,
         payload_bytes: bytes,
@@ -53,6 +51,26 @@ class FailingExecutor(SimulationExecutor):
     ) -> bytes:
         del payload_bytes, on_progress
         raise RuntimeError("simulated crash")
+
+
+class CancelOnProgressExecutor:
+    def __init__(self, service: CoordinatorService, job_id: str, clock: FakeClock) -> None:
+        self._service = service
+        self._job_id = job_id
+        self._clock = clock
+
+    def execute(
+        self,
+        payload_bytes: bytes,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> bytes:
+        del payload_bytes
+        from tableforge.domain.ids import JobId
+
+        self._service.cancel_job(JobId(self._job_id), self._clock.now())
+        if on_progress is not None:
+            on_progress(1)
+        raise AssertionError("progress callback should stop cancelled execution")
 
 
 def capability(
@@ -177,22 +195,39 @@ def test_incompatible_worker_does_not_claim_job(tmp_path: Path) -> None:
     assert service.get_job(spec.job_id).status is JobStatus.QUEUED
 
 
-def test_executor_crash_leaves_job_for_expiry_and_retry(tmp_path: Path) -> None:
+def test_executor_crash_is_reported_and_retried_immediately(tmp_path: Path) -> None:
     service = coordinator(tmp_path)
     spec = simulation_spec(hands=10)
     service.create_job(spec)
     clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
 
-    with pytest.raises(RuntimeError, match="simulated crash"):
-        worker(service, clock, executor=FailingExecutor()).run_once()
-    assert service.get_job(spec.job_id).status is JobStatus.LEASED
+    first = worker(service, clock, executor=FailingExecutor()).run_once()
+    assert first is not None
+    assert service.get_job(spec.job_id).status is JobStatus.QUEUED
+    errors = service.job_attempt_errors(spec.job_id)
+    assert len(errors) == 1
+    assert errors[0].error_code == "EXECUTOR_ERROR"
+    assert errors[0].retryable
 
-    clock.value += timedelta(minutes=5)
     retried = worker(service, clock, node_id="node-b").run_once()
 
     assert retried is not None
     assert retried.attempt_number == 2
     assert service.get_job(spec.job_id).status is JobStatus.SUCCEEDED
+
+
+def test_worker_acknowledges_cooperative_cancel(tmp_path: Path) -> None:
+    service = coordinator(tmp_path)
+    spec = simulation_spec(hands=10)
+    service.create_job(spec)
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+    executor = CancelOnProgressExecutor(service, str(spec.job_id), clock)
+
+    lease = worker(service, clock, executor=executor).run_once()
+
+    assert lease is not None
+    assert service.get_job(spec.job_id).status is JobStatus.CANCELLED
+    assert service.job_outputs(spec.job_id) == ()
 
 
 def test_simulation_executor_is_content_deterministic() -> None:
