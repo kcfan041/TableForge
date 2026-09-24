@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package tableforge.v1;
+
+import "google/protobuf/timestamp.proto";
+import "tableforge/v1/common.proto";
+
+message JobSpec {
+  string schema_version = 1;
+  string job_id = 2;
+  string experiment_id = 3;
+  JobType type = 4;
+  int32 priority = 5;
+  ResourceRequest resources = 6;
+  repeated ArtifactRef inputs = 7;
+  bytes payload = 8;
+  string payload_type = 9;
+  string idempotency_key = 10;
+  int32 max_attempts = 11;
+  google.protobuf.Timestamp not_before = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+enum JobType {
+  JOB_TYPE_UNSPECIFIED = 0;
+  JOB_TYPE_SIMULATION = 1;
+  JOB_TYPE_EVALUATION = 2;
+  JOB_TYPE_TRAINING = 3;
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_QUEUED = 1;
+  JOB_STATUS_LEASED = 2;
+  JOB_STATUS_RUNNING = 3;
+  JOB_STATUS_RETRY_WAIT = 4;
+  JOB_STATUS_SUCCEEDED = 5;
+  JOB_STATUS_FAILED = 6;
+  JOB_STATUS_CANCELLED = 7;
+}

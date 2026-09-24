@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package tableforge.v1;
+
+message ArtifactRef {
+  string artifact_id = 1;
+  string sha256 = 2;
+  uint64 size_bytes = 3;
+  string media_type = 4;
+  ArtifactKind kind = 5;
+  string schema_version = 6;
+}
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_MODEL_CHECKPOINT = 1;
+  ARTIFACT_KIND_TRAINING_STATE = 2;
+  ARTIFACT_KIND_EXPERIENCE_SHARD = 3;
+  ARTIFACT_KIND_HAND_HISTORY = 4;
+  ARTIFACT_KIND_EVALUATION_RESULT = 5;
+  ARTIFACT_KIND_DIAGNOSTIC = 6;
+}
+
+message ResourceRequest {
+  uint32 cpu_cores = 1;
+  uint64 memory_bytes = 2;
+  uint32 gpu_count = 3;
+  uint64 gpu_memory_bytes = 4;
+  string required_role = 5;
+}
