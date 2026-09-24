@@ -2,6 +2,14 @@ syntax = "proto3";
 
 package tableforge.v1;
 
+import "google/protobuf/timestamp.proto";
+
+message Artifact {
+  ArtifactRef ref = 1;
+  string storage_key = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
 message ArtifactRef {
   string artifact_id = 1;
   string sha256 = 2;

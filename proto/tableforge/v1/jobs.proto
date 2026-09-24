@@ -19,6 +19,7 @@ message JobSpec {
   int32 max_attempts = 11;
   google.protobuf.Timestamp not_before = 12;
   google.protobuf.Timestamp created_at = 13;
+  repeated Artifact input_artifacts = 14;
 }
 
 enum JobType {
@@ -37,4 +38,21 @@ enum JobStatus {
   JOB_STATUS_SUCCEEDED = 5;
   JOB_STATUS_FAILED = 6;
   JOB_STATUS_CANCELLED = 7;
+  JOB_STATUS_CANCEL_REQUESTED = 8;
+}
+
+message Job {
+  JobSpec spec = 1;
+  JobStatus status = 2;
+  uint64 version = 3;
+}
+
+message JobLease {
+  Job job = 1;
+  string attempt_id = 2;
+  string node_id = 3;
+  string token = 4;
+  uint32 attempt_number = 5;
+  google.protobuf.Timestamp leased_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
 }

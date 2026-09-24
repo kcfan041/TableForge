@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
+import threading
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -19,9 +21,15 @@ from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.node_identity import NodeIdentityStore
+from tableforge.infrastructure.sqlite.auth import SQLiteAuthRepository
 from tableforge.infrastructure.sqlite.experiments import SQLiteExperimentRepository
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
 from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
+from tableforge.transport.client import enroll
+from tableforge.transport.credentials import RemoteCredentials
+from tableforge.transport.server import start_server
+from tableforge.transport.tls import TlsMaterial, generate_self_signed
+from tableforge.worker.client import CoordinatorClient
 from tableforge.worker.loop import JsonLineLogger, WorkerLoop
 from tableforge.worker.runtime import WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
@@ -53,6 +61,20 @@ def main() -> None:
     worker_start = worker_subparsers.add_parser("start")
     worker_start.add_argument("--max-jobs", type=int)
     worker_start.add_argument("--idle-seconds", type=float, default=1.0)
+    worker_start.add_argument("--remote", action="store_true")
+    worker_start.add_argument("--lease-seconds", type=float, default=300.0)
+
+    coordinator = subparsers.add_parser("coordinator")
+    coordinator_subparsers = coordinator.add_subparsers(
+        dest="coordinator_command", required=True
+    )
+    coordinator_init = coordinator_subparsers.add_parser("init")
+    coordinator_init.add_argument("--host", action="append", default=[])
+    coordinator_serve = coordinator_subparsers.add_parser("serve")
+    coordinator_serve.add_argument("--listen", default="0.0.0.0:7443")
+    coordinator_serve.add_argument("--insecure", action="store_true")
+    enrollment = coordinator_subparsers.add_parser("enrollment-token")
+    enrollment.add_argument("--ttl-minutes", type=int, default=60)
 
     experiment = subparsers.add_parser("experiment")
     experiment_subparsers = experiment.add_subparsers(
@@ -72,12 +94,32 @@ def main() -> None:
     node_subparsers = node.add_subparsers(dest="node_command", required=True)
     node_subparsers.add_parser("init")
     node_subparsers.add_parser("status")
+    node_enroll = node_subparsers.add_parser("enroll")
+    node_enroll.add_argument("--coordinator", required=True)
+    node_enroll.add_argument("--token", required=True)
+    node_enroll.add_argument("--ca-file", type=Path)
+    node_enroll.add_argument("--insecure", action="store_true")
 
     args = parser.parse_args()
     if args.command == "doctor":
         exit_code = run_doctor(args.data_path, args.as_json)
         raise SystemExit(exit_code)
+    if args.command == "node" and args.node_command == "enroll":
+        _enroll_node(args)
+        return
+    if args.command == "worker" and args.worker_command == "start" and args.remote:
+        _run_worker(
+            RemoteCredentials.load(args.data_dir / "coordinator.json").client(),
+            args.data_dir,
+            args.max_jobs,
+            args.idle_seconds,
+            timedelta(seconds=args.lease_seconds),
+        )
+        return
     service = _local_service(args.data_dir)
+    if args.command == "coordinator":
+        _coordinator_command(args, service)
+        return
     if args.command == "job" and args.job_command == "submit-simulation":
         created_job = submit_simulation(
             service,
@@ -120,11 +162,13 @@ def main() -> None:
         lease = runtime.run_once()
         print("idle" if lease is None else lease.job.spec.job_id)
     elif args.command == "worker" and args.worker_command == "start":
-        WorkerLoop(
-            runtime=_local_worker(service, args.data_dir),
-            logger=JsonLineLogger(),
-            idle_seconds=args.idle_seconds,
-        ).run(max_jobs=args.max_jobs)
+        _run_worker(
+            service,
+            args.data_dir,
+            args.max_jobs,
+            args.idle_seconds,
+            timedelta(seconds=args.lease_seconds),
+        )
     elif args.command == "experiment":
         experiments = _experiment_service(service, args.data_dir)
         now = datetime.now(UTC)
@@ -229,15 +273,94 @@ def _experiment_service(
     )
 
 
-def _local_worker(service: CoordinatorService, data_dir: Path) -> WorkerRuntime:
+def _stop_event() -> threading.Event:
+    stop = threading.Event()
+
+    def request_stop(signum: int, frame: object) -> None:
+        del signum, frame
+        stop.set()
+
+    signal.signal(signal.SIGINT, request_stop)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, request_stop)
+    return stop
+
+
+def _run_worker(
+    coordinator: CoordinatorClient,
+    data_dir: Path,
+    max_jobs: int | None,
+    idle_seconds: float,
+    lease_duration: timedelta = timedelta(minutes=5),
+) -> None:
+    stop = _stop_event()
+
+    def interruptible_sleep(seconds: float) -> None:
+        stop.wait(seconds)
+
+    WorkerLoop(
+        runtime=_local_worker(coordinator, data_dir, lease_duration),
+        logger=JsonLineLogger(),
+        idle_seconds=idle_seconds,
+        sleep=interruptible_sleep,
+    ).run(should_stop=stop.is_set, max_jobs=max_jobs)
+
+
+def _coordinator_command(args: argparse.Namespace, service: CoordinatorService) -> None:
+    data_dir: Path = args.data_dir
+    auth = SQLiteAuthRepository(data_dir / "tableforge.db")
+    if args.coordinator_command == "init":
+        material = generate_self_signed(data_dir / "tls", tuple(args.host))
+        print(material.certificate_path)
+    elif args.coordinator_command == "enrollment-token":
+        print(
+            auth.create_enrollment_token(
+                datetime.now(UTC), timedelta(minutes=args.ttl_minutes)
+            )
+        )
+    elif args.coordinator_command == "serve":
+        tls = None
+        if not args.insecure:
+            material = TlsMaterial(data_dir / "tls" / "server.crt", data_dir / "tls" / "server.key")
+            if not material.certificate_path.exists():
+                raise SystemExit("run 'tableforge coordinator init' first or pass --insecure")
+            tls = material
+        running = start_server(service, auth, SystemClock(), args.listen, tls)
+        logger = JsonLineLogger()
+        logger.emit("coordinator_started", port=running.port, tls=tls is not None)
+        stop = _stop_event()
+        while not stop.wait(1.0):
+            pass
+        running.stop(5.0)
+        logger.emit("coordinator_stopped")
+
+
+def _enroll_node(args: argparse.Namespace) -> None:
+    data_dir: Path = args.data_dir
+    if args.ca_file is None and not args.insecure:
+        raise SystemExit("--ca-file is required unless --insecure is used")
+    ca = None if args.insecure else args.ca_file.read_text(encoding="utf-8")
+    node_id = NodeIdentityStore(data_dir / "node-id").load_or_create()
+    credentials = RemoteCredentials(args.coordinator, "", ca)
+    session, expires_at = enroll(credentials.channel(), node_id, args.token)
+    RemoteCredentials(args.coordinator, session, ca).save(data_dir / "coordinator.json")
+    print(f"{node_id}\tenrolled\texpires={expires_at.isoformat()}")
+
+
+def _local_worker(
+    service: CoordinatorClient,
+    data_dir: Path,
+    lease_duration: timedelta = timedelta(minutes=5),
+) -> WorkerRuntime:
     capability = _discover_local_worker(data_dir)
     return WorkerRuntime(
         node_id=capability.node_id,
         capability=capability,
         coordinator=service,
         clock=SystemClock(),
-        lease_duration=timedelta(minutes=5),
+        lease_duration=lease_duration,
         simulation_executor=SimulationExecutor(),
+        renew_margin=min(timedelta(seconds=30), lease_duration / 2),
     )
 
 
