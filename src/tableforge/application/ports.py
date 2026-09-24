@@ -8,7 +8,7 @@ from typing import BinaryIO, Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.ids import ExperimentId, JobId, NodeId
-from tableforge.domain.jobs import Job, JobLease, JobSpec
+from tableforge.domain.jobs import Job, JobLease, JobOutput, JobSpec
 
 
 class IdempotencyConflictError(Exception):
@@ -64,7 +64,18 @@ class JobRepository(Protocol):
         self, job_id: JobId, token: str, now: datetime, duration: timedelta
     ) -> JobLease: ...
 
-    def complete(self, job_id: JobId, token: str, now: datetime, result_hash: str) -> Job: ...
+    def complete(
+        self,
+        job_id: JobId,
+        token: str,
+        now: datetime,
+        result_hash: str,
+        outputs: tuple[Artifact, ...] = (),
+    ) -> Job: ...
+
+    def outputs(self, job_id: JobId) -> tuple[JobOutput, ...]: ...
+
+    def list_jobs(self, experiment_id: ExperimentId | None = None) -> tuple[Job, ...]: ...
 
     def requeue_expired(self, now: datetime) -> int: ...
 

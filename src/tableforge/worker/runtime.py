@@ -24,6 +24,7 @@ class WorkerRuntime:
     clock: Clock
     lease_duration: timedelta
     simulation_executor: SimulationExecutor
+    renew_margin: timedelta = timedelta(seconds=30)
 
     def run_once(self) -> JobLease | None:
         lease = self.coordinator.claim_job(
@@ -36,7 +37,21 @@ class WorkerRuntime:
             return None
         if lease.job.spec.payload_type != "tableforge.v1.SimulationJobPayload":
             raise ValueError(f"unsupported payload type: {lease.job.spec.payload_type}")
-        output = self.simulation_executor.execute(lease.job.spec.payload)
+        current_lease = lease
+
+        def heartbeat(completed_hands: int) -> None:
+            nonlocal current_lease
+            del completed_hands
+            now = self.clock.now()
+            if current_lease.expires_at - now <= self.renew_margin:
+                current_lease = self.coordinator.renew_job(
+                    current_lease.job.spec.job_id,
+                    current_lease.token,
+                    now,
+                    self.lease_duration,
+                )
+
+        output = self.simulation_executor.execute(lease.job.spec.payload, heartbeat)
         artifact = self.coordinator.upload_artifact(
             ArtifactDescriptor(
                 artifact_id=new_artifact_id(),
@@ -47,9 +62,10 @@ class WorkerRuntime:
             output,
         )
         self.coordinator.complete_job(
-            lease.job.spec.job_id,
-            lease.token,
+            current_lease.job.spec.job_id,
+            current_lease.token,
             self.clock.now(),
             artifact.sha256,
+            (artifact,),
         )
         return lease

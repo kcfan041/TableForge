@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from tableforge.agents.protocol import PokerAgent
@@ -13,7 +14,13 @@ from tableforge.poker.runner import HandRunner
 
 @dataclass(frozen=True, slots=True)
 class SimulationExecutor:
-    def execute(self, payload_bytes: bytes) -> bytes:
+    progress_interval_hands: int = 100
+
+    def execute(
+        self,
+        payload_bytes: bytes,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> bytes:
         payload = SimulationJobPayload.from_bytes(payload_bytes)
         runner = HandRunner()
         actions = 0
@@ -40,6 +47,13 @@ class SimulationExecutor:
             showdowns += int(not result.ended_by_fold)
             winnings[0] += result.final_stacks[0] - payload.starting_stack
             winnings[1] += result.final_stacks[1] - payload.starting_stack
+            completed = index + 1
+            if (
+                on_progress is not None
+                and self.progress_interval_hands > 0
+                and completed % self.progress_interval_hands == 0
+            ):
+                on_progress(completed)
         if sum(winnings) != 0:
             raise AssertionError("aggregate winnings do not sum to zero")
         return json.dumps(

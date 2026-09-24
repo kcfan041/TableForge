@@ -12,7 +12,7 @@ from tableforge.domain.capabilities import (
     WorkloadProfile,
 )
 from tableforge.domain.ids import JobId, NodeId
-from tableforge.domain.jobs import Job, JobLease, JobSpec
+from tableforge.domain.jobs import Job, JobLease, JobOutput, JobSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +57,15 @@ class CoordinatorService:
         token: str,
         now: datetime,
         result_hash: str,
+        outputs: tuple[Artifact, ...] = (),
     ) -> Job:
-        return self.jobs.complete(job_id, token, now, result_hash)
+        return self.jobs.complete(job_id, token, now, result_hash, outputs)
+
+    def list_jobs(self) -> tuple[Job, ...]:
+        return self.jobs.list_jobs()
+
+    def job_outputs(self, job_id: JobId) -> tuple[JobOutput, ...]:
+        return self.jobs.outputs(job_id)
 
     def upload_artifact(self, descriptor: ArtifactDescriptor, content: bytes) -> Artifact:
         import io

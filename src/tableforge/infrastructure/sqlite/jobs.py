@@ -16,14 +16,24 @@ from tableforge.application.ports import (
     LeaseConflictError,
     LeaseFencedError,
 )
+from tableforge.domain.artifacts import Artifact, ArtifactDescriptor, ArtifactKind, ArtifactStatus
 from tableforge.domain.ids import (
+    ArtifactId,
     AttemptId,
     ExperimentId,
     JobId,
     NodeId,
     new_attempt_id,
 )
-from tableforge.domain.jobs import Job, JobLease, JobSpec, JobStatus, JobType, ResourceRequest
+from tableforge.domain.jobs import (
+    Job,
+    JobLease,
+    JobOutput,
+    JobSpec,
+    JobStatus,
+    JobType,
+    ResourceRequest,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -60,6 +70,20 @@ CREATE TABLE IF NOT EXISTS job_attempts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_job
 ON job_attempts(job_id) WHERE active = 1;
+CREATE TABLE IF NOT EXISTS job_outputs (
+    job_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, name),
+    FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+);
 """
 
 
@@ -244,7 +268,14 @@ class SQLiteJobRepository:
                 expires_at=expires_at,
             )
 
-    def complete(self, job_id: JobId, token: str, now: datetime, result_hash: str) -> Job:
+    def complete(
+        self,
+        job_id: JobId,
+        token: str,
+        now: datetime,
+        result_hash: str,
+        outputs: tuple[Artifact, ...] = (),
+    ) -> Job:
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         if not result_hash:
@@ -274,6 +305,27 @@ class SQLiteJobRepository:
                 """,
                 (now.isoformat(), result_hash, attempt["attempt_id"]),
             )
+            for index, artifact in enumerate(outputs):
+                connection.execute(
+                    """
+                    INSERT INTO job_outputs (
+                        job_id, name, artifact_id, sha256, size_bytes, kind,
+                        media_type, schema_version, storage_key, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(job_id),
+                        f"output-{index}",
+                        str(artifact.descriptor.artifact_id),
+                        artifact.sha256,
+                        artifact.size_bytes,
+                        artifact.descriptor.kind.value,
+                        artifact.descriptor.media_type,
+                        artifact.descriptor.schema_version,
+                        artifact.storage_key,
+                        artifact.created_at.isoformat(),
+                    ),
+                )
             connection.execute(
                 "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
                 (JobStatus.SUCCEEDED.value, str(job_id)),
@@ -282,6 +334,31 @@ class SQLiteJobRepository:
                 "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
             ).fetchone()
             return _row_to_job(row)
+
+    def outputs(self, job_id: JobId) -> tuple[JobOutput, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM job_outputs WHERE job_id = ? ORDER BY name",
+                (str(job_id),),
+            ).fetchall()
+        return tuple(_row_to_output(row) for row in rows)
+
+    def list_jobs(self, experiment_id: ExperimentId | None = None) -> tuple[Job, ...]:
+        with self._connect() as connection:
+            if experiment_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM jobs ORDER BY created_at, job_id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE experiment_id = ?
+                    ORDER BY created_at, job_id
+                    """,
+                    (str(experiment_id),),
+                ).fetchall()
+        return tuple(_row_to_job(row) for row in rows)
 
     def requeue_expired(self, now: datetime) -> int:
         if now.tzinfo is None:
@@ -375,6 +452,24 @@ def _request_hash(spec: JobSpec) -> str:
     )
     digest.update("\x1f".join(values).encode())
     return digest.hexdigest()
+
+
+def _row_to_output(row: sqlite3.Row) -> JobOutput:
+    descriptor = ArtifactDescriptor(
+        artifact_id=ArtifactId(row["artifact_id"]),
+        kind=ArtifactKind(row["kind"]),
+        media_type=row["media_type"],
+        schema_version=row["schema_version"],
+    )
+    artifact = Artifact(
+        descriptor=descriptor,
+        sha256=row["sha256"],
+        size_bytes=row["size_bytes"],
+        status=ArtifactStatus.AVAILABLE,
+        storage_key=row["storage_key"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+    return JobOutput(job_id=JobId(row["job_id"]), artifact=artifact, name=row["name"])
 
 
 def _row_to_job(row: sqlite3.Row) -> Job:

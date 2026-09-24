@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,8 +32,26 @@ class FakeClock:
         return self.value
 
 
+class AdvancingClock:
+    def __init__(self, value: datetime, step: timedelta) -> None:
+        self.value = value
+        self.step = step
+        self.calls = 0
+
+    def now(self) -> datetime:
+        current = self.value
+        self.value += self.step
+        self.calls += 1
+        return current
+
+
 class FailingExecutor(SimulationExecutor):
-    def execute(self, payload_bytes: bytes) -> bytes:
+    def execute(
+        self,
+        payload_bytes: bytes,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> bytes:
+        del payload_bytes, on_progress
         raise RuntimeError("simulated crash")
 
 
@@ -117,6 +136,33 @@ def test_simulation_job_runs_end_to_end(tmp_path: Path) -> None:
     assert completed.status is JobStatus.SUCCEEDED
     assert completed.version == 2
     assert service.artifacts.exists(expected_hash)
+    outputs = service.job_outputs(spec.job_id)
+    assert len(outputs) == 1
+    assert outputs[0].artifact.sha256 == expected_hash
+
+
+def test_long_simulation_renews_lease(tmp_path: Path) -> None:
+    service = coordinator(tmp_path)
+    spec = simulation_spec(hands=500)
+    service.create_job(spec)
+    clock = AdvancingClock(
+        datetime(2026, 1, 1, tzinfo=UTC),
+        timedelta(minutes=2),
+    )
+    runtime = WorkerRuntime(
+        node_id=NodeId("node-a"),
+        capability=capability("node-a"),
+        coordinator=service,
+        clock=clock,
+        lease_duration=timedelta(minutes=5),
+        simulation_executor=SimulationExecutor(progress_interval_hands=100),
+        renew_margin=timedelta(minutes=2),
+    )
+
+    runtime.run_once()
+
+    assert service.get_job(spec.job_id).status is JobStatus.SUCCEEDED
+    assert clock.calls >= 6
 
 
 def test_incompatible_worker_does_not_claim_job(tmp_path: Path) -> None:

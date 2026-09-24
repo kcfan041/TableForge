@@ -95,6 +95,17 @@ class Job:
 
 
 @dataclass(frozen=True, slots=True)
+class JobOutput:
+    job_id: JobId
+    artifact: Artifact
+    name: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("output name cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class JobLease:
     job: Job
     attempt_id: AttemptId
