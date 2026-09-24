@@ -13,6 +13,7 @@ from tableforge.poker.betting import (
 from tableforge.poker.cards import Card
 from tableforge.poker.deck import Deck
 from tableforge.poker.evaluator import HandRank, evaluate
+from tableforge.poker.observation import Observation, PlayerObservation, PublicAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,7 @@ class HeadsUpHand:
         self.hole_cards = self._deal_hole_cards()
         self._flop, self._turn, self._river = self._deal_board_runout()
         self.betting = HeadsUpBetting(stacks, button, small_blind, big_blind)
+        self.action_history: list[PublicAction] = []
         self.result: HandResult | None = None
         self._settle_if_complete()
 
@@ -70,8 +72,53 @@ class HeadsUpHand:
     def act(self, seat: Seat, action: Action) -> None:
         if self.complete:
             raise HandCompleteError("hand is complete")
+        street = self.betting.street
+        contribution_before = self.betting.players[seat].total_contribution
         self.betting.act(seat, action)
+        contribution = self.betting.players[seat].total_contribution - contribution_before
+        self.action_history.append(
+            PublicAction(
+                sequence=len(self.action_history),
+                street=street,
+                actor=seat,
+                action_type=action.type,
+                raise_to=action.amount,
+                contribution=contribution,
+                pot_after=self.betting.pot,
+            )
+        )
         self._settle_if_complete()
+
+    def observe(self, seat: Seat) -> Observation:
+        legal_actions = None
+        if not self.complete and self.betting.current_actor is seat:
+            legal_actions = self.betting.legal_actions(seat)
+        players = tuple(
+            PlayerObservation(
+                seat=player_seat,
+                stack=self.betting.players[player_seat].stack,
+                street_contribution=self.betting.players[player_seat].street_contribution,
+                total_contribution=self.betting.players[player_seat].total_contribution,
+                folded=self.betting.players[player_seat].folded,
+                all_in=self.betting.players[player_seat].all_in,
+            )
+            for player_seat in Seat
+        )
+        return Observation(
+            schema_version="poker-hunlhe-observation-v1",
+            observer=seat,
+            button=self.button,
+            street=self.betting.street,
+            status=self.betting.status,
+            current_actor=self.betting.current_actor,
+            hole_cards=self.hole_cards[int(seat)],
+            board=self.board,
+            pot=self.betting.pot,
+            current_bet=self.betting.current_bet,
+            players=(players[0], players[1]),
+            action_history=tuple(self.action_history),
+            legal_actions=legal_actions,
+        )
 
     def _deal_hole_cards(self) -> tuple[tuple[Card, Card], tuple[Card, Card]]:
         first_round = self._deck.deal(2)

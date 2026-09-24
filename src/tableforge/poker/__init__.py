@@ -3,6 +3,7 @@ from tableforge.poker.cards import Card, Rank, Suit
 from tableforge.poker.deck import Deck
 from tableforge.poker.environment import HandResult, HeadsUpHand
 from tableforge.poker.evaluator import HandCategory, HandRank, evaluate
+from tableforge.poker.observation import Observation, PlayerObservation, PublicAction
 
 __all__ = [
     "Action",
@@ -13,6 +14,9 @@ __all__ = [
     "HandResult",
     "HeadsUpBetting",
     "HeadsUpHand",
+    "Observation",
+    "PlayerObservation",
+    "PublicAction",
     "Rank",
     "Seat",
     "Street",
