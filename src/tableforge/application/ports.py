@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
-from tableforge.domain.ids import ExperimentId, JobId
-from tableforge.domain.jobs import Job, JobSpec
+from tableforge.domain.ids import ExperimentId, JobId, NodeId
+from tableforge.domain.jobs import Job, JobLease, JobSpec
 
 
 class IdempotencyConflictError(Exception):
@@ -14,6 +15,14 @@ class IdempotencyConflictError(Exception):
 
 
 class JobNotFoundError(Exception):
+    pass
+
+
+class LeaseConflictError(Exception):
+    pass
+
+
+class LeaseFencedError(Exception):
     pass
 
 
@@ -37,6 +46,18 @@ class JobRepository(Protocol):
     def get_by_idempotency_key(
         self, experiment_id: ExperimentId, idempotency_key: str
     ) -> Job | None: ...
+
+    def claim_next(
+        self, node_id: NodeId, now: datetime, duration: timedelta
+    ) -> JobLease | None: ...
+
+    def renew(
+        self, job_id: JobId, token: str, now: datetime, duration: timedelta
+    ) -> JobLease: ...
+
+    def complete(self, job_id: JobId, token: str, now: datetime, result_hash: str) -> Job: ...
+
+    def requeue_expired(self, now: datetime) -> int: ...
 
 
 class ArtifactStore(Protocol):

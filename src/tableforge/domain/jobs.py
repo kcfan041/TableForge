@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from tableforge.domain.artifacts import Artifact
-from tableforge.domain.ids import ExperimentId, JobId
+from tableforge.domain.ids import AttemptId, ExperimentId, JobId, NodeId
 
 
 class JobType(StrEnum):
@@ -82,3 +82,24 @@ class Job:
     def __post_init__(self) -> None:
         if self.version < 0:
             raise ValueError("version cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class JobLease:
+    job: Job
+    attempt_id: AttemptId
+    node_id: NodeId
+    token: str
+    attempt_number: int
+    leased_at: datetime
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.token:
+            raise ValueError("lease token cannot be empty")
+        if self.attempt_number < 1:
+            raise ValueError("attempt_number must be positive")
+        if self.leased_at.tzinfo is None or self.expires_at.tzinfo is None:
+            raise ValueError("lease times must be timezone-aware")
+        if self.expires_at <= self.leased_at:
+            raise ValueError("lease expiration must be after leased_at")

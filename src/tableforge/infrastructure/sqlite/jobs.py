@@ -2,15 +2,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 
-from tableforge.application.ports import IdempotencyConflictError, JobNotFoundError
-from tableforge.domain.ids import ExperimentId, JobId
-from tableforge.domain.jobs import Job, JobSpec, JobStatus, JobType, ResourceRequest
+from tableforge.application.ports import (
+    IdempotencyConflictError,
+    JobNotFoundError,
+    LeaseConflictError,
+    LeaseFencedError,
+)
+from tableforge.domain.ids import (
+    AttemptId,
+    ExperimentId,
+    JobId,
+    NodeId,
+    new_attempt_id,
+)
+from tableforge.domain.jobs import Job, JobLease, JobSpec, JobStatus, JobType, ResourceRequest
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -31,6 +44,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     version INTEGER NOT NULL,
     UNIQUE (experiment_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS job_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    leased_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    completed_at TEXT,
+    result_hash TEXT,
+    active INTEGER NOT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs(job_id),
+    UNIQUE (job_id, attempt_number)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_job
+ON job_attempts(job_id) WHERE active = 1;
 """
 
 
@@ -121,6 +150,174 @@ class SQLiteJobRepository:
             ).fetchone()
         return _row_to_job(row) if row is not None else None
 
+    def claim_next(
+        self, node_id: NodeId, now: datetime, duration: timedelta
+    ) -> JobLease | None:
+        _validate_lease_time(now, duration)
+        with self._transaction() as connection:
+            self._requeue_expired(connection, now)
+            row = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE status = ? AND (not_before IS NULL OR not_before <= ?)
+                ORDER BY priority DESC, created_at, job_id
+                LIMIT 1
+                """,
+                (JobStatus.QUEUED.value, now.isoformat()),
+            ).fetchone()
+            if row is None:
+                return None
+            attempt_number = connection.execute(
+                "SELECT COUNT(*) FROM job_attempts WHERE job_id = ?",
+                (row["job_id"],),
+            ).fetchone()[0] + 1
+            token = secrets.token_urlsafe(32)
+            attempt_id = new_attempt_id()
+            expires_at = now + duration
+            connection.execute(
+                """
+                INSERT INTO job_attempts (
+                    attempt_id, job_id, node_id, token_hash, attempt_number,
+                    leased_at, expires_at, active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    str(attempt_id),
+                    row["job_id"],
+                    str(node_id),
+                    _token_hash(token),
+                    attempt_number,
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+                (JobStatus.LEASED.value, row["job_id"]),
+            )
+            updated = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (row["job_id"],)
+            ).fetchone()
+            return JobLease(
+                job=_row_to_job(updated),
+                attempt_id=attempt_id,
+                node_id=node_id,
+                token=token,
+                attempt_number=attempt_number,
+                leased_at=now,
+                expires_at=expires_at,
+            )
+
+    def renew(
+        self, job_id: JobId, token: str, now: datetime, duration: timedelta
+    ) -> JobLease:
+        _validate_lease_time(now, duration)
+        with self._transaction() as connection:
+            attempt = self._active_attempt(connection, job_id, token, now)
+            expires_at = now + duration
+            connection.execute(
+                "UPDATE job_attempts SET expires_at = ? WHERE attempt_id = ?",
+                (expires_at.isoformat(), attempt["attempt_id"]),
+            )
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            return JobLease(
+                job=_row_to_job(row),
+                attempt_id=AttemptId(attempt["attempt_id"]),
+                node_id=NodeId(attempt["node_id"]),
+                token=token,
+                attempt_number=attempt["attempt_number"],
+                leased_at=datetime.fromisoformat(attempt["leased_at"]),
+                expires_at=expires_at,
+            )
+
+    def complete(self, job_id: JobId, token: str, now: datetime, result_hash: str) -> Job:
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        if not result_hash:
+            raise ValueError("result_hash cannot be empty")
+        token_hash = _token_hash(token)
+        with self._transaction() as connection:
+            attempt = connection.execute(
+                "SELECT * FROM job_attempts WHERE job_id = ? AND token_hash = ?",
+                (str(job_id), token_hash),
+            ).fetchone()
+            if attempt is None:
+                raise LeaseFencedError(str(job_id))
+            if attempt["completed_at"] is not None:
+                if attempt["result_hash"] != result_hash:
+                    raise LeaseConflictError(str(job_id))
+                row = connection.execute(
+                    "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+                ).fetchone()
+                return _row_to_job(row)
+            if not attempt["active"] or datetime.fromisoformat(attempt["expires_at"]) <= now:
+                raise LeaseFencedError(str(job_id))
+            connection.execute(
+                """
+                UPDATE job_attempts
+                SET active = 0, completed_at = ?, result_hash = ?
+                WHERE attempt_id = ?
+                """,
+                (now.isoformat(), result_hash, attempt["attempt_id"]),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+                (JobStatus.SUCCEEDED.value, str(job_id)),
+            )
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
+            ).fetchone()
+            return _row_to_job(row)
+
+    def requeue_expired(self, now: datetime) -> int:
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        with self._transaction() as connection:
+            return self._requeue_expired(connection, now)
+
+    def _requeue_expired(self, connection: sqlite3.Connection, now: datetime) -> int:
+        attempts = connection.execute(
+            """
+            SELECT a.attempt_id, a.job_id, a.attempt_number, j.max_attempts
+            FROM job_attempts a
+            JOIN jobs j ON j.job_id = a.job_id
+            WHERE a.active = 1 AND a.expires_at <= ?
+            """,
+            (now.isoformat(),),
+        ).fetchall()
+        for attempt in attempts:
+            status = (
+                JobStatus.FAILED
+                if attempt["attempt_number"] >= attempt["max_attempts"]
+                else JobStatus.QUEUED
+            )
+            connection.execute(
+                "UPDATE job_attempts SET active = 0 WHERE attempt_id = ?",
+                (attempt["attempt_id"],),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+                (status.value, attempt["job_id"]),
+            )
+        return len(attempts)
+
+    def _active_attempt(
+        self, connection: sqlite3.Connection, job_id: JobId, token: str, now: datetime
+    ) -> sqlite3.Row:
+        attempt = connection.execute(
+            "SELECT * FROM job_attempts WHERE job_id = ? AND active = 1",
+            (str(job_id),),
+        ).fetchone()
+        if (
+            attempt is None
+            or not secrets.compare_digest(attempt["token_hash"], _token_hash(token))
+            or datetime.fromisoformat(attempt["expires_at"]) <= now
+        ):
+            raise LeaseFencedError(str(job_id))
+        return cast(sqlite3.Row, attempt)
+
 
 def _resources_json(resources: ResourceRequest) -> str:
     return json.dumps(
@@ -134,6 +331,17 @@ def _resources_json(resources: ResourceRequest) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _validate_lease_time(now: datetime, duration: timedelta) -> None:
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    if duration <= timedelta(0):
+        raise ValueError("lease duration must be positive")
 
 
 def _request_hash(spec: JobSpec) -> str:
