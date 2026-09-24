@@ -16,12 +16,21 @@ from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.experiments import ExperimentService
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.capabilities import CompatibilityStatus, NodeCapability
-from tableforge.domain.ids import ExperimentId, JobId, NodeId, new_experiment_id, new_job_id
+from tableforge.domain.ids import (
+    AgentId,
+    CheckpointId,
+    ExperimentId,
+    JobId,
+    NodeId,
+    new_experiment_id,
+    new_job_id,
+)
 from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.node_identity import NodeIdentityStore
 from tableforge.infrastructure.sqlite.auth import SQLiteAuthRepository
+from tableforge.infrastructure.sqlite.checkpoints import SQLiteCheckpointRepository
 from tableforge.infrastructure.sqlite.experiments import SQLiteExperimentRepository
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
 from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
@@ -99,6 +108,15 @@ def main() -> None:
     node_enroll.add_argument("--token", required=True)
     node_enroll.add_argument("--ca-file", type=Path)
     node_enroll.add_argument("--insecure", action="store_true")
+
+    checkpoint = subparsers.add_parser("checkpoint")
+    checkpoint_subparsers = checkpoint.add_subparsers(
+        dest="checkpoint_command", required=True
+    )
+    checkpoint_list = checkpoint_subparsers.add_parser("list")
+    checkpoint_list.add_argument("--agent")
+    checkpoint_show = checkpoint_subparsers.add_parser("show")
+    checkpoint_show.add_argument("checkpoint_id")
 
     args = parser.parse_args()
     if args.command == "doctor":
@@ -203,6 +221,35 @@ def main() -> None:
         elif args.experiment_command == "list":
             for current in experiments.list_experiments():
                 print(f"{current.experiment_id}\t{current.status.value}")
+    elif args.command == "checkpoint":
+        checkpoints = SQLiteCheckpointRepository(args.data_dir / "tableforge.db")
+        if args.checkpoint_command == "list":
+            agent = AgentId(args.agent) if args.agent else None
+            for item in checkpoints.list_checkpoints(agent):
+                print(
+                    f"{item.checkpoint_id}\t{item.agent_id}\tround={item.round_index}"
+                    f"\t{item.status.value}"
+                )
+        else:
+            found = checkpoints.get(CheckpointId(args.checkpoint_id))
+            if found is None:
+                raise SystemExit(f"unknown checkpoint {args.checkpoint_id}")
+            print(
+                json.dumps(
+                    {
+                        "agent_id": str(found.agent_id),
+                        "artifact_id": str(found.artifact_id),
+                        "checkpoint_id": str(found.checkpoint_id),
+                        "decision_reason": found.decision_reason,
+                        "experiment_id": str(found.experiment_id),
+                        "parent_id": str(found.parent_id) if found.parent_id else None,
+                        "round": found.round_index,
+                        "sha256": found.sha256,
+                        "status": found.status.value,
+                    },
+                    sort_keys=True,
+                )
+            )
     elif args.command == "node" and args.node_command == "init":
         capability = _discover_local_worker(args.data_dir)
         service.register_node(capability, datetime.now(UTC))

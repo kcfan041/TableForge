@@ -130,6 +130,36 @@ def test_checkpoint_round_trip_preserves_policy(tmp_path: Path) -> None:
     assert restored.train_steps == agent.train_steps
 
 
+def test_full_bundle_resumes_training_identically() -> None:
+    original = NfspAgent(small_config())
+    self_play_train(original, 150, seed_start=0)
+    restored = NfspAgent.from_bundle(original.to_bundle())
+
+    assert restored.to_bundle() == original.to_bundle()
+    assert len(restored.sl_buffer) == len(original.sl_buffer)
+    assert restored.sl_buffer.seen == original.sl_buffer.seen
+    assert len(restored.rl_buffer) == 0
+
+    original = NfspAgent.from_bundle(original.to_bundle())
+    self_play_train(original, 100, seed_start=1_000)
+    self_play_train(restored, 100, seed_start=1_000)
+    for left, right in zip(
+        original.policy_network.parameters(), restored.policy_network.parameters(), strict=True
+    ):
+        assert torch.equal(left, right)
+    for left, right in zip(
+        original.q_network.parameters(), restored.q_network.parameters(), strict=True
+    ):
+        assert torch.equal(left, right)
+
+
+def test_bundle_rejects_unexpected_entries() -> None:
+    from tableforge.learning.bundle import pack_entries
+
+    with pytest.raises(ValueError):
+        NfspAgent.from_bundle(pack_entries({"manifest.json": b"{}", "evil.py": b""}))
+
+
 def test_nfsp_agent_completes_hands_legally() -> None:
     agent = NfspAgent(small_config())
     agent.training = False

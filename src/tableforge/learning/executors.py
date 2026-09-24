@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
-import tempfile
-import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 from tableforge.agents.protocol import PokerAgent
 from tableforge.agents.rule import AggroBot, CallBot, RandomBot, TightBot
@@ -20,29 +16,6 @@ from tableforge.domain.learning import (
 )
 from tableforge.learning.nfsp import NfspAgent, NfspConfig
 from tableforge.learning.training import evaluate, self_play_train
-
-_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
-_BUNDLE_FILES = ("manifest.json", "inference.safetensors", "training.safetensors")
-
-
-def pack_checkpoint(directory: Path) -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in _BUNDLE_FILES:
-            info = zipfile.ZipInfo(name, date_time=_ZIP_TIME)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            archive.writestr(info, (directory / name).read_bytes())
-    return buffer.getvalue()
-
-
-def unpack_checkpoint(content: bytes, directory: Path) -> None:
-    with zipfile.ZipFile(io.BytesIO(content)) as archive:
-        names = set(archive.namelist())
-        if names != set(_BUNDLE_FILES):
-            raise ValueError("checkpoint bundle has unexpected contents")
-        for name in _BUNDLE_FILES:
-            (directory / name).write_bytes(archive.read(name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,10 +52,7 @@ class NfspTrainingExecutor:
             train_every=payload.train_every,
             on_progress=on_progress,
         )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            agent.save(path)
-            return pack_checkpoint(path)
+        return agent.to_bundle()
 
 
 def _opponent(name: str, seed: int) -> Callable[[], PokerAgent]:
@@ -126,10 +96,7 @@ class NfspEvaluationExecutor:
         content = self.fetch_artifact(payload.checkpoint_artifact_id)
         if hashlib.sha256(content).hexdigest() != payload.checkpoint_sha256:
             raise ValueError("checkpoint content does not match referenced hash")
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            unpack_checkpoint(content, path)
-            candidate = NfspAgent.load_inference(path)
+        candidate = NfspAgent.from_bundle(content, inference_only=True)
         results: dict[str, dict[str, float | int]] = {}
         for index, name in enumerate(payload.opponents):
             report = evaluate(
