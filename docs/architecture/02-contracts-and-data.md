@@ -239,7 +239,13 @@ SQLite claim 使用短 transaction 與 `BEGIN IMMEDIATE`。PostgreSQL adapter �
 
 Consumer 以 EventId 去重，並以 aggregate version 拒絕倒退更新。第一版 event 用於 audit 與內部通知；未來 federation 可複用，但不宣稱目前 event log 已具備共識能力。
 
-## 10. 版本相容策略
+## 10. Node Capability 與 Workload Compatibility
+
+Worker 註冊時提交 versioned `NodeCapability` snapshot，包含 CPU、RAM、GPU/VRAM、storage、runtime 與 enabled roles。動態 availability 由 heartbeat 更新，不覆寫 static snapshot。Workload 以 immutable `WorkloadProfile` 宣告 minimum/recommended resources、supported runtimes 與允許的 adjustments。
+
+Scheduler 產生 `CompatibilityAssessment` 與 `ResolvedExecutionPlan`。Job attempt 必須記錄 capability revision、workload profile version、選定 device、batch/precision adjustment 與 peak resource metrics。這些是既有 Job/Attempt metadata 的擴展，不建立另一套 lifecycle。詳細契約見 `06-capability-and-user-operations.md`。
+
+## 11. 版本相容策略
 
 - Coordinator 支援當前 major 與前一個 minor worker protocol。
 - Worker 註冊時交換 protocol range、runtime version、supported payload types。

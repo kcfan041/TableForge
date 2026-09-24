@@ -173,6 +173,7 @@ SQLite 適合單 Coordinator 與開發。進入兩節點長期運行前切換 Po
 - Worker runtime
 - simulation/evaluation jobs
 - lease、heartbeat、retry、artifact manifest
+- Node capability discovery、`tableforge doctor` 與 CPU-only compatibility tests
 - Coordinator/Worker restart tests
 
 ### M3：兩節點
@@ -196,6 +197,18 @@ SQLite 適合單 Coordinator 與開發。進入兩節點長期運行前切換 Po
 - 10M-hand soak test
 
 只有 M3 穩定後才開始 federation research。只有 M5 能穩定重現後才加入 PPO/Deep CFR/6-Max。
+
+Capability線與主里程碑交錯執行：M2完成C0–C1（domain、discovery、doctor），第一個GPU learner前完成C2–C4（GPU probe、測試tier、Scheduler filtering、WorkloadProfile與fallback）；C5 UI呈現屬平台化階段。核心判定由Application/Scheduler提供，CLI-first，Dashboard不阻塞MVP。
+
+使用者最小流程為：
+
+```text
+tableforge doctor
+tableforge node start
+tableforge experiment create --preset <name>
+tableforge experiment start <id>
+tableforge experiment status <id>
+```
 
 ## 10. 從單 Coordinator 演進至 Federation
 

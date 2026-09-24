@@ -146,7 +146,13 @@ Job 保持 RUNNING，Worker按退避策略重試上傳並續租。若超過最�
 
 第三方 Agent 尚未支援。加入時必須新增 container sandbox、唯讀 root filesystem、資源限制、無 outbound network、action timeout；不能直接沿用可信 Agent runtime。
 
-## 10. 測試門檻
+## 10. Capability Preflight 與資源錯誤
+
+Scheduler 在 claim 前根據 NodeCapability、WorkloadProfile 與 reserved resources判定相容性；Worker 在執行前再次做本地preflight。GPU缺失、VRAM不足、runtime mismatch或capability未知時不得啟動高風險Job。OOM需分類、保存結構化diagnostic，且只使用Experiment已允許的有限fallback plan重試。
+
+測試分成CPU必跑、GPU可選、VRAM tier與external-node。缺少GPU時，對應測試以明確reason skip，不得使CPU correctness suite失敗，也不得將CPU smoke test宣稱為GPU驗證。詳細規格見 `06-capability-and-user-operations.md`。
+
+## 11. 測試門檻
 
 ### Poker Engine
 

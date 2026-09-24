@@ -136,11 +136,11 @@ Coordinator 不執行牌局、不載入神經網路、不代理大型 artifact b
 }
 ```
 
-Runtime 依序執行：heartbeat、poll/claim、下載 input artifact、驗證 hash、執行、上傳 output、complete。每種 executor 必須可被單獨停止，且不得改寫 input artifact。
+Runtime 依序執行：capability discovery、heartbeat、poll/claim、下載 input artifact、驗證 hash、執行前 preflight、執行、上傳 output、complete。每種 executor 必須可被單獨停止，且不得改寫 input artifact。Capability snapshot 需版本化；Job attempt 記錄 claim 時使用的 capability revision。
 
 ### Scheduler
 
-Scheduler 只根據 JobSpec 與 NodeCapability 配對，不理解 Poker 演算法內部。配對條件包括 role、CPU、RAM、GPU 類型與 VRAM。第一版採 pull model：Worker 主動要求任務，避免 Coordinator 需要連入 NAT 後方節點。
+Scheduler 只根據 JobSpec、NodeCapability 與 versioned WorkloadProfile 配對，不理解 Poker 演算法內部。配對條件包括 role、CPU、RAM、GPU 類型、VRAM、runtime 與已保留資源。Scheduler 輸出結構化 CompatibilityAssessment；只有 Experiment 明確允許的 fallback 才能產生 degraded execution plan。第一版採 pull model：Worker 主動要求任務，避免 Coordinator 需要連入 NAT 後方節點。
 
 ### League Service
 
