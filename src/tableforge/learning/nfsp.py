@@ -67,14 +67,15 @@ def _masked(logits: Tensor, mask: Tensor) -> Tensor:
 
 
 class NfspAgent:
-    def __init__(self, config: NfspConfig) -> None:
+    def __init__(self, config: NfspConfig, device: str = "cpu") -> None:
         torch.manual_seed(config.seed)
         self.config = config
+        self.device = torch.device(device)
         self.rng = random.Random(config.seed)
-        self.q_network = _network(config.hidden_size)
-        self.target_network = _network(config.hidden_size)
+        self.q_network = _network(config.hidden_size).to(self.device)
+        self.target_network = _network(config.hidden_size).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
-        self.policy_network = _network(config.hidden_size)
+        self.policy_network = _network(config.hidden_size).to(self.device)
         self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), config.learning_rate)
         self.policy_optimizer = torch.optim.Adam(
             self.policy_network.parameters(), config.learning_rate
@@ -85,6 +86,7 @@ class NfspAgent:
         self.training = True
         self.best_response_mode = False
         self.train_steps = 0
+        self.batch_size = config.batch_size
         self.last_choice: AbstractAction | None = None
         self.policy_sink: Callable[[PolicySample], None] | None = None
 
@@ -115,8 +117,8 @@ class NfspAgent:
         legal = [index for index, allowed in enumerate(mask) if allowed]
         if not legal:
             raise ValueError("no legal abstract actions")
-        state_tensor = torch.tensor([state], dtype=torch.float32)
-        mask_tensor = torch.tensor([mask], dtype=torch.bool)
+        state_tensor = torch.tensor([state], dtype=torch.float32, device=self.device)
+        mask_tensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
         with torch.no_grad():
             if self.best_response_mode:
                 if self.training and self.rng.random() < self.config.epsilon:
@@ -129,9 +131,9 @@ class NfspAgent:
 
     def train_step(self) -> dict[str, float]:
         metrics: dict[str, float] = {}
-        if len(self.rl_buffer) >= self.config.batch_size:
+        if len(self.rl_buffer) >= self.batch_size:
             metrics["q_loss"] = self._train_q()
-        if len(self.sl_buffer) >= self.config.batch_size:
+        if len(self.sl_buffer) >= self.batch_size:
             metrics["policy_loss"] = self._train_policy()
         self.train_steps += 1
         if self.train_steps % self.config.target_update_steps == 0:
@@ -139,16 +141,23 @@ class NfspAgent:
         return metrics
 
     def _train_q(self) -> float:
-        batch = self.rl_buffer.sample(self.config.batch_size, self.rng)
-        states = torch.tensor([item.state for item in batch], dtype=torch.float32)
-        actions = torch.tensor([item.action for item in batch], dtype=torch.int64)
-        rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32)
-        done = torch.tensor([item.next_state is None for item in batch], dtype=torch.bool)
+        batch = self.rl_buffer.sample(self.batch_size, self.rng)
+        device = self.device
+        states = torch.tensor([item.state for item in batch], dtype=torch.float32, device=device)
+        actions = torch.tensor([item.action for item in batch], dtype=torch.int64, device=device)
+        rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32, device=device)
+        done = torch.tensor(
+            [item.next_state is None for item in batch], dtype=torch.bool, device=device
+        )
         next_states = torch.tensor(
-            [item.next_state or (0.0,) * FEATURE_SIZE for item in batch], dtype=torch.float32
+            [item.next_state or (0.0,) * FEATURE_SIZE for item in batch],
+            dtype=torch.float32,
+            device=device,
         )
         next_masks = torch.tensor(
-            [item.next_mask or (True,) * ACTION_COUNT for item in batch], dtype=torch.bool
+            [item.next_mask or (True,) * ACTION_COUNT for item in batch],
+            dtype=torch.bool,
+            device=device,
         )
         with torch.no_grad():
             next_values = _masked(self.target_network(next_states), next_masks).max(dim=1).values
@@ -162,10 +171,11 @@ class NfspAgent:
         return float(loss.item())
 
     def _train_policy(self) -> float:
-        batch = self.sl_buffer.sample(self.config.batch_size, self.rng)
-        states = torch.tensor([item.state for item in batch], dtype=torch.float32)
-        masks = torch.tensor([item.mask for item in batch], dtype=torch.bool)
-        actions = torch.tensor([item.action for item in batch], dtype=torch.int64)
+        batch = self.sl_buffer.sample(self.batch_size, self.rng)
+        device = self.device
+        states = torch.tensor([item.state for item in batch], dtype=torch.float32, device=device)
+        masks = torch.tensor([item.mask for item in batch], dtype=torch.bool, device=device)
+        actions = torch.tensor([item.action for item in batch], dtype=torch.int64, device=device)
         logits = _masked(self.policy_network(states), masks)
         loss = nn.functional.cross_entropy(logits, actions)
         self.policy_optimizer.zero_grad()
@@ -223,7 +233,9 @@ class NfspAgent:
         return pack_entries(entries)
 
     @classmethod
-    def from_bundle(cls, content: bytes, *, inference_only: bool = False) -> NfspAgent:
+    def from_bundle(
+        cls, content: bytes, *, inference_only: bool = False, device: str = "cpu"
+    ) -> NfspAgent:
         entries = unpack_entries(content, BUNDLE_ENTRIES)
         missing = REQUIRED_ENTRIES - set(entries)
         if missing:
@@ -235,7 +247,7 @@ class NfspAgent:
             raise ValueError("unsupported observation schema")
         if manifest["action_schema"] != ACTION_SCHEMA:
             raise ValueError("unsupported action schema")
-        agent = cls(NfspConfig(**manifest["config"]))
+        agent = cls(NfspConfig(**manifest["config"]), device=device)
         agent.train_steps = int(manifest["train_steps"])
         if inference_only:
             weights = st_load(entries[INFERENCE])
@@ -268,10 +280,10 @@ class NfspAgent:
         return agent
 
     @classmethod
-    def from_actor_bundle(cls, content: bytes) -> NfspAgent:
+    def from_actor_bundle(cls, content: bytes, device: str = "cpu") -> NfspAgent:
         entries = unpack_entries(content, BUNDLE_ENTRIES)
         manifest = json.loads(entries[MANIFEST])
-        agent = cls(NfspConfig(**manifest["config"]))
+        agent = cls(NfspConfig(**manifest["config"]), device=device)
         actor = st_load(entries[ACTOR])
         agent.q_network.load_state_dict(_unprefixed("q", actor))
         agent.policy_network.load_state_dict(_unprefixed("policy", actor))
@@ -326,7 +338,9 @@ def _optimizer_tensors(prefix: str, optimizer: torch.optim.Optimizer) -> dict[st
     for index, values in optimizer.state_dict()["state"].items():
         for name, value in values.items():
             if isinstance(value, Tensor):
-                tensors[f"{prefix}.{index}.{name}"] = value.detach().clone().contiguous()
+                tensors[f"{prefix}.{index}.{name}"] = (
+                    value.detach().to("cpu").clone().contiguous()
+                )
     return tensors
 
 
@@ -350,11 +364,15 @@ def _load_optimizer(
 ) -> None:
     state: dict[int, dict[str, Tensor]] = {}
     marker = f"{prefix}."
+    device = next(
+        (parameter.device for group in optimizer.param_groups for parameter in group["params"]),
+        torch.device("cpu"),
+    )
     for key, value in tensors.items():
         if not key.startswith(marker):
             continue
         index, name = key.removeprefix(marker).split(".", 1)
-        state.setdefault(int(index), {})[name] = value
+        state.setdefault(int(index), {})[name] = value if name == "step" else value.to(device)
     restored_groups = [
         {key: tuple(value) if key == "betas" else value for key, value in group.items()}
         for group in groups
@@ -372,7 +390,10 @@ def _restore_rng_state(value: list[Any]) -> tuple[Any, ...]:
 
 
 def _prefixed(prefix: str, state: dict[str, Any]) -> dict[str, Tensor]:
-    return {f"{prefix}.{key}": value.detach().clone() for key, value in state.items()}
+    return {
+        f"{prefix}.{key}": value.detach().to("cpu").clone().contiguous()
+        for key, value in state.items()
+    }
 
 
 def _unprefixed(prefix: str, state: dict[str, Tensor]) -> dict[str, Tensor]:

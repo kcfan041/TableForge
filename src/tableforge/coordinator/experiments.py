@@ -33,11 +33,20 @@ from tableforge.domain.simulation import SimulationJobPayload
 _TERMINAL = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
 
 
-def _profile(payload_type: str, key: str | None = None) -> WorkloadProfile:
-    for profile in BUILTIN_WORKLOADS:
-        if profile.payload_type == payload_type and (key is None or profile.key == key):
+def _profile(
+    payload_type: str, key: str | None = None, runtime: str = "cpu"
+) -> WorkloadProfile:
+    matches = [
+        profile
+        for profile in BUILTIN_WORKLOADS
+        if profile.payload_type == payload_type and (key is None or profile.key == key)
+    ]
+    for profile in matches:
+        if profile.minimum.required_runtime == runtime:
             return profile
-    raise ValueError(f"no workload profile for {payload_type}")
+    if matches and key is not None:
+        return matches[0]
+    raise ValueError(f"no {runtime} workload profile for {payload_type}")
 
 
 @dataclass(frozen=True, slots=True)

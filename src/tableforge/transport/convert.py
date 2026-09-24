@@ -220,6 +220,7 @@ def lease_to_proto(value: JobLease) -> jobs_pb2.JobLease:
         attempt_number=value.attempt_number,
         leased_at=timestamp_to_proto(value.leased_at),
         expires_at=timestamp_to_proto(value.expires_at),
+        execution_plan_json=value.execution_plan_json,
     )
 
 
@@ -232,6 +233,7 @@ def lease_from_proto(message: jobs_pb2.JobLease) -> JobLease:
         attempt_number=message.attempt_number,
         leased_at=timestamp_from_proto(message.leased_at),
         expires_at=timestamp_from_proto(message.expires_at),
+        execution_plan_json=message.execution_plan_json or "{}",
     )
 
 

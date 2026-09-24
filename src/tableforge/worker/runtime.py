@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -39,10 +40,31 @@ SIMULATION_OUTPUT = OutputSpec(
 )
 
 
+class PlanAwareExecutor(Protocol):
+    def execute_with_plan(
+        self,
+        payload_bytes: bytes,
+        plan: Mapping[str, object],
+        on_progress: Callable[[int], None] | None = None,
+    ) -> bytes: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredExecutor:
     executor: JobExecutor
     output: OutputSpec
+
+    def run(
+        self,
+        payload: bytes,
+        plan_json: str,
+        on_progress: Callable[[int], None] | None,
+    ) -> bytes:
+        plan = json.loads(plan_json or "{}")
+        if hasattr(self.executor, "execute_with_plan") and isinstance(plan, dict):
+            executor: PlanAwareExecutor = self.executor  # type: ignore[assignment]
+            return executor.execute_with_plan(payload, plan, on_progress)
+        return self.executor.execute(payload, on_progress)
 
 
 class JobCancelledError(Exception):
@@ -106,7 +128,9 @@ class WorkerRuntime:
                 )
 
         try:
-            output = registered.executor.execute(lease.job.spec.payload, heartbeat)
+            output = registered.run(
+                lease.job.spec.payload, lease.execution_plan_json, heartbeat
+            )
         except JobCancelledError:
             self.coordinator.acknowledge_cancel(
                 current_lease.job.spec.job_id,
@@ -125,12 +149,15 @@ class WorkerRuntime:
             )
             return lease
         except Exception as error:
+            out_of_memory = _is_out_of_memory(error)
             self.coordinator.fail_job(
                 current_lease.job.spec.job_id,
                 current_lease.token,
                 self.clock.now(),
-                "EXECUTOR_ERROR",
-                _safe_error_summary(error),
+                "GPU_OUT_OF_MEMORY" if out_of_memory else "EXECUTOR_ERROR",
+                _oom_summary(error, lease.execution_plan_json)
+                if out_of_memory
+                else _safe_error_summary(error),
                 retryable=True,
             )
             return lease
@@ -151,6 +178,33 @@ class WorkerRuntime:
             (artifact,),
         )
         return lease
+
+
+def _is_out_of_memory(error: BaseException) -> bool:
+    if type(error).__name__ == "OutOfMemoryError":
+        return True
+    message = str(error).lower()
+    return "out of memory" in message and ("cuda" in message or "gpu" in message)
+
+
+def _oom_summary(error: Exception, plan_json: str) -> str:
+    peak: int | None = None
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            peak = int(torch.cuda.max_memory_allocated())
+            torch.cuda.empty_cache()
+    except Exception:
+        peak = None
+    return json.dumps(
+        {
+            "error": _safe_error_summary(error)[:200],
+            "execution_plan": json.loads(plan_json or "{}"),
+            "peak_gpu_memory_bytes": peak,
+        },
+        sort_keys=True,
+    )[:500]
 
 
 def _safe_error_summary(error: Exception) -> str:

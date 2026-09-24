@@ -298,6 +298,7 @@ class SQLiteJobRepository:
                 attempt_number=attempt_number,
                 leased_at=now,
                 expires_at=expires_at,
+                execution_plan_json=plan_json,
             )
 
     def renew(
@@ -327,6 +328,7 @@ class SQLiteJobRepository:
                 attempt_number=attempt["attempt_number"],
                 leased_at=datetime.fromisoformat(attempt["leased_at"]),
                 expires_at=expires_at,
+                execution_plan_json=attempt["execution_plan_json"],
             )
 
     def complete(

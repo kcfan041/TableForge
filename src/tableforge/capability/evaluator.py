@@ -3,6 +3,7 @@ from __future__ import annotations
 from tableforge.domain.capabilities import (
     CompatibilityAssessment,
     CompatibilityStatus,
+    GpuCapability,
     NodeCapability,
     ReasonCode,
     ResolvedExecutionPlan,
@@ -58,39 +59,49 @@ def assess_compatibility(
         details["required_runtime"] = required.required_runtime
 
     selected_device: str | None = None
+    batch_size: int | None = None
+    degraded = False
     if required.gpu_count > 0:
-        if len(capability.gpus) < required.gpu_count:
+        runtime_gpus = [
+            gpu for gpu in capability.gpus if required.required_runtime in gpu.runtimes
+        ]
+        if len(runtime_gpus) < required.gpu_count:
             reasons.append(ReasonCode.GPU_NOT_FOUND)
+        elif any(gpu.total_memory_bytes is None for gpu in runtime_gpus):
+            reasons.append(ReasonCode.CAPABILITY_UNKNOWN)
         else:
-            compatible_gpus = [
-                gpu
-                for gpu in capability.gpus
-                if gpu.total_memory_bytes is not None
-                and gpu.total_memory_bytes >= required.gpu_memory_bytes
-                and required.required_runtime in gpu.runtimes
-            ]
-            unknown_memory = any(gpu.total_memory_bytes is None for gpu in capability.gpus)
-            if len(compatible_gpus) < required.gpu_count:
-                reasons.append(
-                    ReasonCode.CAPABILITY_UNKNOWN
-                    if unknown_memory
-                    else ReasonCode.INSUFFICIENT_VRAM
-                )
-                details["required_gpu_memory_bytes"] = required.gpu_memory_bytes
+            best = max(runtime_gpus, key=_usable_vram)
+            vram = _usable_vram(best)
+            details["available_gpu_memory_bytes"] = vram
+            details["required_gpu_memory_bytes"] = required.gpu_memory_bytes
+            if workload.gpu_memory_per_batch_item:
+                batch_size, degraded = _choose_batch(workload, vram)
+                fits = batch_size is not None
             else:
-                selected_device = compatible_gpus[0].device_id
+                fits = vram >= required.gpu_memory_bytes
+            if not fits:
+                reasons.append(ReasonCode.INSUFFICIENT_VRAM)
+            else:
+                selected_device = best.device_id
+                if degraded:
+                    details["batch_size"] = batch_size
 
     if ReasonCode.CAPABILITY_UNKNOWN in reasons:
         status = CompatibilityStatus.UNKNOWN
     elif reasons:
         status = CompatibilityStatus.UNSUPPORTED
+    elif degraded:
+        status = CompatibilityStatus.DEGRADED
+        reasons.append(ReasonCode.REDUCED_BATCH_SIZE)
     else:
         status = CompatibilityStatus.SUPPORTED
     plan = None
-    if status is CompatibilityStatus.SUPPORTED:
+    if status in (CompatibilityStatus.SUPPORTED, CompatibilityStatus.DEGRADED):
         plan = ResolvedExecutionPlan(
             runtime=required.required_runtime,
             device_id=selected_device,
+            batch_size=batch_size,
+            adjustments=(f"batch_size={batch_size}",) if degraded else (),
         )
     return CompatibilityAssessment(
         schema_version="1.0",
@@ -103,6 +114,23 @@ def assess_compatibility(
         plan=plan,
         details=details,
     )
+
+
+def _usable_vram(gpu: GpuCapability) -> int:
+    total = gpu.total_memory_bytes or 0
+    if gpu.available_memory_bytes is None:
+        return total
+    return min(total, gpu.available_memory_bytes)
+
+
+def _choose_batch(workload: WorkloadProfile, vram: int) -> tuple[int | None, bool]:
+    sizes = workload.fallback_batch_sizes
+    if not sizes:
+        return None, False
+    for index, size in enumerate(sizes):
+        if workload.gpu_memory_for(size) <= vram:
+            return size, index > 0
+    return None, False
 
 
 def _check_known_minimum(

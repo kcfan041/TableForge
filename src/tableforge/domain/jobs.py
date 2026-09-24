@@ -141,6 +141,7 @@ class JobLease:
     attempt_number: int
     leased_at: datetime
     expires_at: datetime
+    execution_plan_json: str = "{}"
 
     def __post_init__(self) -> None:
         if not self.token:

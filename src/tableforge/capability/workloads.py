@@ -3,6 +3,8 @@ from __future__ import annotations
 from tableforge.domain.capabilities import WorkloadProfile
 from tableforge.domain.jobs import ResourceRequest
 
+KIB = 1024
+MIB = 1024**2
 GIB = 1024**3
 
 
@@ -101,6 +103,35 @@ BUILTIN_WORKLOADS = (
     ),
     WorkloadProfile(
         schema_version="1.0",
+        key="hu-nfsp-learner-gpu",
+        version="1",
+        payload_type="tableforge.v1.NfspLearnerJobPayload",
+        minimum=ResourceRequest(
+            cpu_cores=2,
+            memory_bytes=4 * GIB,
+            gpu_count=1,
+            storage_bytes=2 * GIB,
+            required_role="nfsp_learner",
+            required_runtime="cuda",
+            exclusive_gpu=True,
+        ),
+        recommended=ResourceRequest(
+            cpu_cores=4,
+            memory_bytes=8 * GIB,
+            gpu_count=1,
+            gpu_memory_bytes=2 * GIB,
+            storage_bytes=10 * GIB,
+            required_role="nfsp_learner",
+            required_runtime="cuda",
+            exclusive_gpu=True,
+        ),
+        supported_runtimes=("cuda",),
+        fallback_batch_sizes=(8_192, 4_096, 2_048, 1_024),
+        base_gpu_memory_bytes=512 * MIB,
+        gpu_memory_per_batch_item=24 * KIB,
+    ),
+    WorkloadProfile(
+        schema_version="1.0",
         key="hu-nfsp-small-gpu",
         version="1",
         payload_type="tableforge.v1.NfspTrainingJobPayload",
@@ -125,6 +156,8 @@ BUILTIN_WORKLOADS = (
             exclusive_gpu=True,
         ),
         supported_runtimes=("cuda",),
-        fallback_batch_sizes=(1024, 512, 256),
+        fallback_batch_sizes=(262_144, 131_072, 65_536, 16_384, 4_096),
+        base_gpu_memory_bytes=512 * MIB,
+        gpu_memory_per_batch_item=24 * KIB,
     ),
 )

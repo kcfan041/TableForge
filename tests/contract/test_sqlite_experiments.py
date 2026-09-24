@@ -48,3 +48,21 @@ def test_stale_revision_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(IdempotencyConflictError):
         repository.update_status(experiment_id, 1, ExperimentStatus.STOPPED, NOW)
+
+
+def test_concurrent_transition_to_same_status_is_idempotent(tmp_path: Path) -> None:
+    repository = SQLiteExperimentRepository(tmp_path / "tableforge.db")
+    experiment_id = new_experiment_id()
+    repository.create(experiment_id, config(), NOW)
+    running = repository.update_status(experiment_id, 1, ExperimentStatus.RUNNING, NOW)
+    completed = repository.update_status(
+        experiment_id, running.revision, ExperimentStatus.COMPLETED, NOW
+    )
+
+    again = repository.update_status(
+        experiment_id, running.revision, ExperimentStatus.COMPLETED, NOW
+    )
+
+    assert again == completed
+    with pytest.raises(IdempotencyConflictError):
+        repository.update_status(experiment_id, running.revision, ExperimentStatus.STOPPED, NOW)

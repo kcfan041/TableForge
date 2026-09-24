@@ -39,8 +39,15 @@ class ExperimentConfig:
     league: bool = False
     historical_limit: int = 0
     matrix_deals: int = 0
+    learner_runtime: str = "cpu"
+    hidden_size: int = 64
+    batch_size: int = 64
 
     def __post_init__(self) -> None:
+        if self.learner_runtime not in ("cpu", "cuda"):
+            raise ValueError("learner_runtime must be cpu or cuda")
+        if self.hidden_size < 1 or self.batch_size < 1:
+            raise ValueError("hidden_size and batch_size must be positive")
         if not self.schema_version or not self.preset_key or not self.preset_version:
             raise ValueError("experiment config identity cannot be empty")
         if self.hands < 1 or self.hands_per_job < 1:
@@ -91,6 +98,9 @@ class ExperimentPreset:
     league: bool = False
     historical_limit: int = 0
     matrix_deals: int = 0
+    learner_runtime: str = "cpu"
+    hidden_size: int = 64
+    batch_size: int = 64
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -110,6 +120,9 @@ class ExperimentPreset:
             league=self.league,
             historical_limit=self.historical_limit,
             matrix_deals=self.matrix_deals,
+            learner_runtime=self.learner_runtime,
+            hidden_size=self.hidden_size,
+            batch_size=self.batch_size,
         )
 
 
@@ -153,5 +166,21 @@ BUILTIN_PRESETS = (
         league=True,
         historical_limit=3,
         matrix_deals=200,
+    ),
+    ExperimentPreset(
+        "hu-nfsp-gpu-iterative",
+        "1",
+        hands=4_000,
+        hands_per_job=4_000,
+        kind=ExperimentKind.NFSP_ITERATIVE,
+        evaluation_deals=200,
+        rounds=3,
+        actors_per_round=2,
+        train_steps_per_round=400,
+        max_evaluation_deals=1_000,
+        target_ci_width=150.0,
+        learner_runtime="cuda",
+        hidden_size=512,
+        batch_size=8_192,
     ),
 )

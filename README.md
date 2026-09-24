@@ -1,6 +1,6 @@
 # TableForge
 
-分散式多代理德州撲克 AI 訓練與評估框架。目前支援 Heads-Up No-Limit Hold'em、Rule Bots、NFSP（CPU），以及單一 Coordinator 搭配多個 Worker 的遠端執行。
+分散式多代理德州撲克 AI 訓練與評估框架。目前支援 Heads-Up No-Limit Hold'em、Rule Bots、NFSP（CPU 與 NVIDIA GPU），以及單一 Coordinator 搭配多個 Worker 的遠端執行。
 
 - 開發進度：[docs/status.md](docs/status.md)
 - 架構規格：[docs/architecture/README.md](docs/architecture/README.md)
@@ -18,6 +18,14 @@ uv sync --extra learning
 `--extra learning` 會安裝 PyTorch，用來訓練和評估 NFSP。只執行 simulation 的節點（例如一台筆電）可以省略，改用 `uv sync`。
 
 > 注意：之後若只執行 `uv sync` 而沒有加 `--extra learning`，PyTorch 會被移除，NFSP 相關測試會顯示為略過而不是失敗。
+
+有 NVIDIA GPU 的 Windows／Linux 電腦：
+
+```
+uv sync --extra learning --extra gpu
+```
+
+Windows 和 Linux 會自動安裝 CUDA 版 PyTorch（需要支援 CUDA 13 的驅動程式）；`--extra gpu` 另外安裝 NVML，用來讀取 GPU 資訊。`doctor` 會列出偵測到的 GPU 與 GPU workload 會使用的 batch 大小。
 
 ## 單機快速開始
 
@@ -66,7 +74,33 @@ Matrix 每格是「列」對「欄」的 bb/100，`*` 表示 95% 信賴區間不
 
 快速檢查用的 `hu-nfsp-cpu-smoke` 只有一次訓練加一次對 Rule Bots 的評估，結果會顯示在 `experiment status` 的 `evaluation` 欄位。
 
-這兩個 preset 都是小規模設定，信賴區間很寬，只能確認流程正常，**不能用來判斷模型強弱**。
+`hu-nfsp-gpu-iterative` 和 `hu-nfsp-cpu-iterative` 流程相同，但使用較大的網路，Learner 在 GPU 上訓練。GPU 記憶體不夠時會自動改用較小的 batch。只想用 CPU 的 Worker 可以加上 `--no-gpu`。
+
+以上 preset 都是小規模設定，信賴區間很寬，只能確認流程正常，**不能用來判斷模型強弱**。
+
+## 設定
+
+設定來源的優先順序，由低到高：
+
+1. 預設值
+2. `<data-dir>/tableforge.toml`，或用 `--config <檔案>` 指定
+3. 環境變數 `TABLEFORGE_<區段>__<名稱>`，例如 `TABLEFORGE_WORKER__LEASE_SECONDS=60`
+4. 指令參數
+
+```toml
+[worker]
+lease_seconds = 300
+idle_seconds = 1
+cache_max_bytes = 10737418240   # Worker artifact cache 上限
+use_gpu = true
+
+[coordinator]
+listen = "0.0.0.0:7443"
+reconcile_seconds = 2
+metrics_listen = "127.0.0.1:9464"   # Prometheus /metrics，留空則不啟用
+```
+
+設定名稱或數值錯誤時，指令會直接報錯。
 
 ## 兩台電腦
 
@@ -98,13 +132,17 @@ uv run tableforge worker start --remote
 |---|---|
 | `doctor [--json]` | 偵測硬體並列出可執行的 workload |
 | `experiment create/start/status/stop/list` | 管理實驗 |
-| `worker start [--remote] [--max-jobs N]` | 持續領取並執行 Job，`Ctrl+C` 停止 |
+| `worker start [--remote] [--max-jobs N] [--no-gpu]` | 持續領取並執行 Job，`Ctrl+C` 停止 |
 | `worker run-once` | 只執行一個 Job |
 | `job submit-simulation/list/status/cancel` | 直接操作 Job |
 | `node init/status/enroll` | 節點註冊與狀態 |
+| `node revoke <node-id>` | 在 Coordinator 上立即撤銷某個節點的所有 session |
+| `node rotate-session` | 在 Worker 上換一個新的 session，舊的立即失效 |
 | `checkpoint list/show` | 查看 NFSP checkpoint 與升級紀錄 |
 | `league matrix <id> [--json]` | 查看 League 的 matchup matrix |
-| `coordinator init/serve/enrollment-token` | 遠端 Coordinator |
+| `events tail [--after N]` | 查看狀態變更事件 |
+| `artifact gc [--dry-run] [--grace-hours H]` | 刪除沒有被引用的舊 artifact |
+| `coordinator init/serve/enrollment-token` | 遠端 Coordinator；`serve --metrics-listen` 啟用 metrics |
 
 ## 開發
 
@@ -125,6 +163,7 @@ uv run python scripts/generate_protos.py
 ## 已知限制
 
 - 只支援 Heads-Up；6-Max、Deep CFR、PPO 尚未實作。
-- NFSP 目前只在 CPU 上訓練，尚未偵測 NVIDIA GPU。
+- GPU 只支援 NVIDIA CUDA；Apple Silicon 的 MPS 尚未支援。
+- Windows 上 GPU 記憶體也會佔用系統記憶體配額，page file 太小時可用的 batch 會變小（`doctor` 會顯示警告）。
 - Metadata 使用 SQLite，適合單一 Coordinator。
 - 完整清單見 [docs/status.md](docs/status.md)。

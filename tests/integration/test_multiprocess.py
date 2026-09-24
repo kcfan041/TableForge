@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -12,15 +13,22 @@ import pytest
 
 pytestmark = pytest.mark.multiprocess
 
+CPU_ONLY_ENV = {**os.environ, "TABLEFORGE_WORKER__USE_GPU": "false"}
+
 
 def cli(data_dir: Path, *arguments: str, timeout: float = 60) -> str:
     result = subprocess.run(
         [sys.executable, "-m", "tableforge.cli.main", "--data-dir", str(data_dir), *arguments],
-        check=True,
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=CPU_ONLY_ENV,
     )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"tableforge {' '.join(arguments)} exited {result.returncode}\n"
+            f"stdout:\n{result.stdout[-2000:]}\nstderr:\n{result.stderr[-4000:]}"
+        )
     return result.stdout.strip()
 
 
@@ -47,6 +55,7 @@ def coordinator(tmp_path: Path) -> Iterator[tuple[Path, str]]:
             "--listen",
             f"127.0.0.1:{port}",
         ],
+        env=CPU_ONLY_ENV,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -135,6 +144,7 @@ def test_killed_remote_worker_job_is_recovered(
             "--lease-seconds",
             "2",
         ],
+        env=CPU_ONLY_ENV,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -197,6 +207,7 @@ def test_background_reconciler_drives_iterative_nfsp_with_two_workers(
                     "--idle-seconds",
                     "0.5",
                 ],
+                env=CPU_ONLY_ENV,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

@@ -37,6 +37,7 @@ class WorkerSettings:
     lease_seconds: float = 300.0
     idle_seconds: float = 1.0
     cache_max_bytes: int = 10 * 1024**3
+    use_gpu: bool = True
 
 
 @dataclass(frozen=True, slots=True)

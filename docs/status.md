@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：M5 League 階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：第一版收尾（設定、營運、GPU）階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -17,19 +17,20 @@
 | M1 | Heads-Up Poker Engine、Rule Bots、資金守恆 | 已完成 | `f3b1679`–`df4b40d` |
 | M2 | 單機工作流：lease、heartbeat、失敗/取消、experiment、worker loop | 已完成 | `5b27e50`–`de6318d` |
 | C0/C1 | 能力模型、CPU/RAM/磁碟偵測、`doctor` | 已完成 | `ab79ff0`、`0e95ed3` |
-| C2 | NVIDIA GPU 偵測、GPU 測試分級 | 未開始 | |
+| C2 | NVIDIA GPU 偵測、GPU 測試分級 | 已完成 | 本階段 |
 | C3 | Scheduler 資源過濾、reservation、capability revision | 已完成 | `179933e` |
-| C4 | 降級執行計畫（fallback） | 未開始 | |
+| C4 | 降級執行計畫（fallback）、OOM 分類 | 已完成 | 本階段 |
 | C5 | UI 呈現能力資訊 | 未開始 | 平台化階段 |
 | M3a | gRPC 傳輸、enrollment/session、TLS、artifact 傳輸 | 已完成 | `61cf545`、`b5c4c51` |
 | M3a 第 2 階段 | Mac 實機驗證、跨平台結果一致性 | 延後 | 需在 Mac 上執行 |
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
-| M3b | PostgreSQL、MinIO、Docker | 未開始 | |
+| 營運 | 設定分層、outbox、metrics、artifact GC、session 輪換/撤銷 | 已完成 | `5e76237`、`e845d0c` |
+| M3b | PostgreSQL、MinIO、Docker | 未開始 | 下一步 |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：189 個測試全部通過，Ruff、mypy strict 通過。
+目前測試：219 個測試全部通過（含 RTX 2070 實機 GPU 測試），Ruff、mypy strict 通過。
 
 ## 已完成項目與驗收方式
 
@@ -58,7 +59,7 @@
 - 偵測 CPU、RAM（Windows、Linux、macOS）、磁碟。
 - 每個資料目錄有固定的 NodeId。
 - Workload 相容判斷；不相容或能力未知時不派工；高優先 GPU Job 不會擋住 CPU Job。
-- 驗收：單元測試；本機 `doctor` 實跑正確顯示 GPU workload 為 UNSUPPORTED。
+- 驗收：單元測試。
 
 ### M3a 遠端傳輸
 - gRPC Coordinator server 與 Worker client，Worker 只依賴 `CoordinatorClient` 介面。
@@ -102,6 +103,34 @@
 限制：
 - CPU 小型設定只能證明流程正確，不能證明模型變強。League 實測中，第 4 輪對 round-0 為 +553.9 bb/100（顯著），但對 Tight bot 仍顯著落後（-634.0 bb/100）；多數格子信賴區間含 0。實測第 3 輪 candidate 對 active 為 -65.2 bb/100，信賴區間上限 45.6，依規則仍升級。要評估真正的學習效果需要更長的訓練和更多評估手數。
 
+### 設定與營運
+- **設定分層**：預設值 < `<data-dir>/tableforge.toml`（或 `--config`） < 環境變數 `TABLEFORGE_<SECTION>__<KEY>` < CLI 參數。未知設定或錯誤值直接報錯。啟動 log 會輸出設定，密碼與金鑰遮蔽。
+- **組件集中建立**：`composition.py` 依設定建立所有 repository 與 artifact store；CLI 不再直接建立 SQLite 類別。Checkpoint 與 auth 也改用 port 介面。
+- **背壓**：Worker artifact cache 有容量上限（`worker.cache_max_bytes`，預設 10 GiB），超過時刪除最久未用的檔案。
+- **Log context**：JSON log 帶時間、component、node_id、job_id、attempt_id、experiment_id。
+- **Outbox**：Job、experiment、checkpoint 的狀態變更與事件在同一個 transaction 寫入 `events` 表；被拒絕的操作不產生事件。CLI `events tail`。
+- **Metrics**：`coordinator serve --metrics-listen 127.0.0.1:9464` 提供 Prometheus `/metrics`：Job／實驗／checkpoint 狀態、active 與過期 lease、節點數、失敗原因、RPC 次數與延遲、artifact 傳輸量、reconciler 結果。
+- **Artifact GC**：`artifact gc --dry-run`。Job 輸入輸出、payload 內的 sha256、checkpoint 引用的 artifact 都保留；未被引用且超過寬限時間（預設 24 小時）才刪除。
+- **安全**：`node revoke <node-id>` 立即撤銷節點所有 session；`node rotate-session` 換新 session，舊 token 立即失效。Enrollment token 固定以 `tfe_` 開頭，避免被 CLI 誤當成參數（先前約 1/64 機率失敗）。
+- 驗收：單元與 contract tests；實跑 coordinator + 遠端 worker：rotate 後完成 Job、metrics 與 events 正確、revoke 後 worker 被拒（UNAUTHENTICATED）。
+
+### C2/C4 GPU（RTX 2070 8 GB 實機）
+- **CUDA 版 PyTorch**：Windows／Linux 自動從 PyTorch cu130 index 安裝（macOS 仍用一般版本）。安裝：`uv sync --extra learning --extra gpu`。
+- **GPU 偵測**：優先用 NVML，失敗時改用 `nvidia-smi`；讀型號、VRAM 總量與可用量、driver、compute capability。偵測失敗記為警告，不當成 0。`doctor` 顯示每張 GPU。
+- **Windows 記憶體限制**：Windows 上 GPU 配置也會佔用系統 commit（實測每配置 512 MiB，commit 就少約 512 MiB）。本機 page file 較小時，實際能用的 VRAM 比顯示的少，因此可用 VRAM 取「GPU 可用量」與「系統 commit 餘量減 1 GiB」的較小者，並給出 `GPU_MEMORY_LIMITED_BY_SYSTEM_COMMIT` 警告。
+- **降級執行計畫**：Workload profile 定義 VRAM 模型（固定用量＋每個 batch 項目用量，依實測峰值設定）與可接受的 batch 清單。Scheduler 選放得下的最大 batch；不是第一選擇時狀態為 DEGRADED，並記錄在 attempt 的 execution plan。DEGRADED 的 Job 可以派工。
+- **執行**：Execution plan 隨 lease 傳給 Worker（proto 新增欄位）；Learner 依 plan 選 device 與 batch 上限。Checkpoint 一律以 CPU tensor 儲存，GPU 訓練的 checkpoint 可在 CPU 載入。
+- **OOM**：CUDA OOM 記為 `GPU_OUT_OF_MEMORY`，錯誤摘要包含 execution plan 與峰值 VRAM。
+- **CPU Worker 不碰 GPU**：PyTorch optimizer 每一步都會查詢 accelerator，即使全部在 CPU 也會建立 CUDA context（每個約 250 MB commit）。多個 CPU Worker 同時執行時會耗盡記憶體。Coordinator 與 `--no-gpu`（或 `worker.use_gpu=false`）的 Worker 會在啟動時隱藏 GPU。
+- Preset：`hu-nfsp-gpu-iterative`（3 輪，hidden 512，batch 8192，learner 用 CUDA）。
+- **GPU 測試分級**：`requires_cuda`、`vram_8gb`、`vram_16gb`、`vram_24gb` marker，依偵測結果自動略過。GPU 測試在子程序中執行，避免與其他測試共用 CUDA 狀態。
+- 驗收：
+  - `doctor` 正確顯示 RTX 2070（8 GiB，compute 7.5）；`hu-nfsp-small-gpu` 依當下餘量降級為較小 batch。
+  - 依計畫的 batch 實際在 GPU 上訓練，峰值不超過預估。
+  - GPU 與 CPU 訓練同一份資料，結果在誤差 1e-3 內一致；GPU checkpoint 可在 CPU 載入。
+  - `hu-nfsp-gpu-iterative` 實跑：13 個 Job 全部成功，3 個 learner 都以 `cuda:0`、batch 8192 執行，約 6 分鐘。
+  - 完整測試連續 3 次全部通過。
+
 ## 延後項目
 
 ### Mac 實機驗證（M3a 第 2 階段）
@@ -113,7 +142,7 @@ uv run pytest
 uv run tableforge doctor
 ```
 
-確認記憶體偵測正確、GPU workload 顯示 UNSUPPORTED。另外用相同 seed 在兩台電腦各跑同一個 simulation Job，比對輸出 hash。
+確認記憶體偵測正確、沒有 NVIDIA GPU 時 GPU workload 顯示 UNSUPPORTED。另外用相同 seed 在兩台電腦各跑同一個 simulation Job，比對輸出 hash。
 
 ### 兩節點實機驗收
 兩台電腦目前不在同一個網路，Windows 沒有 Wi-Fi，需要先安裝 Tailscale。驗收項目：Mac 領取並完成 Job；中途中斷後由另一個 Worker 接手；結果不重複計入；GPU Job 不派給 Mac。
@@ -125,19 +154,17 @@ uv run tableforge doctor
 | 項目 | 規格 | 目前實作 |
 |---|---|---|
 | Artifact 傳輸 | Coordinator 不轉送大型 artifact，Worker 直接連 storage | 經由 Coordinator 的 gRPC 串流，單檔上限 1 GiB |
-| 事件 | 狀態變更與 outbox 事件同一個 transaction | 尚無 outbox 表 |
 | 兩節點 metadata | PostgreSQL | 仍為 SQLite（單一 Coordinator 可運作） |
 | Experience 格式 | Parquet shard | NPZ 形式的 zip（規格允許的替代格式，避免新增 pyarrow） |
 | RL buffer 跨輪保留 | 保留最近幾輪資料 | 每輪只使用當輪 shard；reservoir buffer 跨輪保留 |
 
-已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進。
+已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進；outbox 事件已加入。
 
 ## 下一步候選
 
 依建議優先順序：
 
-1. **學習效果驗證**：較長的訓練與評估設定，確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
-2. **M3b**：PostgreSQL、MinIO、Docker。
-3. **C2/C4**：NVIDIA 偵測與降級執行計畫。GPU 相關驗證需要有 GPU 的節點。
-4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-5. **O0–O7 對手建模**。
+1. **M3b**：PostgreSQL adapter、S3/MinIO 與 Worker 直連 storage、Docker 部署（進行中）。
+2. **學習效果驗證**：較長的訓練與評估設定（現在可用 GPU），確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
+3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+4. **O0–O7 對手建模**。

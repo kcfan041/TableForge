@@ -135,10 +135,10 @@ class SQLiteExperimentRepository:
             ).fetchone()
             if row is None:
                 raise JobNotFoundError(str(experiment_id))
-            if row["current_revision"] != expected_revision:
-                raise IdempotencyConflictError(str(experiment_id))
             if ExperimentStatus(row["status"]) is status:
                 return _row_to_experiment(row)
+            if row["current_revision"] != expected_revision:
+                raise IdempotencyConflictError(str(experiment_id))
             revision = expected_revision + 1
             connection.execute(
                 """

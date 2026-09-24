@@ -151,3 +151,11 @@ def test_session_rotation_and_revocation(tmp_path: Path) -> None:
     assert auth.revoke_node(NodeId("node-a")) == 1
     with pytest.raises(AuthenticationError):
         auth.authenticate(rotated.token, NOW)
+
+
+def test_enrollment_tokens_are_safe_as_cli_arguments(tmp_path: Path) -> None:
+    auth = SQLiteAuthRepository(tmp_path / "db.sqlite")
+
+    tokens = [auth.create_enrollment_token(NOW, timedelta(hours=1)) for _ in range(200)]
+
+    assert all(token.startswith("tfe_") for token in tokens)

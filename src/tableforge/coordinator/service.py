@@ -76,7 +76,10 @@ class CoordinatorService:
 
         def compatible(job: Job) -> bool:
             result = assessment(job)
-            return result.status is CompatibilityStatus.SUPPORTED
+            return result.status in (
+                CompatibilityStatus.SUPPORTED,
+                CompatibilityStatus.DEGRADED,
+            )
 
         def workload_identity(job: Job) -> tuple[str, str]:
             workload = self._workload_for(job.spec)
@@ -163,10 +166,15 @@ class CoordinatorService:
         return self.artifacts.get_download(artifact_id).path.read_bytes()
 
     def _workload_for(self, spec: JobSpec) -> WorkloadProfile:
-        for workload in self.workloads:
-            if workload.payload_type == spec.payload_type:
+        candidates = [
+            workload for workload in self.workloads if workload.payload_type == spec.payload_type
+        ]
+        if not candidates:
+            raise ValueError(f"no workload profile for {spec.payload_type}")
+        for workload in candidates:
+            if workload.minimum.required_runtime == spec.resources.required_runtime:
                 return workload
-        raise ValueError(f"no workload profile for {spec.payload_type}")
+        return candidates[0]
 
 
 def _subtract_reserved(

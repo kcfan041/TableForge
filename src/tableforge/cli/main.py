@@ -30,6 +30,7 @@ from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.league import MatrixCell
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.node_identity import NodeIdentityStore
+from tableforge.learning.device import hide_accelerators
 from tableforge.observability import COUNTERS
 from tableforge.settings import Settings, SettingsError, load_settings
 from tableforge.transport.client import enroll
@@ -71,6 +72,9 @@ def main() -> None:
     worker_start.add_argument("--idle-seconds", type=float)
     worker_start.add_argument("--remote", action="store_true")
     worker_start.add_argument("--lease-seconds", type=float)
+    worker_start.add_argument(
+        "--no-gpu", action="store_false", dest="use_gpu", default=None
+    )
 
     coordinator = subparsers.add_parser("coordinator")
     coordinator_subparsers = coordinator.add_subparsers(
@@ -148,6 +152,7 @@ def main() -> None:
             overrides={
                 "worker.lease_seconds": getattr(args, "lease_seconds", None),
                 "worker.idle_seconds": getattr(args, "idle_seconds", None),
+                "worker.use_gpu": getattr(args, "use_gpu", None),
                 "coordinator.listen": getattr(args, "listen", None),
                 "coordinator.reconcile_seconds": getattr(args, "reconcile_seconds", None),
                 "coordinator.metrics_listen": getattr(args, "metrics_listen", None),
@@ -155,6 +160,9 @@ def main() -> None:
         )
     except SettingsError as error:
         raise SystemExit(f"configuration error: {error}") from error
+    is_worker = args.command == "worker"
+    if (is_worker and not settings.worker.use_gpu) or args.command == "coordinator":
+        hide_accelerators()
     if args.command == "doctor":
         exit_code = run_doctor(args.data_path, args.as_json)
         raise SystemExit(exit_code)
@@ -398,12 +406,14 @@ def _worker_roles() -> tuple[str, ...]:
     return ("simulation",)
 
 
-def _discover_local_worker(data_dir: Path) -> NodeCapability:
+def _discover_local_worker(data_dir: Path, use_gpu: bool = True) -> NodeCapability:
     node_id = NodeIdentityStore(data_dir / "node-id").load_or_create()
     return LocalCapabilityDiscovery(
         node_id=node_id,
         roles=_worker_roles(),
         storage_path=data_dir,
+        detect_gpus=use_gpu,
+        probe_cuda_runtime=use_gpu,
     ).discover()
 
 
@@ -521,7 +531,7 @@ def _enroll_node(args: argparse.Namespace) -> None:
 
 def _local_worker(service: CoordinatorClient, settings: Settings) -> WorkerRuntime:
     lease_duration = timedelta(seconds=settings.worker.lease_seconds)
-    capability = _discover_local_worker(settings.data_dir)
+    capability = _discover_local_worker(settings.data_dir, settings.worker.use_gpu)
     return WorkerRuntime(
         node_id=capability.node_id,
         capability=capability,
@@ -555,14 +565,24 @@ def run_doctor(data_path: Path, as_json: bool) -> int:
             f"RAM: {_format_bytes(capability.total_memory_bytes)}"
         )
         print(f"GPU: {len(capability.gpus)} detected")
+        for gpu in capability.gpus:
+            print(
+                f"  {gpu.device_id} {gpu.model} | VRAM {_format_bytes(gpu.total_memory_bytes)}"
+                f" (free {_format_bytes(gpu.available_memory_bytes)})"
+                f" | compute {gpu.compute_capability or 'unknown'}"
+                f" | runtimes {','.join(gpu.runtimes) or 'none'}"
+            )
         for assessment in assessments:
             reasons = ", ".join(reason.value for reason in assessment.reason_codes)
+            if assessment.plan is not None and assessment.plan.adjustments:
+                reasons = f"{reasons} ({', '.join(assessment.plan.adjustments)})"
             suffix = f": {reasons}" if reasons else ""
             print(f"{assessment.workload_key:<28} {assessment.status.value.upper()}{suffix}")
         for warning in capability.warnings:
             print(f"Warning: {warning}")
     unhealthy = not any(
-        assessment.status is CompatibilityStatus.SUPPORTED for assessment in assessments
+        assessment.status in (CompatibilityStatus.SUPPORTED, CompatibilityStatus.DEGRADED)
+        for assessment in assessments
     )
     has_limitations = any(
         assessment.status is not CompatibilityStatus.SUPPORTED for assessment in assessments

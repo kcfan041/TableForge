@@ -29,6 +29,7 @@ class ReasonCode(StrEnum):
     ROLE_DISABLED = "ROLE_DISABLED"
     RUNTIME_VERSION_UNSUPPORTED = "RUNTIME_VERSION_UNSUPPORTED"
     CAPABILITY_UNKNOWN = "CAPABILITY_UNKNOWN"
+    REDUCED_BATCH_SIZE = "REDUCED_BATCH_SIZE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,12 +112,21 @@ class WorkloadProfile:
     recommended: ResourceRequest
     supported_runtimes: tuple[str, ...]
     fallback_batch_sizes: tuple[int, ...] = ()
+    base_gpu_memory_bytes: int = 0
+    gpu_memory_per_batch_item: int = 0
 
     def __post_init__(self) -> None:
         if not self.key or not self.version or not self.payload_type:
             raise ValueError("workload identity fields cannot be empty")
         if any(size < 1 for size in self.fallback_batch_sizes):
             raise ValueError("fallback batch sizes must be positive")
+        if list(self.fallback_batch_sizes) != sorted(self.fallback_batch_sizes, reverse=True):
+            raise ValueError("fallback batch sizes must be ordered from largest to smallest")
+        if self.base_gpu_memory_bytes < 0 or self.gpu_memory_per_batch_item < 0:
+            raise ValueError("GPU memory model cannot be negative")
+
+    def gpu_memory_for(self, batch_size: int) -> int:
+        return self.base_gpu_memory_bytes + batch_size * self.gpu_memory_per_batch_item
 
 
 @dataclass(frozen=True, slots=True)

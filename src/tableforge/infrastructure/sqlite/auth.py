@@ -43,7 +43,7 @@ class SQLiteAuthRepository:
 
     def create_enrollment_token(self, now: datetime, ttl: timedelta) -> str:
         _require_aware(now)
-        token = secrets.token_urlsafe(32)
+        token = f"tfe_{secrets.token_urlsafe(32)}"
         with self._connect() as connection:
             connection.execute(
                 """

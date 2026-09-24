@@ -5,11 +5,13 @@ import platform
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tableforge.capability.gpu import discover_gpus
 from tableforge.domain.capabilities import (
+    GpuCapability,
     NodeCapability,
     RuntimeCapability,
     StorageCapability,
@@ -22,10 +24,21 @@ class LocalCapabilityDiscovery:
     node_id: NodeId
     roles: tuple[str, ...]
     storage_path: Path
+    detect_gpus: bool = True
+    probe_cuda_runtime: bool = True
 
     def discover(self) -> NodeCapability:
         warnings: list[str] = []
         total_memory, available_memory = _memory_bytes(warnings)
+        gpus = (
+            discover_gpus(warnings, cuda_runtime=None if self.probe_cuda_runtime else False)
+            if self.detect_gpus
+            else ()
+        )
+        commit_free = windows_commit_available() if sys.platform == "win32" else None
+        if gpus and commit_free is not None:
+            gpus = cap_gpu_memory_by_commit(gpus, commit_free, warnings)
+        runtimes = ("cpu", "cuda") if any("cuda" in gpu.runtimes for gpu in gpus) else ("cpu",)
         disk = shutil.disk_usage(self.storage_path)
         logical_cores = os.cpu_count()
         if logical_cores is None:
@@ -40,7 +53,7 @@ class LocalCapabilityDiscovery:
             physical_cpu_cores=None,
             total_memory_bytes=total_memory,
             available_memory_bytes=available_memory,
-            gpus=(),
+            gpus=gpus,
             storage=(
                 StorageCapability(
                     volume_id="local-data",
@@ -50,12 +63,61 @@ class LocalCapabilityDiscovery:
             ),
             runtime=RuntimeCapability(
                 python_version=platform.python_version(),
-                runtimes=("cpu",),
+                runtimes=runtimes,
             ),
             enabled_roles=self.roles,
             captured_at=datetime.now(UTC),
             warnings=tuple(warnings),
         )
+
+
+COMMIT_RESERVE_BYTES = 1024**3
+
+
+def cap_gpu_memory_by_commit(
+    gpus: tuple[GpuCapability, ...], commit_available: int, warnings: list[str]
+) -> tuple[GpuCapability, ...]:
+    """On Windows (WDDM), device allocations are also charged to system commit.
+
+    A GPU can therefore report free VRAM that the process cannot actually allocate
+    when the page file is small. Usable GPU memory is capped at the commit headroom,
+    keeping a reserve for the process itself.
+    """
+    headroom = max(0, commit_available - COMMIT_RESERVE_BYTES)
+    capped = []
+    for gpu in gpus:
+        available = gpu.available_memory_bytes
+        if available is not None and headroom < available:
+            warnings.append("GPU_MEMORY_LIMITED_BY_SYSTEM_COMMIT")
+            available = headroom
+        capped.append(replace(gpu, available_memory_bytes=available))
+    return tuple(capped)
+
+
+def windows_commit_available() -> int | None:
+    try:
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", ctypes.c_ulong),
+                ("memory_load", ctypes.c_ulong),
+                ("total_physical", ctypes.c_ulonglong),
+                ("available_physical", ctypes.c_ulonglong),
+                ("total_page_file", ctypes.c_ulonglong),
+                ("available_page_file", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong),
+                ("available_virtual", ctypes.c_ulonglong),
+                ("available_extended_virtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(MemoryStatus)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return int(status.available_page_file)
+    except (AttributeError, OSError):
+        return None
 
 
 def _memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:

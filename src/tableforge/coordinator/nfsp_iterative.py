@@ -68,7 +68,7 @@ def _content_id(content: bytes) -> ArtifactId:
 class IterativeNfspOrchestrator:
     coordinator: CoordinatorService
     checkpoints: CheckpointRepository
-    profile_for: Callable[[str], WorkloadProfile]
+    profile_for: Callable[[str, str | None, str], WorkloadProfile]
 
     def reconcile(self, experiment: Experiment, now: datetime) -> bool:
         jobs = {
@@ -197,7 +197,12 @@ class IterativeNfspOrchestrator:
                 key,
                 JobType.TRAINING,
                 INIT_PAYLOAD_TYPE,
-                NfspInitPayload("1.0", agent_seed=experiment.config.seed_start).to_bytes(),
+                NfspInitPayload(
+                    "1.0",
+                    agent_seed=experiment.config.seed_start,
+                    hidden_size=experiment.config.hidden_size,
+                    batch_size=experiment.config.batch_size,
+                ).to_bytes(),
             )
             return False
         if job.status is not JobStatus.SUCCEEDED:
@@ -276,6 +281,7 @@ class IterativeNfspOrchestrator:
                     round_index,
                 ).to_bytes(),
                 inputs=(snapshot,),
+                runtime=config.learner_runtime,
             )
             return False
         if learner.status is not JobStatus.SUCCEEDED:
@@ -381,8 +387,9 @@ class IterativeNfspOrchestrator:
         payload_type: str,
         payload: bytes,
         inputs: tuple[Artifact, ...] = (),
+        runtime: str = "cpu",
     ) -> None:
-        profile = self.profile_for(payload_type)
+        profile = self.profile_for(payload_type, None, runtime)
         self.coordinator.create_job(
             JobSpec(
                 schema_version="1.0",

@@ -55,4 +55,5 @@ message JobLease {
   uint32 attempt_number = 5;
   google.protobuf.Timestamp leased_at = 6;
   google.protobuf.Timestamp expires_at = 7;
+  string execution_plan_json = 8;
 }

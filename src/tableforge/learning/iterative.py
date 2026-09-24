@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from tableforge.domain.artifacts import ArtifactKind
@@ -112,6 +112,15 @@ class NfspLearnerExecutor:
     def execute(
         self, payload_bytes: bytes, on_progress: Callable[[int], None] | None = None
     ) -> bytes:
+        return self.execute_with_plan(payload_bytes, {}, on_progress)
+
+    def execute_with_plan(
+        self,
+        payload_bytes: bytes,
+        plan: Mapping[str, object],
+        on_progress: Callable[[int], None] | None = None,
+    ) -> bytes:
+        device, batch_size = _plan_device_and_batch(plan)
         payload = NfspLearnerPayload.from_bytes(payload_bytes)
         checkpoint = verified(
             self.fetch_artifact(payload.checkpoint_artifact_id), payload.checkpoint_sha256
@@ -133,8 +142,10 @@ class NfspLearnerExecutor:
                 raise ValueError("experience shard was generated from a different checkpoint")
             transitions.extend(shard.transitions)
             samples.extend(shard.policy_samples)
-        agent = NfspAgent.from_bundle(checkpoint)
-        learn_from_experience(agent, transitions, samples, payload.train_steps, on_progress)
+        agent = NfspAgent.from_bundle(checkpoint, device=device)
+        learn_from_experience(
+            agent, transitions, samples, payload.train_steps, on_progress, batch_size
+        )
         return agent.to_bundle(
             {
                 "parent_sha256": payload.checkpoint_sha256,
@@ -142,6 +153,14 @@ class NfspLearnerExecutor:
                 "shard_sha256": [reference.sha256 for reference in snapshot.shards],
             }
         )
+
+
+def _plan_device_and_batch(plan: Mapping[str, object]) -> tuple[str, int | None]:
+    runtime = plan.get("runtime")
+    device_id = plan.get("device_id")
+    batch = plan.get("batch_size")
+    device = str(device_id) if runtime == "cuda" and isinstance(device_id, str) else "cpu"
+    return device, int(batch) if isinstance(batch, int) else None
 
 
 @dataclass(frozen=True, slots=True)
