@@ -12,12 +12,13 @@ from tableforge.capability.discovery import LocalCapabilityDiscovery
 from tableforge.capability.evaluator import assess_compatibility
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.service import CoordinatorService
-from tableforge.domain.capabilities import CompatibilityStatus
+from tableforge.domain.capabilities import CompatibilityStatus, NodeCapability
 from tableforge.domain.ids import JobId, NodeId, new_experiment_id, new_job_id
 from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
+from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
 from tableforge.worker.runtime import WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
@@ -45,6 +46,11 @@ def main() -> None:
     worker = subparsers.add_parser("worker")
     worker_subparsers = worker.add_subparsers(dest="worker_command", required=True)
     worker_subparsers.add_parser("run-once")
+
+    node = subparsers.add_parser("node")
+    node_subparsers = node.add_subparsers(dest="node_command", required=True)
+    node_subparsers.add_parser("init")
+    node_subparsers.add_parser("status")
 
     args = parser.parse_args()
     if args.command == "doctor":
@@ -92,6 +98,16 @@ def main() -> None:
         runtime = _local_worker(service, args.data_dir)
         lease = runtime.run_once()
         print("idle" if lease is None else lease.job.spec.job_id)
+    elif args.command == "node" and args.node_command == "init":
+        capability = _discover_local_worker(args.data_dir)
+        service.register_node(capability, datetime.now(UTC))
+        print(f"{capability.node_id}\trevision={capability.revision}")
+    elif args.command == "node" and args.node_command == "status":
+        for registered in service.list_nodes():
+            print(
+                f"{registered.node_id}\trevision={registered.capability.revision}"
+                f"\theartbeat={registered.last_heartbeat_at.isoformat()}"
+            )
 
 
 class SystemClock:
@@ -131,15 +147,20 @@ def _local_service(data_dir: Path) -> CoordinatorService:
         jobs=SQLiteJobRepository(data_dir / "tableforge.db"),
         artifacts=LocalArtifactStore(data_dir / "artifacts"),
         workloads=BUILTIN_WORKLOADS,
+        nodes=SQLiteNodeRepository(data_dir / "tableforge.db"),
     )
 
 
-def _local_worker(service: CoordinatorService, data_dir: Path) -> WorkerRuntime:
-    capability = LocalCapabilityDiscovery(
+def _discover_local_worker(data_dir: Path) -> NodeCapability:
+    return LocalCapabilityDiscovery(
         node_id=NodeId("local-worker"),
         roles=("simulation",),
         storage_path=data_dir,
     ).discover()
+
+
+def _local_worker(service: CoordinatorService, data_dir: Path) -> WorkerRuntime:
+    capability = _discover_local_worker(data_dir)
     return WorkerRuntime(
         node_id=NodeId("local-worker"),
         capability=capability,

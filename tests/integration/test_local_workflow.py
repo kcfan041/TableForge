@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from tableforge.domain.jobs import JobSpec, JobStatus, JobType
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
+from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
 from tableforge.worker.runtime import WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
@@ -119,6 +120,7 @@ def coordinator(tmp_path: Path) -> CoordinatorService:
         jobs=SQLiteJobRepository(tmp_path / "tableforge.db"),
         artifacts=LocalArtifactStore(tmp_path / "artifacts"),
         workloads=BUILTIN_WORKLOADS,
+        nodes=SQLiteNodeRepository(tmp_path / "tableforge.db"),
     )
 
 
@@ -228,6 +230,67 @@ def test_worker_acknowledges_cooperative_cancel(tmp_path: Path) -> None:
     assert lease is not None
     assert service.get_job(spec.job_id).status is JobStatus.CANCELLED
     assert service.job_outputs(spec.job_id) == ()
+
+
+def test_stale_registered_node_cannot_claim(tmp_path: Path) -> None:
+    service = coordinator(tmp_path)
+    spec = simulation_spec(hands=10)
+    service.create_job(spec)
+    node_capability = capability("node-a")
+    service.register_node(node_capability, datetime(2026, 1, 1, tzinfo=UTC))
+
+    lease = service.claim_job(
+        NodeId("node-a"),
+        node_capability,
+        datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=3),
+        timedelta(minutes=5),
+    )
+
+    assert lease is None
+    assert service.get_job(spec.job_id).status is JobStatus.QUEUED
+
+
+def test_attempt_records_capability_and_workload_provenance(tmp_path: Path) -> None:
+    service = coordinator(tmp_path)
+    spec = simulation_spec(hands=10)
+    service.create_job(spec)
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    worker(service, clock).run_once()
+
+    provenance = service.jobs.attempt_provenance(spec.job_id)
+    assert len(provenance) == 1
+    assert provenance[0].capability_revision == 1
+    assert provenance[0].workload_key == "hu-rule-simulation"
+    assert provenance[0].workload_version == "1"
+    assert '"runtime": "cpu"' in provenance[0].execution_plan_json
+
+
+def test_active_lease_reserves_node_resources(tmp_path: Path) -> None:
+    service = coordinator(tmp_path)
+    first = simulation_spec(hands=10)
+    second = replace(
+        simulation_spec(hands=10),
+        job_id=new_job_id(),
+        idempotency_key="simulation-second",
+    )
+    service.create_job(first)
+    service.create_job(second)
+    node_capability = replace(capability("node-a"), logical_cpu_cores=1)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    service.register_node(node_capability, now)
+
+    claimed = service.claim_job(
+        NodeId("node-a"), node_capability, now, timedelta(minutes=5)
+    )
+    blocked = service.claim_job(
+        NodeId("node-a"), node_capability, now, timedelta(minutes=5)
+    )
+
+    assert claimed is not None
+    assert blocked is None
+    reserved = service.jobs.reserved_resources(NodeId("node-a"))
+    assert reserved.cpu_cores == 1
 
 
 def test_simulation_executor_is_content_deterministic() -> None:

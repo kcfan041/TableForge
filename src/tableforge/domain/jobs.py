@@ -96,6 +96,16 @@ class Job:
 
 
 @dataclass(frozen=True, slots=True)
+class JobAttemptProvenance:
+    attempt_id: AttemptId
+    node_id: NodeId
+    capability_revision: int
+    workload_key: str
+    workload_version: str
+    execution_plan_json: str
+
+
+@dataclass(frozen=True, slots=True)
 class JobAttemptError:
     attempt_id: AttemptId
     error_code: str

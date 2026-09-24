@@ -39,6 +39,9 @@ class WorkerRuntime:
     renew_margin: timedelta = timedelta(seconds=30)
 
     def run_once(self) -> JobLease | None:
+        now = self.clock.now()
+        self.coordinator.register_node(self.capability, now)
+        self.coordinator.heartbeat_node(self.node_id, self.capability.revision, now)
         lease = self.coordinator.claim_job(
             self.node_id,
             self.capability,

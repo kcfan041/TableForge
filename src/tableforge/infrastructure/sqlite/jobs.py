@@ -28,6 +28,7 @@ from tableforge.domain.ids import (
 from tableforge.domain.jobs import (
     Job,
     JobAttemptError,
+    JobAttemptProvenance,
     JobLease,
     JobOutput,
     JobSpec,
@@ -70,6 +71,10 @@ CREATE TABLE IF NOT EXISTS job_attempts (
     retryable INTEGER,
     failed_at TEXT,
     diagnostic_artifact_id TEXT,
+    capability_revision INTEGER NOT NULL DEFAULT 0,
+    workload_key TEXT NOT NULL DEFAULT '',
+    workload_version TEXT NOT NULL DEFAULT '',
+    execution_plan_json TEXT NOT NULL DEFAULT '{}',
     active INTEGER NOT NULL,
     FOREIGN KEY (job_id) REFERENCES jobs(job_id),
     UNIQUE (job_id, attempt_number)
@@ -117,6 +122,10 @@ class SQLiteJobRepository:
                 "retryable": "INTEGER",
                 "failed_at": "TEXT",
                 "diagnostic_artifact_id": "TEXT",
+                "capability_revision": "INTEGER NOT NULL DEFAULT 0",
+                "workload_key": "TEXT NOT NULL DEFAULT ''",
+                "workload_version": "TEXT NOT NULL DEFAULT ''",
+                "execution_plan_json": "TEXT NOT NULL DEFAULT '{}'",
             }
             for name, column_type in additions.items():
                 if name not in columns:
@@ -207,6 +216,9 @@ class SQLiteJobRepository:
         now: datetime,
         duration: timedelta,
         compatible: Callable[[Job], bool],
+        capability_revision: int = 0,
+        workload_identity: Callable[[Job], tuple[str, str]] | None = None,
+        execution_plan: Callable[[Job], str] | None = None,
     ) -> JobLease | None:
         _validate_lease_time(now, duration)
         with self._transaction() as connection:
@@ -229,6 +241,11 @@ class SQLiteJobRepository:
                 "SELECT COUNT(*) FROM job_attempts WHERE job_id = ?",
                 (row["job_id"],),
             ).fetchone()[0] + 1
+            selected_job = _row_to_job(row)
+            workload_key, workload_version = (
+                workload_identity(selected_job) if workload_identity is not None else ("", "")
+            )
+            plan_json = execution_plan(selected_job) if execution_plan is not None else "{}"
             token = secrets.token_urlsafe(32)
             attempt_id = new_attempt_id()
             expires_at = now + duration
@@ -236,8 +253,9 @@ class SQLiteJobRepository:
                 """
                 INSERT INTO job_attempts (
                     attempt_id, job_id, node_id, token_hash, attempt_number,
-                    leased_at, expires_at, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                    leased_at, expires_at, capability_revision, workload_key,
+                    workload_version, execution_plan_json, active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
                     str(attempt_id),
@@ -247,6 +265,10 @@ class SQLiteJobRepository:
                     attempt_number,
                     now.isoformat(),
                     expires_at.isoformat(),
+                    capability_revision,
+                    workload_key,
+                    workload_version,
+                    plan_json,
                 ),
             )
             connection.execute(
@@ -497,6 +519,48 @@ class SQLiteJobRepository:
                 diagnostic_artifact_id=row["diagnostic_artifact_id"],
             )
             for row in rows
+        )
+
+    def attempt_provenance(self, job_id: JobId) -> tuple[JobAttemptProvenance, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM job_attempts
+                WHERE job_id = ? ORDER BY attempt_number
+                """,
+                (str(job_id),),
+            ).fetchall()
+        return tuple(
+            JobAttemptProvenance(
+                attempt_id=AttemptId(row["attempt_id"]),
+                node_id=NodeId(row["node_id"]),
+                capability_revision=row["capability_revision"],
+                workload_key=row["workload_key"],
+                workload_version=row["workload_version"],
+                execution_plan_json=row["execution_plan_json"],
+            )
+            for row in rows
+        )
+
+    def reserved_resources(self, node_id: NodeId) -> ResourceRequest:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT j.resources_json
+                FROM job_attempts a
+                JOIN jobs j ON j.job_id = a.job_id
+                WHERE a.node_id = ? AND a.active = 1
+                """,
+                (str(node_id),),
+            ).fetchall()
+        resources = [ResourceRequest(**json.loads(row["resources_json"])) for row in rows]
+        return ResourceRequest(
+            cpu_cores=sum(resource.cpu_cores for resource in resources),
+            memory_bytes=sum(resource.memory_bytes for resource in resources),
+            gpu_count=sum(resource.gpu_count for resource in resources),
+            gpu_memory_bytes=sum(resource.gpu_memory_bytes for resource in resources),
+            storage_bytes=sum(resource.storage_bytes for resource in resources),
+            exclusive_gpu=any(resource.exclusive_gpu for resource in resources),
         )
 
     def outputs(self, job_id: JobId) -> tuple[JobOutput, ...]:

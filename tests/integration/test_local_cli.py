@@ -45,6 +45,20 @@ def test_cli_submit_run_and_status(
     assert len(status["outputs"]) == 1
 
 
+def test_cli_node_init_and_status(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    base = ["--data-dir", str(tmp_path)]
+
+    initialized = invoke(monkeypatch, capsys, [*base, "node", "init"])
+    status = invoke(monkeypatch, capsys, [*base, "node", "status"])
+
+    assert initialized == "local-worker\trevision=1"
+    assert "local-worker\trevision=1\theartbeat=" in status
+
+
 def test_cli_cancels_queued_job(
     tmp_path: Path,
     monkeypatch: object,
