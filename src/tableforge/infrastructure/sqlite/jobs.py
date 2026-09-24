@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -153,18 +153,30 @@ class SQLiteJobRepository:
     def claim_next(
         self, node_id: NodeId, now: datetime, duration: timedelta
     ) -> JobLease | None:
+        return self.claim_compatible(node_id, now, duration, lambda job: True)
+
+    def claim_compatible(
+        self,
+        node_id: NodeId,
+        now: datetime,
+        duration: timedelta,
+        compatible: Callable[[Job], bool],
+    ) -> JobLease | None:
         _validate_lease_time(now, duration)
         with self._transaction() as connection:
             self._requeue_expired(connection, now)
-            row = connection.execute(
+            rows = connection.execute(
                 """
                 SELECT * FROM jobs
                 WHERE status = ? AND (not_before IS NULL OR not_before <= ?)
                 ORDER BY priority DESC, created_at, job_id
-                LIMIT 1
                 """,
                 (JobStatus.QUEUED.value, now.isoformat()),
-            ).fetchone()
+            ).fetchall()
+            row = next(
+                (candidate for candidate in rows if compatible(_row_to_job(candidate))),
+                None,
+            )
             if row is None:
                 return None
             attempt_number = connection.execute(
@@ -326,7 +338,10 @@ def _resources_json(resources: ResourceRequest) -> str:
             "memory_bytes": resources.memory_bytes,
             "gpu_count": resources.gpu_count,
             "gpu_memory_bytes": resources.gpu_memory_bytes,
+            "storage_bytes": resources.storage_bytes,
             "required_role": resources.required_role,
+            "required_runtime": resources.required_runtime,
+            "exclusive_gpu": resources.exclusive_gpu,
         },
         sort_keys=True,
         separators=(",", ":"),

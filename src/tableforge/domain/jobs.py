@@ -31,13 +31,23 @@ class ResourceRequest:
     memory_bytes: int = 0
     gpu_count: int = 0
     gpu_memory_bytes: int = 0
+    storage_bytes: int = 0
     required_role: str = ""
+    required_runtime: str = "cpu"
+    exclusive_gpu: bool = False
 
     def __post_init__(self) -> None:
-        if self.cpu_cores < 0:
-            raise ValueError("cpu_cores cannot be negative")
-        if self.memory_bytes < 0 or self.gpu_count < 0 or self.gpu_memory_bytes < 0:
+        values = (
+            self.cpu_cores,
+            self.memory_bytes,
+            self.gpu_count,
+            self.gpu_memory_bytes,
+            self.storage_bytes,
+        )
+        if any(value < 0 for value in values):
             raise ValueError("resource values cannot be negative")
+        if not self.required_runtime:
+            raise ValueError("required_runtime cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)

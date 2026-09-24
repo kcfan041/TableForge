@@ -27,4 +27,7 @@ message ResourceRequest {
   uint32 gpu_count = 3;
   uint64 gpu_memory_bytes = 4;
   string required_role = 5;
+  uint64 storage_bytes = 6;
+  string required_runtime = 7;
+  bool exclusive_gpu = 8;
 }

@@ -51,6 +51,32 @@ def test_claim_prefers_higher_priority(tmp_path: Path) -> None:
     assert lease.attempt_number == 1
 
 
+def test_compatible_claim_skips_incompatible_high_priority_job(tmp_path: Path) -> None:
+    jobs = repository(tmp_path)
+    cpu = make_spec(priority=1)
+    gpu = replace(
+        make_spec(priority=10),
+        resources=ResourceRequest(
+            gpu_count=1,
+            required_role="nfsp_learner",
+            required_runtime="cuda",
+        ),
+    )
+    jobs.create(cpu)
+    jobs.create(gpu)
+
+    lease = jobs.claim_compatible(
+        NodeId("node-a"),
+        NOW,
+        LEASE,
+        lambda job: job.spec.resources.required_runtime == "cpu",
+    )
+
+    assert lease is not None
+    assert lease.job.spec.job_id == cpu.job_id
+    assert jobs.get(gpu.job_id).status is JobStatus.QUEUED
+
+
 def test_claim_returns_none_when_no_queued_job(tmp_path: Path) -> None:
     jobs = repository(tmp_path)
     jobs.create(make_spec())

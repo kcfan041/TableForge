@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package tableforge.v1;
+
+import "google/protobuf/timestamp.proto";
+import "tableforge/v1/common.proto";
+
+message NodeCapability {
+  string schema_version = 1;
+  string node_id = 2;
+  uint64 revision = 3;
+  string operating_system = 4;
+  string architecture = 5;
+  optional uint32 logical_cpu_cores = 6;
+  optional uint32 physical_cpu_cores = 7;
+  optional uint64 total_memory_bytes = 8;
+  optional uint64 available_memory_bytes = 9;
+  repeated GpuCapability gpus = 10;
+  repeated StorageCapability storage = 11;
+  RuntimeCapability runtime = 12;
+  repeated string enabled_roles = 13;
+  google.protobuf.Timestamp captured_at = 14;
+  repeated string warnings = 15;
+}
+
+message GpuCapability {
+  string device_id = 1;
+  string vendor = 2;
+  string model = 3;
+  optional uint64 total_memory_bytes = 4;
+  optional uint64 available_memory_bytes = 5;
+  string driver_version = 6;
+  string compute_capability = 7;
+  repeated string runtimes = 8;
+}
+
+message StorageCapability {
+  string volume_id = 1;
+  optional uint64 available_bytes = 2;
+  string storage_class = 3;
+}
+
+message RuntimeCapability {
+  string python_version = 1;
+  repeated string runtimes = 2;
+  string container_runtime = 3;
+}
+
+message WorkloadProfile {
+  string schema_version = 1;
+  string workload_key = 2;
+  string workload_version = 3;
+  string payload_type = 4;
+  ResourceRequest minimum = 5;
+  ResourceRequest recommended = 6;
+  repeated string supported_runtimes = 7;
+  repeated uint32 fallback_batch_sizes = 8;
+}
+
+enum CompatibilityStatus {
+  COMPATIBILITY_STATUS_UNSPECIFIED = 0;
+  COMPATIBILITY_STATUS_SUPPORTED = 1;
+  COMPATIBILITY_STATUS_DEGRADED = 2;
+  COMPATIBILITY_STATUS_UNSUPPORTED = 3;
+  COMPATIBILITY_STATUS_UNKNOWN = 4;
+}
+
+message CompatibilityAssessment {
+  string schema_version = 1;
+  CompatibilityStatus status = 2;
+  string node_id = 3;
+  uint64 capability_revision = 4;
+  string workload_key = 5;
+  string workload_version = 6;
+  repeated string reason_codes = 7;
+  ResolvedExecutionPlan plan = 8;
+}
+
+message ResolvedExecutionPlan {
+  string runtime = 1;
+  string device_id = 2;
+  optional uint32 batch_size = 3;
+  repeated string adjustments = 4;
+}

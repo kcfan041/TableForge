@@ -9,6 +9,9 @@ description = "Distributed multi-agent poker AI training and evaluation framewor
 requires-python = ">=3.12"
 dependencies = []
 
+[project.scripts]
+tableforge = "tableforge.cli.main:main"
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.140.3",
