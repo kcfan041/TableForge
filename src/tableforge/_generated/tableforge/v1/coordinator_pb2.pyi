@@ -69,6 +69,21 @@ class EnrollResponse(_message.Message):
 Global___EnrollResponse: _TypeAlias = EnrollResponse  # noqa: Y015
 
 @_typing.final
+class RotateSessionRequest(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___RotateSessionRequest: _TypeAlias = RotateSessionRequest  # noqa: Y015
+
+@_typing.final
 class RegisterNodeRequest(_message.Message):
     DESCRIPTOR: _descriptor.Descriptor
 

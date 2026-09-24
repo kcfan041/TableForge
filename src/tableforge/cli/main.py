@@ -30,6 +30,7 @@ from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.league import MatrixCell
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.node_identity import NodeIdentityStore
+from tableforge.observability import COUNTERS
 from tableforge.settings import Settings, SettingsError, load_settings
 from tableforge.transport.client import enroll
 from tableforge.transport.credentials import RemoteCredentials
@@ -81,6 +82,7 @@ def main() -> None:
     coordinator_serve.add_argument("--listen")
     coordinator_serve.add_argument("--insecure", action="store_true")
     coordinator_serve.add_argument("--reconcile-seconds", type=float)
+    coordinator_serve.add_argument("--metrics-listen")
     enrollment = coordinator_subparsers.add_parser("enrollment-token")
     enrollment.add_argument("--ttl-minutes", type=int, default=60)
 
@@ -107,6 +109,21 @@ def main() -> None:
     node_enroll.add_argument("--token", required=True)
     node_enroll.add_argument("--ca-file", type=Path)
     node_enroll.add_argument("--insecure", action="store_true")
+    node_revoke = node_subparsers.add_parser("revoke")
+    node_revoke.add_argument("node_id")
+    node_subparsers.add_parser("rotate-session")
+
+    events = subparsers.add_parser("events")
+    events_subparsers = events.add_subparsers(dest="events_command", required=True)
+    events_tail = events_subparsers.add_parser("tail")
+    events_tail.add_argument("--after", type=int, default=0)
+    events_tail.add_argument("--limit", type=int, default=50)
+
+    artifact = subparsers.add_parser("artifact")
+    artifact_subparsers = artifact.add_subparsers(dest="artifact_command", required=True)
+    artifact_gc = artifact_subparsers.add_parser("gc")
+    artifact_gc.add_argument("--dry-run", action="store_true")
+    artifact_gc.add_argument("--grace-hours", type=float, default=24.0)
 
     checkpoint = subparsers.add_parser("checkpoint")
     checkpoint_subparsers = checkpoint.add_subparsers(
@@ -133,6 +150,7 @@ def main() -> None:
                 "worker.idle_seconds": getattr(args, "idle_seconds", None),
                 "coordinator.listen": getattr(args, "listen", None),
                 "coordinator.reconcile_seconds": getattr(args, "reconcile_seconds", None),
+                "coordinator.metrics_listen": getattr(args, "metrics_listen", None),
             },
         )
     except SettingsError as error:
@@ -142,6 +160,13 @@ def main() -> None:
         raise SystemExit(exit_code)
     if args.command == "node" and args.node_command == "enroll":
         _enroll_node(args)
+        return
+    if args.command == "node" and args.node_command == "rotate-session":
+        path = settings.data_dir / "coordinator.json"
+        credentials = RemoteCredentials.load(path)
+        session, expires_at = credentials.client().rotate_session()
+        RemoteCredentials(credentials.target, session, credentials.ca_certificate).save(path)
+        print(f"rotated\texpires={expires_at.isoformat()}")
         return
     if args.command == "worker" and args.worker_command == "start" and args.remote:
         _run_worker(
@@ -285,6 +310,37 @@ def main() -> None:
                     sort_keys=True,
                 )
             )
+    elif args.command == "node" and args.node_command == "revoke":
+        revoked = services.repositories.auth.revoke_node(NodeId(args.node_id))
+        print(f"{args.node_id}\trevoked_sessions={revoked}")
+    elif args.command == "events":
+        from tableforge.infrastructure.sqlite.events import SQLiteEventLog
+
+        for event in SQLiteEventLog(settings.database_path).list_events(args.after, args.limit):
+            print(
+                json.dumps(
+                    {
+                        "aggregate_id": event.aggregate_id,
+                        "aggregate_type": event.aggregate_type,
+                        "aggregate_version": event.aggregate_version,
+                        "event_type": event.event_type,
+                        "occurred_at": event.occurred_at.isoformat(),
+                        "payload": event.payload,
+                        "sequence": event.sequence,
+                    },
+                    sort_keys=True,
+                )
+            )
+    elif args.command == "artifact":
+        from tableforge.infrastructure.artifact_gc import collect_garbage, referenced_hashes
+
+        gc_report = collect_garbage(
+            settings.data_dir / "artifacts",
+            referenced_hashes(service.jobs, services.repositories.checkpoints),
+            grace_seconds=args.grace_hours * 3600,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(asdict(gc_report), sort_keys=True))
     elif args.command == "node" and args.node_command == "init":
         capability = _discover_local_worker(settings.data_dir)
         service.register_node(capability, datetime.now(UTC))
@@ -425,15 +481,28 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             settings=settings.redacted(),
         )
         experiments = services.experiments
+        metrics = None
+        if settings.coordinator.metrics_listen:
+            from tableforge.observability import render_metrics, start_metrics_server
+
+            metrics = start_metrics_server(
+                settings.coordinator.metrics_listen,
+                lambda: render_metrics(settings.database_path, datetime.now(UTC).isoformat()),
+            )
+            logger.emit("metrics_started", port=metrics.port)
         stop = _stop_event()
         while not stop.wait(settings.coordinator.reconcile_seconds):
             try:
                 advanced = experiments.reconcile_all(datetime.now(UTC))
             except Exception as error:
+                COUNTERS.increment("tableforge_reconcile_total", outcome="error")
                 logger.emit("reconcile_failed", error=type(error).__name__, detail=str(error))
                 continue
+            COUNTERS.increment("tableforge_reconcile_total", outcome="ok")
             if advanced:
                 logger.emit("experiments_reconciled", count=advanced)
+        if metrics is not None:
+            metrics.stop()
         running.stop(5.0)
         logger.emit("coordinator_stopped")
 

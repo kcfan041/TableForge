@@ -36,6 +36,7 @@ from tableforge.domain.jobs import (
     JobType,
     ResourceRequest,
 )
+from tableforge.infrastructure.sqlite.events import ensure_events_table, record_event
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -112,6 +113,7 @@ class SQLiteJobRepository:
         self._database.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            ensure_events_table(connection)
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(job_attempts)").fetchall()
@@ -183,6 +185,19 @@ class SQLiteJobRepository:
                     JobStatus.QUEUED.value,
                     0,
                 ),
+            )
+            record_event(
+                connection,
+                "JOB_CREATED",
+                "job",
+                str(spec.job_id),
+                0,
+                {
+                    "experiment_id": str(spec.experiment_id),
+                    "payload_type": spec.payload_type,
+                    "status": JobStatus.QUEUED.value,
+                },
+                spec.created_at,
             )
         return Job(spec=spec, status=JobStatus.QUEUED, version=0)
 
@@ -271,10 +286,7 @@ class SQLiteJobRepository:
                     plan_json,
                 ),
             )
-            connection.execute(
-                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
-                (JobStatus.LEASED.value, row["job_id"]),
-            )
+            _set_status(connection, JobStatus.LEASED.value, row["job_id"], now)
             updated = connection.execute(
                 "SELECT * FROM jobs WHERE job_id = ?", (row["job_id"],)
             ).fetchone()
@@ -380,10 +392,7 @@ class SQLiteJobRepository:
                         artifact.created_at.isoformat(),
                     ),
                 )
-            connection.execute(
-                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
-                (JobStatus.SUCCEEDED.value, str(job_id)),
-            )
+            _set_status(connection, JobStatus.SUCCEEDED.value, str(job_id), now)
             row = connection.execute(
                 "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
             ).fetchone()
@@ -435,10 +444,7 @@ class SQLiteJobRepository:
                     attempt["attempt_id"],
                 ),
             )
-            connection.execute(
-                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
-                (next_status.value, str(job_id)),
-            )
+            _set_status(connection, next_status.value, str(job_id), now)
             updated = connection.execute(
                 "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
             ).fetchone()
@@ -467,10 +473,7 @@ class SQLiteJobRepository:
                 return _row_to_job(row)
             else:
                 next_status = JobStatus.CANCELLED
-            connection.execute(
-                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
-                (next_status.value, str(job_id)),
-            )
+            _set_status(connection, next_status.value, str(job_id), now)
             updated = connection.execute(
                 "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
             ).fetchone()
@@ -490,10 +493,7 @@ class SQLiteJobRepository:
                 "UPDATE job_attempts SET active = 0 WHERE attempt_id = ?",
                 (attempt["attempt_id"],),
             )
-            connection.execute(
-                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
-                (JobStatus.CANCELLED.value, str(job_id)),
-            )
+            _set_status(connection, JobStatus.CANCELLED.value, str(job_id), now)
             updated = connection.execute(
                 "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
             ).fetchone()
@@ -619,10 +619,7 @@ class SQLiteJobRepository:
                 "UPDATE job_attempts SET active = 0 WHERE attempt_id = ?",
                 (attempt["attempt_id"],),
             )
-            connection.execute(
-                "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
-                (status.value, attempt["job_id"]),
-            )
+            _set_status(connection, status.value, attempt["job_id"], now)
         return len(attempts)
 
     def _active_attempt(
@@ -639,6 +636,31 @@ class SQLiteJobRepository:
         ):
             raise LeaseFencedError(str(job_id))
         return cast(sqlite3.Row, attempt)
+
+
+def _set_status(
+    connection: sqlite3.Connection, status: str, job_id: str, now: datetime
+) -> None:
+    connection.execute(
+        "UPDATE jobs SET status = ?, version = version + 1 WHERE job_id = ?",
+        (status, job_id),
+    )
+    row = connection.execute(
+        "SELECT experiment_id, version, payload_type FROM jobs WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    record_event(
+        connection,
+        f"JOB_{status.upper()}",
+        "job",
+        job_id,
+        int(row["version"]),
+        {
+            "experiment_id": row["experiment_id"],
+            "payload_type": row["payload_type"],
+            "status": status,
+        },
+        now,
+    )
 
 
 def _resources_json(resources: ResourceRequest) -> str:

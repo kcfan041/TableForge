@@ -10,6 +10,7 @@ import "tableforge/v1/jobs.proto";
 
 service CoordinatorService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc RotateSession(RotateSessionRequest) returns (EnrollResponse);
   rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ClaimJob(ClaimJobRequest) returns (ClaimJobResponse);
@@ -34,6 +35,8 @@ message EnrollResponse {
   string session_token = 1;
   google.protobuf.Timestamp expires_at = 2;
 }
+
+message RotateSessionRequest {}
 
 message RegisterNodeRequest {
   NodeCapability capability = 1;

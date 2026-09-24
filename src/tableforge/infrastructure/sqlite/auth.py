@@ -116,6 +116,37 @@ class SQLiteAuthRepository:
             )
             return cursor.rowcount
 
+    def rotate_session(
+        self, session_token: str, now: datetime, session_ttl: timedelta
+    ) -> IssuedSession:
+        _require_aware(now)
+        replacement = secrets.token_urlsafe(32)
+        expires_at = now + session_ttl
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM node_sessions WHERE token_hash = ?",
+                (_hash(session_token),),
+            ).fetchone()
+            if (
+                row is None
+                or row["revoked"]
+                or datetime.fromisoformat(row["expires_at"]) <= now
+            ):
+                raise AuthenticationError("invalid or expired session")
+            connection.execute(
+                "UPDATE node_sessions SET revoked = 1 WHERE token_hash = ?",
+                (_hash(session_token),),
+            )
+            connection.execute(
+                """
+                INSERT INTO node_sessions (token_hash, node_id, created_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (_hash(replacement), row["node_id"], now.isoformat(), expires_at.isoformat()),
+            )
+        return IssuedSession(replacement, NodeId(row["node_id"]), expires_at)
+
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()

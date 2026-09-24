@@ -14,6 +14,7 @@ from tableforge.domain.experiments import (
     ExperimentStatus,
 )
 from tableforge.domain.ids import ExperimentId
+from tableforge.infrastructure.sqlite.events import ensure_events_table, record_event
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS experiments (
@@ -40,6 +41,7 @@ class SQLiteExperimentRepository:
         self._database.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            ensure_events_table(connection)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database, timeout=30.0)
@@ -72,6 +74,15 @@ class SQLiteExperimentRepository:
                         _config_json(config),
                         now.isoformat(),
                     ),
+                )
+                record_event(
+                    connection,
+                    "EXPERIMENT_CREATED",
+                    "experiment",
+                    str(experiment_id),
+                    1,
+                    {"preset": config.preset_key, "status": ExperimentStatus.CREATED.value},
+                    now,
                 )
             except sqlite3.IntegrityError as error:
                 raise IdempotencyConflictError(str(experiment_id)) from error
@@ -144,6 +155,15 @@ class SQLiteExperimentRepository:
                 WHERE experiment_id = ?
                 """,
                 (revision, now.isoformat(), str(experiment_id)),
+            )
+            record_event(
+                connection,
+                f"EXPERIMENT_{status.value.upper()}",
+                "experiment",
+                str(experiment_id),
+                revision,
+                {"status": status.value},
+                now,
             )
         return self.get(experiment_id)
 

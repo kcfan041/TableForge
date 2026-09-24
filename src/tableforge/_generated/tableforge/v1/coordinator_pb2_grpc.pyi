@@ -32,6 +32,7 @@ class CoordinatorServiceStub:
     @_typing.overload
     def __new__(cls, channel: _aio.Channel) -> CoordinatorServiceAsyncStub: ...
     Enroll: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.EnrollRequest, _coordinator_pb2.EnrollResponse]
+    RotateSession: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.RotateSessionRequest, _coordinator_pb2.EnrollResponse]
     RegisterNode: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.RegisterNodeRequest, _coordinator_pb2.RegisterNodeResponse]
     Heartbeat: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.HeartbeatRequest, _coordinator_pb2.HeartbeatResponse]
     ClaimJob: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.ClaimJobRequest, _coordinator_pb2.ClaimJobResponse]
@@ -45,6 +46,7 @@ class CoordinatorServiceStub:
 class CoordinatorServiceAsyncStub(CoordinatorServiceStub):
     def __init__(self, channel: _aio.Channel) -> None: ...
     Enroll: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.EnrollRequest, _coordinator_pb2.EnrollResponse]  # type: ignore[assignment]
+    RotateSession: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.RotateSessionRequest, _coordinator_pb2.EnrollResponse]  # type: ignore[assignment]
     RegisterNode: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.RegisterNodeRequest, _coordinator_pb2.RegisterNodeResponse]  # type: ignore[assignment]
     Heartbeat: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.HeartbeatRequest, _coordinator_pb2.HeartbeatResponse]  # type: ignore[assignment]
     ClaimJob: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.ClaimJobRequest, _coordinator_pb2.ClaimJobResponse]  # type: ignore[assignment]
@@ -59,6 +61,13 @@ class CoordinatorServiceServicer(metaclass=_abc_1.ABCMeta):
     def Enroll(
         self,
         request: _coordinator_pb2.EnrollRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.EnrollResponse, _abc.Awaitable[_coordinator_pb2.EnrollResponse]]: ...
+
+    @_abc_1.abstractmethod
+    def RotateSession(
+        self,
+        request: _coordinator_pb2.RotateSessionRequest,
         context: _ServicerContext,
     ) -> _typing.Union[_coordinator_pb2.EnrollResponse, _abc.Awaitable[_coordinator_pb2.EnrollResponse]]: ...
 

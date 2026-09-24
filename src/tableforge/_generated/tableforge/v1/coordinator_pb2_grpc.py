@@ -39,6 +39,11 @@ class CoordinatorServiceStub:
                 request_serializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollRequest.SerializeToString,
                 response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.FromString,
                 _registered_method=True)
+        self.RotateSession = channel.unary_unary(
+                '/tableforge.v1.CoordinatorService/RotateSession',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.RotateSessionRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.FromString,
+                _registered_method=True)
         self.RegisterNode = channel.unary_unary(
                 '/tableforge.v1.CoordinatorService/RegisterNode',
                 request_serializer=tableforge_dot_v1_dot_coordinator__pb2.RegisterNodeRequest.SerializeToString,
@@ -85,6 +90,12 @@ class CoordinatorServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def Enroll(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RotateSession(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -144,6 +155,11 @@ def add_CoordinatorServiceServicer_to_server(servicer, server):
             'Enroll': grpc.unary_unary_rpc_method_handler(
                     servicer.Enroll,
                     request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.SerializeToString,
+            ),
+            'RotateSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.RotateSession,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RotateSessionRequest.FromString,
                     response_serializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.SerializeToString,
             ),
             'RegisterNode': grpc.unary_unary_rpc_method_handler(
@@ -213,6 +229,33 @@ class CoordinatorService:
             target,
             '/tableforge.v1.CoordinatorService/Enroll',
             tableforge_dot_v1_dot_coordinator__pb2.EnrollRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RotateSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.CoordinatorService/RotateSession',
+            tableforge_dot_v1_dot_coordinator__pb2.RotateSessionRequest.SerializeToString,
             tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.FromString,
             options,
             channel_credentials,

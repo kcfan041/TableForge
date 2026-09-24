@@ -180,6 +180,10 @@ class AuthRepository(Protocol):
 
     def revoke_node(self, node_id: NodeId) -> int: ...
 
+    def rotate_session(
+        self, session_token: str, now: datetime, session_ttl: timedelta
+    ) -> IssuedSession: ...
+
 
 class ArtifactStore(Protocol):
     def begin_upload(self, descriptor: ArtifactDescriptor) -> UploadGrant: ...

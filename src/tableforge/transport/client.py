@@ -110,6 +110,17 @@ class GrpcCoordinatorClient:
                 backoff = min(backoff * 2, self._retry.max_backoff)
         raise AssertionError("unreachable")
 
+    def rotate_session(self) -> tuple[str, datetime]:
+        response, _ = self._call(
+            lambda: self._stub.RotateSession(
+                coordinator_pb2.RotateSessionRequest(),
+                metadata=self._metadata,
+                timeout=self._retry.timeout,
+            )
+        )
+        self._metadata = (("authorization", f"Bearer {response.session_token}"),)
+        return response.session_token, convert.timestamp_from_proto(response.expires_at)
+
     def register_node(self, capability: NodeCapability, now: datetime) -> None:
         del now
         request = coordinator_pb2.RegisterNodeRequest(

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import io
+import time
 from collections.abc import Callable, Iterator
 from concurrent import futures
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import NoReturn, Protocol
+from typing import Any, NoReturn, Protocol
 
 import grpc
 
@@ -18,6 +19,7 @@ from tableforge.application.ports import AuthRepository
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.auth import AuthenticationError
 from tableforge.domain.ids import JobId, NodeId
+from tableforge.observability import COUNTERS
 from tableforge.transport import convert
 from tableforge.transport.errors import ERROR_CODES, ERROR_METADATA_KEY
 from tableforge.transport.tls import TlsMaterial
@@ -118,6 +120,25 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
                 NodeId(request.node_id),
                 self._clock.now(),
                 self._config.session_ttl,
+            )
+        except AuthenticationError as error:
+            _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", str(error))
+        return coordinator_pb2.EnrollResponse(
+            session_token=session.token,
+            expires_at=convert.timestamp_to_proto(session.expires_at),
+        )
+
+    def RotateSession(
+        self, request: coordinator_pb2.RotateSessionRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.EnrollResponse:
+        del request
+        metadata = dict(context.invocation_metadata())
+        header = metadata.get("authorization", "")
+        if not isinstance(header, str) or not header.startswith("Bearer "):
+            _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", "missing token")
+        try:
+            session = self._auth.rotate_session(
+                header.removeprefix("Bearer "), self._clock.now(), self._config.session_ttl
             )
         except AuthenticationError as error:
             _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", str(error))
@@ -301,6 +322,7 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
         artifact = _guarded(
             context, lambda: self._service.upload_artifact(descriptor, content)
         )
+        COUNTERS.increment("tableforge_artifact_bytes_total", len(content), direction="upload")
         return coordinator_pb2.UploadArtifactResponse(
             artifact=convert.artifact_to_proto(artifact)
         )
@@ -323,12 +345,51 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
                 if not data and not first:
                     break
                 chunk = coordinator_pb2.DownloadArtifactChunk(data=data)
+                if data:
+                    COUNTERS.increment(
+                        "tableforge_artifact_bytes_total", len(data), direction="download"
+                    )
                 if first:
                     chunk.artifact.CopyFrom(artifact)
                     first = False
                 yield chunk
                 if not data:
                     break
+
+
+class MetricsInterceptor(grpc.ServerInterceptor):
+    def intercept_service(
+        self,
+        continuation: Callable[
+            [grpc.HandlerCallDetails], grpc.RpcMethodHandler[Any, Any] | None
+        ],
+        handler_call_details: grpc.HandlerCallDetails,
+    ) -> grpc.RpcMethodHandler[Any, Any] | None:
+        handler = continuation(handler_call_details)
+        if handler is None or handler.unary_unary is None:
+            return handler
+        method = handler_call_details.method.rsplit("/", 1)[-1]
+        inner = handler.unary_unary
+
+        def observed(request: object, context: grpc.ServicerContext) -> object:
+            started = time.perf_counter()
+            outcome = "ok"
+            try:
+                return inner(request, context)
+            except Exception:
+                outcome = "error"
+                raise
+            finally:
+                COUNTERS.increment("tableforge_rpc_requests_total", method=method, outcome=outcome)
+                COUNTERS.increment(
+                    "tableforge_rpc_seconds_total", time.perf_counter() - started, method=method
+                )
+
+        return grpc.unary_unary_rpc_method_handler(
+            observed,
+            request_deserializer=handler.request_deserializer,
+            response_serializer=handler.response_serializer,
+        )
 
 
 @dataclass
@@ -351,6 +412,7 @@ def start_server(
 ) -> RunningServer:
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=max_workers),
+        interceptors=[MetricsInterceptor()],
         options=(
             ("grpc.max_receive_message_length", 8 * 1024 * 1024),
             ("grpc.max_send_message_length", 8 * 1024 * 1024),

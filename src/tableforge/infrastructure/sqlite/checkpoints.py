@@ -10,6 +10,7 @@ from tableforge.domain.checkpoints import (
     CheckpointTransitionError,
 )
 from tableforge.domain.ids import AgentId, ArtifactId, CheckpointId, ExperimentId
+from tableforge.infrastructure.sqlite.events import ensure_events_table, record_event
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -37,6 +38,7 @@ class SQLiteCheckpointRepository:
         self._database.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            ensure_events_table(connection)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database, timeout=30.0)
@@ -124,6 +126,20 @@ class SQLiteCheckpointRepository:
                 WHERE checkpoint_id = ?
                 """,
                 (target.value, reason, now.isoformat(), str(checkpoint_id)),
+            )
+            record_event(
+                connection,
+                "CHECKPOINT_PROMOTED" if promote else "CHECKPOINT_REJECTED",
+                "checkpoint",
+                str(checkpoint_id),
+                int(row["round_index"]),
+                {
+                    "agent_id": row["agent_id"],
+                    "experiment_id": row["experiment_id"],
+                    "reason": reason,
+                    "sha256": row["sha256"],
+                },
+                now,
             )
             updated = connection.execute(
                 "SELECT * FROM checkpoints WHERE checkpoint_id = ?", (str(checkpoint_id),)
