@@ -32,6 +32,7 @@ class _ArtifactKindEnumTypeWrapper(_enum_type_wrapper._EnumTypeWrapper[_Artifact
     ARTIFACT_KIND_EVALUATION_RESULT: _ArtifactKind.ValueType  # 5
     ARTIFACT_KIND_DIAGNOSTIC: _ArtifactKind.ValueType  # 6
     ARTIFACT_KIND_DATASET_SNAPSHOT: _ArtifactKind.ValueType  # 7
+    ARTIFACT_KIND_LEAGUE_POPULATION: _ArtifactKind.ValueType  # 8
 
 class ArtifactKind(_ArtifactKind, metaclass=_ArtifactKindEnumTypeWrapper): ...
 
@@ -43,6 +44,7 @@ ARTIFACT_KIND_HAND_HISTORY: ArtifactKind.ValueType  # 4
 ARTIFACT_KIND_EVALUATION_RESULT: ArtifactKind.ValueType  # 5
 ARTIFACT_KIND_DIAGNOSTIC: ArtifactKind.ValueType  # 6
 ARTIFACT_KIND_DATASET_SNAPSHOT: ArtifactKind.ValueType  # 7
+ARTIFACT_KIND_LEAGUE_POPULATION: ArtifactKind.ValueType  # 8
 Global___ArtifactKind: _TypeAlias = ArtifactKind  # noqa: Y015
 
 @_typing.final

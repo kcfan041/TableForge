@@ -74,8 +74,24 @@ class NfspActorExecutor:
         )
         agent = NfspAgent.from_actor_bundle(content)
         agent.rng.seed(payload.actor_seed)
+        picker = None
+        if payload.population_artifact_id:
+            from tableforge.domain.league import LeaguePopulation
+            from tableforge.learning.league import MemberLoader, population_picker
+
+            population = LeaguePopulation.from_bytes(
+                verified(
+                    self.fetch_artifact(payload.population_artifact_id),
+                    payload.population_sha256,
+                )
+            )
+            if population.learner_sha256 != payload.checkpoint_sha256:
+                raise ValueError("league population belongs to a different checkpoint")
+            picker = population_picker(
+                population, MemberLoader(self.fetch_artifact), payload.actor_seed
+            )
         transitions, samples = collect_experience(
-            agent, payload.hands, payload.seed_start, on_progress
+            agent, payload.hands, payload.seed_start, on_progress, picker
         )
         return ExperienceShard(
             checkpoint_sha256=payload.checkpoint_sha256,

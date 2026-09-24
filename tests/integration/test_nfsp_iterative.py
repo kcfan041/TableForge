@@ -245,3 +245,63 @@ def test_failed_job_fails_experiment(tmp_path: Path) -> None:
     coordinator.fail_job(lease.job.spec.job_id, lease.token, NOW, "BROKEN", "broken", False)
 
     assert experiments.status(created.experiment_id, NOW).status is ExperimentStatus.FAILED
+
+
+def test_league_uses_history_and_builds_complete_matrix(tmp_path: Path) -> None:
+    coordinator, experiments = build(tmp_path)
+    league_config = replace(
+        config(3), league=True, historical_limit=2, matrix_deals=10
+    )
+    created = SQLiteExperimentRepository(tmp_path / "tableforge.db").create(
+        new_experiment_id(), league_config, NOW
+    )
+    experiments.start(created.experiment_id, NOW)
+    drive(coordinator, experiments, created.experiment_id)
+
+    assert experiments.status(created.experiment_id, NOW).status is ExperimentStatus.COMPLETED
+    from tableforge.domain.league import LeaguePopulation
+    from tableforge.domain.learning import NfspActorPayload
+
+    historical_counts = []
+    for job in coordinator.jobs.list_jobs(created.experiment_id):
+        if job.spec.payload_type != ACTOR_PAYLOAD_TYPE:
+            continue
+        payload = NfspActorPayload.from_bytes(job.spec.payload)
+        population = LeaguePopulation.from_bytes(
+            coordinator.read_artifact(payload.population_artifact_id)
+        )
+        assert population.learner_sha256 == payload.checkpoint_sha256
+        historical_counts.append(
+            sum(member.kind.value == "checkpoint" for member in population.members)
+        )
+    assert min(historical_counts) == 0
+    assert max(historical_counts) == 2
+
+    matrix = experiments.league_matrix(created.experiment_id)
+    assert matrix is not None
+    names = list(matrix)
+    assert names[:4] == ["round-0", "round-1", "round-2", "round-3"]
+    for row in names:
+        for column in names:
+            if row == column or (row.startswith("rule:") and column.startswith("rule:")):
+                continue
+            assert matrix[row][column].bb_per_100 == -matrix[column][row].bb_per_100
+
+
+def test_concurrent_reconcile_does_not_conflict(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    coordinator, experiments = build(tmp_path)
+    league_config = replace(config(1), league=True, historical_limit=2, matrix_deals=10)
+    created = SQLiteExperimentRepository(tmp_path / "tableforge.db").create(
+        new_experiment_id(), league_config, NOW
+    )
+    experiments.start(created.experiment_id, NOW)
+    worker(coordinator, "node-a").run_once()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: build(tmp_path)[1].reconcile_all(NOW), range(8)))
+
+    keys = [job.spec.idempotency_key for job in coordinator.jobs.list_jobs(created.experiment_id)]
+    assert len(keys) == len(set(keys))
+    assert sum(":actor:" in key for key in keys) == 2

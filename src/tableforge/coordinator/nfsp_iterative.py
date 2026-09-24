@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,11 +14,22 @@ from tableforge.domain.experiments import Experiment
 from tableforge.domain.ids import (
     AgentId,
     ArtifactId,
-    new_artifact_id,
     new_checkpoint_id,
     new_job_id,
 )
 from tableforge.domain.jobs import Job, JobSpec, JobStatus, JobType
+from tableforge.domain.league import (
+    MATCHUP_PAYLOAD_TYPE,
+    POPULATION_SCHEMA,
+    RULE_BOTS,
+    HistoricalCheckpoint,
+    LeagueMatchupPayload,
+    LeagueMember,
+    MatrixCell,
+    MemberKind,
+    build_matrix,
+    build_population,
+)
 from tableforge.domain.learning import (
     ACTOR_PAYLOAD_TYPE,
     INIT_PAYLOAD_TYPE,
@@ -48,6 +60,10 @@ def _key(experiment: Experiment, stage: str) -> str:
     return f"experiment:{experiment.experiment_id}:{stage}"
 
 
+def _content_id(content: bytes) -> ArtifactId:
+    return ArtifactId(f"content-{hashlib.sha256(content).hexdigest()}")
+
+
 @dataclass(frozen=True, slots=True)
 class IterativeNfspOrchestrator:
     coordinator: CoordinatorService
@@ -68,7 +84,103 @@ class IterativeNfspOrchestrator:
         for round_index in range(1, experiment.config.rounds + 1):
             if not self._advance_round(experiment, jobs, agent, round_index, now):
                 return False
+        if experiment.config.league:
+            return self._advance_matrix(experiment, jobs, agent)
         return True
+
+    def matrix_members(self, experiment: Experiment) -> tuple[LeagueMember, ...]:
+        agent = agent_id_for(experiment)
+        members = [
+            LeagueMember(
+                f"round-{item.round_index}",
+                MemberKind.CHECKPOINT,
+                artifact_id=str(item.artifact_id),
+                sha256=item.sha256,
+            )
+            for item in self.checkpoints.list_checkpoints(agent)
+            if item.status in (CheckpointStatus.ACTIVE, CheckpointStatus.RETIRED)
+        ]
+        members.extend(
+            LeagueMember(f"rule:{rule}", MemberKind.RULE, rule=rule) for rule in RULE_BOTS
+        )
+        return tuple(members)
+
+    def matrix(self, experiment: Experiment) -> dict[str, dict[str, MatrixCell]] | None:
+        members = self.matrix_members(experiment)
+        results = []
+        for job in self.coordinator.jobs.list_jobs(experiment.experiment_id):
+            if job.spec.payload_type != MATCHUP_PAYLOAD_TYPE:
+                continue
+            if job.status is not JobStatus.SUCCEEDED:
+                return None
+            results.append(self._json_output(job))
+        if not results:
+            return None
+        return build_matrix(tuple(member.name for member in members), results)
+
+    def _advance_matrix(
+        self, experiment: Experiment, jobs: dict[str, Job], agent: AgentId
+    ) -> bool:
+        del agent
+        members = self.matrix_members(experiment)
+        pending = False
+        for first_index, first in enumerate(members):
+            for second_index in range(first_index + 1, len(members)):
+                second = members[second_index]
+                if first.kind is MemberKind.RULE and second.kind is MemberKind.RULE:
+                    continue
+                key = _key(experiment, f"matrix:{first.name}:{second.name}")
+                job = jobs.get(key)
+                if job is None:
+                    self._create(
+                        experiment,
+                        key,
+                        JobType.EVALUATION,
+                        MATCHUP_PAYLOAD_TYPE,
+                        LeagueMatchupPayload(
+                            "1.0",
+                            first,
+                            second,
+                            experiment.config.matrix_deals,
+                            experiment.config.seed_start
+                            + 90_000_000
+                            + (first_index * 64 + second_index) * 100_000,
+                        ).to_bytes(),
+                    )
+                    pending = True
+                elif job.status is not JobStatus.SUCCEEDED:
+                    pending = True
+        return not pending
+
+    def _population(
+        self, agent: AgentId, base: Checkpoint, round_index: int, limit: int
+    ) -> Artifact:
+        promoted = [
+            item
+            for item in self.checkpoints.list_checkpoints(agent)
+            if item.status is CheckpointStatus.RETIRED and item.round_index < base.round_index
+        ]
+        historical = tuple(
+            HistoricalCheckpoint(f"round-{item.round_index}", str(item.artifact_id), item.sha256)
+            for item in promoted[-limit:]
+        )
+        content = build_population(round_index, base.sha256, historical).to_bytes()
+        return self.coordinator.upload_artifact(
+            ArtifactDescriptor(
+                _content_id(content),
+                ArtifactKind.LEAGUE_POPULATION,
+                "application/json",
+                POPULATION_SCHEMA,
+            ),
+            content,
+        )
+
+    def _json_output(self, job: Job) -> dict[str, object]:
+        content = self.coordinator.read_artifact(str(self._output(job).descriptor.artifact_id))
+        result = json.loads(content)
+        if not isinstance(result, dict):
+            raise ValueError("job result must be a JSON object")
+        return result
 
     def _ensure_initial(
         self,
@@ -113,6 +225,9 @@ class IterativeNfspOrchestrator:
             base = self.checkpoints.active(agent)
             if base is None:
                 raise AssertionError("an active checkpoint must exist before a round")
+            population: Artifact | None = None
+            if config.league:
+                population = self._population(agent, base, round_index, config.historical_limit)
             for index, key in enumerate(actor_keys):
                 seed = config.seed_start + round_index * 1_000_000 + index * 100_000
                 self._create(
@@ -127,7 +242,12 @@ class IterativeNfspOrchestrator:
                         config.hands_per_job,
                         seed,
                         seed,
+                        population_artifact_id=(
+                            str(population.descriptor.artifact_id) if population else ""
+                        ),
+                        population_sha256=population.sha256 if population else "",
                     ).to_bytes(),
+                    inputs=(population,) if population else (),
                 )
             return False
         actors = [jobs[key] for key in actor_keys if key in jobs]
@@ -207,7 +327,7 @@ class IterativeNfspOrchestrator:
         content = snapshot_bytes(checkpoint_sha, round_index, shards)
         return self.coordinator.upload_artifact(
             ArtifactDescriptor(
-                new_artifact_id(),
+                _content_id(content),
                 ArtifactKind.DATASET_SNAPSHOT,
                 "application/json",
                 SNAPSHOT_SCHEMA,

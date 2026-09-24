@@ -16,6 +16,7 @@ class ArtifactKind(StrEnum):
     EVALUATION_RESULT = "evaluation_result"
     DIAGNOSTIC = "diagnostic"
     DATASET_SNAPSHOT = "dataset_snapshot"
+    LEAGUE_POPULATION = "league_population"
 
 
 class ArtifactStatus(StrEnum):

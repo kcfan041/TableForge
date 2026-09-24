@@ -96,6 +96,9 @@ BUILTIN_WORKLOADS = (
         "hu-nfsp-learner", "NfspLearnerJobPayload", "nfsp_learner", (2, 4, 2), (4, 8, 10)
     ),
     _cpu_profile("hu-nfsp-match", "NfspMatchJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)),
+    _cpu_profile(
+        "hu-league-matchup", "LeagueMatchupJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)
+    ),
     WorkloadProfile(
         schema_version="1.0",
         key="hu-nfsp-small-gpu",

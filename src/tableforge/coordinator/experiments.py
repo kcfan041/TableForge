@@ -21,6 +21,7 @@ from tableforge.domain.experiments import (
 )
 from tableforge.domain.ids import ExperimentId, new_experiment_id, new_job_id
 from tableforge.domain.jobs import Job, JobSpec, JobStatus, JobType
+from tableforge.domain.league import MatrixCell
 from tableforge.domain.learning import (
     EVALUATION_PAYLOAD_TYPE,
     TRAINING_PAYLOAD_TYPE,
@@ -224,6 +225,12 @@ class ExperimentService:
 
     def list_experiments(self) -> tuple[Experiment, ...]:
         return self.experiments.list_experiments()
+
+    def league_matrix(self, experiment_id: ExperimentId) -> dict[str, dict[str, MatrixCell]] | None:
+        experiment = self.experiments.get(experiment_id)
+        if not experiment.config.league:
+            raise ValueError("experiment is not a league experiment")
+        return self._orchestrator().matrix(experiment)
 
     def evaluation_result(self, experiment_id: ExperimentId) -> dict[str, object] | None:
         for job in self.coordinator.jobs.list_jobs(experiment_id):

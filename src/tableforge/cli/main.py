@@ -27,6 +27,7 @@ from tableforge.domain.ids import (
     new_job_id,
 )
 from tableforge.domain.jobs import Job, JobSpec, JobType
+from tableforge.domain.league import MatrixCell
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.node_identity import NodeIdentityStore
@@ -119,6 +120,12 @@ def main() -> None:
     checkpoint_list.add_argument("--agent")
     checkpoint_show = checkpoint_subparsers.add_parser("show")
     checkpoint_show.add_argument("checkpoint_id")
+
+    league = subparsers.add_parser("league")
+    league_subparsers = league.add_subparsers(dest="league_command", required=True)
+    league_matrix = league_subparsers.add_parser("matrix")
+    league_matrix.add_argument("experiment_id")
+    league_matrix.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args()
     if args.command == "doctor":
@@ -225,6 +232,24 @@ def main() -> None:
         elif args.experiment_command == "list":
             for current in experiments.list_experiments():
                 print(f"{current.experiment_id}\t{current.status.value}")
+    elif args.command == "league":
+        matrix = _experiment_service(service, args.data_dir).league_matrix(
+            ExperimentId(args.experiment_id)
+        )
+        if matrix is None:
+            raise SystemExit("matchup matrix is not available yet")
+        if args.as_json:
+            print(
+                json.dumps(
+                    {
+                        row: {column: asdict(cell) for column, cell in cells.items()}
+                        for row, cells in matrix.items()
+                    },
+                    sort_keys=True,
+                )
+            )
+        else:
+            print(_format_matrix(matrix))
     elif args.command == "checkpoint":
         checkpoints = SQLiteCheckpointRepository(args.data_dir / "tableforge.db")
         if args.checkpoint_command == "list":
@@ -489,6 +514,25 @@ def run_doctor(data_path: Path, as_json: bool) -> int:
     if has_limitations or capability.warnings:
         return 2
     return 0
+
+
+def _format_matrix(matrix: dict[str, dict[str, MatrixCell]]) -> str:
+    names = list(matrix)
+    width = max(len(name) for name in names) + 2
+    lines = ["row vs column, bb/100 (* = 95% CI excludes 0)", " " * width + "".join(
+        f"{name:>{width}}" for name in names
+    )]
+    for row in names:
+        cells = []
+        for column in names:
+            cell = matrix[row].get(column)
+            if row == column or cell is None:
+                cells.append(f"{'-':>{width}}")
+            else:
+                significant = cell.confidence_low > 0 or cell.confidence_high < 0
+                cells.append(f"{cell.bb_per_100:>{width - 1}.1f}{'*' if significant else ' '}")
+        lines.append(f"{row:<{width}}" + "".join(cells))
+    return "\n".join(lines)
 
 
 def _format_bytes(value: int | None) -> str:

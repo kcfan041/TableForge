@@ -51,3 +51,26 @@ def test_commit_rejects_wrong_digest(tmp_path: Path) -> None:
 
     with pytest.raises(ArtifactIntegrityError):
         store.commit_upload(grant, "0" * 64, size)
+
+
+def test_concurrent_commits_of_same_artifact_succeed(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tableforge.domain.ids import ArtifactId
+
+    store = LocalArtifactStore(tmp_path)
+
+    def commit(_: int) -> str:
+        grant = store.begin_upload(
+            ArtifactDescriptor(
+                ArtifactId("shared"), ArtifactKind.DIAGNOSTIC, "application/json", "1"
+            )
+        )
+        sha256, size = store.write_upload(grant, io.BytesIO(b"same content"))
+        return store.commit_upload(grant, sha256, size).sha256
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        digests = set(pool.map(commit, range(32)))
+
+    assert len(digests) == 1
+    assert store.get_download("shared").path.read_bytes() == b"same content"

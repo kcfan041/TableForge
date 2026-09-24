@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from tableforge.domain.artifacts import ArtifactKind
+from tableforge.domain.league import MATCHUP_PAYLOAD_TYPE
 from tableforge.domain.learning import (
     ACTOR_PAYLOAD_TYPE,
     EVALUATION_PAYLOAD_TYPE,
@@ -19,6 +20,7 @@ from tableforge.learning.iterative import (
     NfspLearnerExecutor,
     NfspMatchExecutor,
 )
+from tableforge.learning.league import LeagueMatchupExecutor
 from tableforge.worker.runtime import OutputSpec, RegisteredExecutor
 
 
@@ -45,6 +47,7 @@ def learning_executors(fetch: Callable[[str], bytes]) -> dict[str, RegisteredExe
         ACTOR_PAYLOAD_TYPE: NfspActorExecutor(fetch),
         LEARNER_PAYLOAD_TYPE: NfspLearnerExecutor(fetch),
         MATCH_PAYLOAD_TYPE: NfspMatchExecutor(fetch),
+        MATCHUP_PAYLOAD_TYPE: LeagueMatchupExecutor(fetch),
     }
     return {
         payload_type: RegisteredExecutor(

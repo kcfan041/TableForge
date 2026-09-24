@@ -36,6 +36,9 @@ class ExperimentConfig:
     train_steps_per_round: int = 0
     max_evaluation_deals: int = 0
     target_ci_width: float = 0.0
+    league: bool = False
+    historical_limit: int = 0
+    matrix_deals: int = 0
 
     def __post_init__(self) -> None:
         if not self.schema_version or not self.preset_key or not self.preset_version:
@@ -51,6 +54,8 @@ class ExperimentConfig:
                 raise ValueError("iterative NFSP requires valid evaluation deal limits")
             if self.target_ci_width < 0:
                 raise ValueError("target_ci_width cannot be negative")
+            if self.league and (self.historical_limit < 1 or self.matrix_deals < 2):
+                raise ValueError("league requires historical_limit and matrix_deals")
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +88,9 @@ class ExperimentPreset:
     train_steps_per_round: int = 0
     max_evaluation_deals: int = 0
     target_ci_width: float = 0.0
+    league: bool = False
+    historical_limit: int = 0
+    matrix_deals: int = 0
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -99,12 +107,16 @@ class ExperimentPreset:
             train_steps_per_round=self.train_steps_per_round,
             max_evaluation_deals=self.max_evaluation_deals,
             target_ci_width=self.target_ci_width,
+            league=self.league,
+            historical_limit=self.historical_limit,
+            matrix_deals=self.matrix_deals,
         )
 
 
 BUILTIN_PRESETS = (
     ExperimentPreset("hu-rule-smoke", "1", hands=1_000, hands_per_job=250),
     ExperimentPreset("hu-rule-soak", "1", hands=1_000_000, hands_per_job=10_000),
+    ExperimentPreset("hu-rule-soak-10m", "1", hands=10_000_000, hands_per_job=10_000),
     ExperimentPreset(
         "hu-nfsp-cpu-smoke",
         "1",
@@ -125,5 +137,21 @@ BUILTIN_PRESETS = (
         train_steps_per_round=400,
         max_evaluation_deals=1_000,
         target_ci_width=150.0,
+    ),
+    ExperimentPreset(
+        "hu-nfsp-cpu-league",
+        "1",
+        hands=1_000,
+        hands_per_job=1_000,
+        kind=ExperimentKind.NFSP_ITERATIVE,
+        evaluation_deals=200,
+        rounds=4,
+        actors_per_round=2,
+        train_steps_per_round=400,
+        max_evaluation_deals=1_000,
+        target_ci_width=150.0,
+        league=True,
+        historical_limit=3,
+        matrix_deals=200,
     ),
 )

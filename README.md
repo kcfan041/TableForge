@@ -53,6 +53,17 @@ uv run tableforge checkpoint show <checkpoint-id>
 
 Worker 閒置時會自動推進實驗到下一階段，一次 `worker start` 就能跑完 3 輪。`checkpoint show` 會顯示升級或拒絕的原因。規則是只有 candidate 確定比目前 active 差（95% 信賴區間上限 < 0）時才拒絕。
 
+League 模式會讓 Actor 同時對上自己、歷史 checkpoint 和 Rule Bots，最後產生 matchup matrix：
+
+```
+uv run tableforge experiment create --preset hu-nfsp-cpu-league
+uv run tableforge experiment start <experiment-id>
+uv run tableforge worker start --max-jobs 200 --idle-seconds 0
+uv run tableforge league matrix <experiment-id>
+```
+
+Matrix 每格是「列」對「欄」的 bb/100，`*` 表示 95% 信賴區間不含 0。
+
 快速檢查用的 `hu-nfsp-cpu-smoke` 只有一次訓練加一次對 Rule Bots 的評估，結果會顯示在 `experiment status` 的 `evaluation` 欄位。
 
 這兩個 preset 都是小規模設定，信賴區間很寬，只能確認流程正常，**不能用來判斷模型強弱**。
@@ -92,6 +103,7 @@ uv run tableforge worker start --remote
 | `job submit-simulation/list/status/cancel` | 直接操作 Job |
 | `node init/status/enroll` | 節點註冊與狀態 |
 | `checkpoint list/show` | 查看 NFSP checkpoint 與升級紀錄 |
+| `league matrix <id> [--json]` | 查看 League 的 matchup matrix |
 | `coordinator init/serve/enrollment-token` | 遠端 Coordinator |
 
 ## 開發

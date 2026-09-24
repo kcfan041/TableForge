@@ -68,24 +68,40 @@ class _RecordingSeat:
         self.pending = None
 
 
+OpponentPicker = Callable[[int], PokerAgent | None]
+
+
 def _play(
     agent: NfspAgent,
     hands: int,
     seed_start: int,
     sink: Callable[[Transition], None],
     after_hand: Callable[[int], None],
+    pick_opponent: OpponentPicker | None = None,
 ) -> None:
     agent.training = True
     runner = HandRunner()
     for index in range(hands):
-        seats = (_RecordingSeat(agent, sink), _RecordingSeat(agent, sink))
+        opponent = pick_opponent(index) if pick_opponent is not None else None
         agent.start_hand()
         hand = HeadsUpHand(
             (STACK, STACK), Seat(index % 2), SMALL_BLIND, BIG_BLIND, seed=seed_start + index
         )
-        result = runner.run(hand, seats)
-        for seat in Seat:
-            seats[int(seat)].finish((result.final_stacks[int(seat)] - STACK) / BIG_BLIND)
+        if opponent is None:
+            seats: tuple[_RecordingSeat, ...] = (
+                _RecordingSeat(agent, sink),
+                _RecordingSeat(agent, sink),
+            )
+            result = runner.run(hand, (seats[0], seats[1]))
+            for seat in Seat:
+                seats[int(seat)].finish((result.final_stacks[int(seat)] - STACK) / BIG_BLIND)
+        else:
+            learner_seat = Seat((index // 2) % 2)
+            learner = _RecordingSeat(agent, sink)
+            agents: list[PokerAgent] = [opponent, opponent]
+            agents[int(learner_seat)] = learner
+            result = runner.run(hand, (agents[0], agents[1]))
+            learner.finish((result.final_stacks[int(learner_seat)] - STACK) / BIG_BLIND)
         after_hand(index + 1)
 
 
@@ -130,6 +146,7 @@ def collect_experience(
     hands: int,
     seed_start: int,
     on_progress: Callable[[int], None] | None = None,
+    pick_opponent: OpponentPicker | None = None,
 ) -> tuple[list[Transition], list[PolicySample]]:
     transitions: list[Transition] = []
     samples: list[PolicySample] = []
@@ -140,7 +157,7 @@ def collect_experience(
 
     agent.policy_sink = samples.append
     try:
-        _play(agent, hands, seed_start, transitions.append, after_hand)
+        _play(agent, hands, seed_start, transitions.append, after_hand, pick_opponent)
     finally:
         agent.policy_sink = None
     return transitions, samples

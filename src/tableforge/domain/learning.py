@@ -112,6 +112,8 @@ class NfspActorPayload:
     hands: int
     seed_start: int
     actor_seed: int
+    population_artifact_id: str = ""
+    population_sha256: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
@@ -119,6 +121,10 @@ class NfspActorPayload:
         if self.hands < 1:
             raise ValueError("actor hands must be positive")
         _require_sha(self.checkpoint_sha256)
+        if self.population_artifact_id or self.population_sha256:
+            if not self.population_artifact_id:
+                raise ValueError("population reference is incomplete")
+            _require_sha(self.population_sha256)
 
     def to_bytes(self) -> bytes:
         return _dump(asdict(self))

@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：M4 補齊階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：M5 League 階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -26,10 +26,10 @@
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
 | M3b | PostgreSQL、MinIO、Docker | 未開始 | |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
-| M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 未開始 | |
+| M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：177 個測試全部通過，Ruff、mypy strict 通過。
+目前測試：190 個測試全部通過，Ruff、mypy strict 通過。
 
 ## 已完成項目與驗收方式
 
@@ -86,8 +86,21 @@
   - **真實多程序測試**：`coordinator serve` 加上兩個遠端 Worker 程序，不需人工介入完成 3 輪、13 個 Job。
   - 單機 CLI 一次 `worker start` 完成 3 輪，約 19 秒。
 
+### M5 League
+- **對手池（population）**：每一輪建立一個固定的 population artifact，包含 current（自我對打）、最近幾個歷史 checkpoint、4 個 Rule Bot。權重預設 40% / 30% / 30%；還沒有歷史 checkpoint 時，歷史的比重併入 current。
+- **Matchmaking**：Actor 每一手依權重抽對手，用 actor seed 決定，結果可重現。對上固定對手時只記錄 learner 那一方的 experience。Population 與 checkpoint 不一致時會被拒絕。
+- **Matchup matrix**：最後一輪結束後，所有已升級的 checkpoint 和 Rule Bots 兩兩對打（Rule Bot 之間不對打），輸出 bb/100 與 95% 信賴區間。CLI `league matrix <experiment-id>`，`*` 表示信賴區間不含 0。
+- Preset：`hu-nfsp-cpu-league`（4 輪、每輪 2 個 Actor、歷史上限 3）。
+- **並行安全**：Coordinator 背景 reconciler 和閒置 Worker 可能同時推進；population 與 snapshot artifact 改用內容 hash 當 ID，本機 artifact store 改成可同時提交同一個 artifact。
+- 驗收：
+  - Matchmaking 固定 seed 可重現，2,000 手抽樣比例符合權重。
+  - 歷史對手數從第 1 輪的 0 增加到上限 2；matrix 完整且正負對稱。
+  - 8 個 reconciler 同時執行不會重複建立 Job；32 個執行緒同時提交同一個 artifact 都成功。
+  - 單機 CLI 一次 `worker start` 完成 4 輪加上 matrix，共 47 個 Job，約 31 秒。
+- **1,000 萬手 soak**：`hu-rule-soak-10m` preset，16 個 Worker 程序約 4 分鐘完成 1,000 個 Job、7,042 萬個動作。所有 shard 的資金淨值為 0，seed 範圍 0–10,000,000 連續且不重疊。
+
 限制：
-- CPU 小型設定只能證明流程正確，不能證明模型變強。實測第 3 輪 candidate 對 active 為 -65.2 bb/100，信賴區間上限 45.6，依規則仍升級。要評估真正的學習效果需要更長的訓練和更多評估手數。
+- CPU 小型設定只能證明流程正確，不能證明模型變強。League 實測中，第 4 輪對 round-0 為 +553.9 bb/100（顯著），但對 Tight bot 仍顯著落後（-634.0 bb/100）；多數格子信賴區間含 0。實測第 3 輪 candidate 對 active 為 -65.2 bb/100，信賴區間上限 45.6，依規則仍升級。要評估真正的學習效果需要更長的訓練和更多評估手數。
 
 ## 延後項目
 
@@ -123,7 +136,8 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **M5 League**：歷史 checkpoint 對手池、matchmaking、matchup matrix。已具備 checkpoint registry，可直接開始。
+1. **學習效果驗證**：較長的訓練與評估設定，確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
 2. **M3b**：PostgreSQL、MinIO、Docker。
 3. **C2/C4**：NVIDIA 偵測與降級執行計畫。GPU 相關驗證需要有 GPU 的節點。
-4. **學習效果驗證**：較長的訓練與評估設定，確認模型相對 Rule Bots 有顯著進步。
+4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+5. **O0–O7 對手建模**。
