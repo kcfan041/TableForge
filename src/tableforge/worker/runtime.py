@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.artifacts import ArtifactDescriptor, ArtifactKind
 from tableforge.domain.capabilities import NodeCapability
 from tableforge.domain.ids import NodeId, new_artifact_id
 from tableforge.domain.jobs import JobLease, JobStatus
+from tableforge.worker.client import CoordinatorClient
 
 
 class Clock(Protocol):
@@ -32,7 +32,7 @@ class JobCancelledError(Exception):
 class WorkerRuntime:
     node_id: NodeId
     capability: NodeCapability
-    coordinator: CoordinatorService
+    coordinator: CoordinatorClient
     clock: Clock
     lease_duration: timedelta
     simulation_executor: JobExecutor
