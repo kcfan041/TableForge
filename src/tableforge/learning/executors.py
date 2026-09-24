@@ -55,7 +55,7 @@ class NfspTrainingExecutor:
         return agent.to_bundle()
 
 
-def _opponent(name: str, seed: int) -> Callable[[], PokerAgent]:
+def opponent_factory(name: str, seed: int) -> Callable[[], PokerAgent]:
     if name == "call":
         return CallBot
     if name == "tight":
@@ -101,7 +101,7 @@ class NfspEvaluationExecutor:
         for index, name in enumerate(payload.opponents):
             report = evaluate(
                 candidate,
-                _opponent(name, payload.seed_start + index * 1_000_003),
+                opponent_factory(name, payload.seed_start + index * 1_000_003),
                 payload.deals,
                 payload.seed_start,
                 on_progress=on_progress,

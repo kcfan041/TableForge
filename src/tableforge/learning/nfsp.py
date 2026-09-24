@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -86,6 +86,7 @@ class NfspAgent:
         self.best_response_mode = False
         self.train_steps = 0
         self.last_choice: AbstractAction | None = None
+        self.policy_sink: Callable[[PolicySample], None] | None = None
 
     def start_hand(self) -> None:
         self.best_response_mode = self.training and self.rng.random() < self.config.anticipatory
@@ -96,7 +97,11 @@ class NfspAgent:
         choice = self.choose(state, mask)
         self.last_choice = choice
         if self.training and self.best_response_mode:
-            self.sl_buffer.add(PolicySample(tuple(state), mask, int(choice)), self.rng)
+            sample = PolicySample(tuple(state), mask, int(choice))
+            if self.policy_sink is not None:
+                self.policy_sink(sample)
+            else:
+                self.sl_buffer.add(sample, self.rng)
         me = observation.players[int(observation.observer)]
         return self.translator.to_action(
             choice,
