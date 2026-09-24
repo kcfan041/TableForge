@@ -18,6 +18,7 @@ from tableforge.domain.ids import ExperimentId, JobId, NodeId, new_experiment_id
 from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
+from tableforge.infrastructure.node_identity import NodeIdentityStore
 from tableforge.infrastructure.sqlite.experiments import SQLiteExperimentRepository
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
 from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
@@ -211,8 +212,9 @@ def _local_service(data_dir: Path) -> CoordinatorService:
 
 
 def _discover_local_worker(data_dir: Path) -> NodeCapability:
+    node_id = NodeIdentityStore(data_dir / "node-id").load_or_create()
     return LocalCapabilityDiscovery(
-        node_id=NodeId("local-worker"),
+        node_id=node_id,
         roles=("simulation",),
         storage_path=data_dir,
     ).discover()
@@ -230,7 +232,7 @@ def _experiment_service(
 def _local_worker(service: CoordinatorService, data_dir: Path) -> WorkerRuntime:
     capability = _discover_local_worker(data_dir)
     return WorkerRuntime(
-        node_id=NodeId("local-worker"),
+        node_id=capability.node_id,
         capability=capability,
         coordinator=service,
         clock=SystemClock(),

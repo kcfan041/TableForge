@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -62,6 +63,8 @@ def _memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
         return _windows_memory_bytes(warnings)
     if sys.platform.startswith("linux"):
         return _linux_memory_bytes(warnings)
+    if sys.platform == "darwin":
+        return _macos_memory_bytes(warnings)
     warnings.append("MEMORY_DISCOVERY_UNSUPPORTED")
     return None, None
 
@@ -89,6 +92,25 @@ def _windows_memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
             raise OSError("GlobalMemoryStatusEx failed")
         return int(status.total_physical), int(status.available_physical)
     except (AttributeError, OSError):
+        warnings.append("MEMORY_DISCOVERY_FAILED")
+        return None, None
+
+
+def _macos_memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        total = int(result.stdout.strip())
+        if total <= 0:
+            raise ValueError("hw.memsize must be positive")
+        warnings.append("AVAILABLE_MEMORY_UNKNOWN")
+        return total, None
+    except (OSError, subprocess.SubprocessError, ValueError):
         warnings.append("MEMORY_DISCOVERY_FAILED")
         return None, None
 

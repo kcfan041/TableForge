@@ -84,8 +84,10 @@ def test_cli_node_init_and_status(
     initialized = invoke(monkeypatch, capsys, [*base, "node", "init"])
     status = invoke(monkeypatch, capsys, [*base, "node", "status"])
 
-    assert initialized == "local-worker\trevision=1"
-    assert "local-worker\trevision=1\theartbeat=" in status
+    node_id = (tmp_path / "node-id").read_text(encoding="ascii").strip()
+    assert initialized == f"{node_id}\trevision=1"
+    assert f"{node_id}\trevision=1\theartbeat=" in status
+    assert invoke(monkeypatch, capsys, [*base, "node", "init"]) == initialized
 
 
 def test_cli_cancels_queued_job(
