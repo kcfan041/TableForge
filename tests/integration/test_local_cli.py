@@ -45,6 +45,35 @@ def test_cli_submit_run_and_status(
     assert len(status["outputs"]) == 1
 
 
+def test_cli_experiment_create_start_run_and_status(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    base = ["--data-dir", str(tmp_path)]
+    experiment_id = invoke(
+        monkeypatch,
+        capsys,
+        [*base, "experiment", "create", "--preset", "hu-rule-smoke"],
+    )
+    started = invoke(
+        monkeypatch, capsys, [*base, "experiment", "start", experiment_id]
+    )
+    worker_output = invoke(
+        monkeypatch,
+        capsys,
+        [*base, "worker", "start", "--max-jobs", "10", "--idle-seconds", "0"],
+    )
+    status = json.loads(
+        invoke(monkeypatch, capsys, [*base, "experiment", "status", experiment_id])
+    )
+
+    assert started == f"{experiment_id}\trunning"
+    assert '"event": "job_finished"' in worker_output
+    assert status["status"] == "completed"
+    assert status["jobs"] == {"succeeded": 4}
+
+
 def test_cli_node_init_and_status(
     tmp_path: Path,
     monkeypatch: object,

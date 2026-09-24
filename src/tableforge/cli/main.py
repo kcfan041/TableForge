@@ -11,14 +11,17 @@ from typing import Any
 from tableforge.capability.discovery import LocalCapabilityDiscovery
 from tableforge.capability.evaluator import assess_compatibility
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
+from tableforge.coordinator.experiments import ExperimentService
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.capabilities import CompatibilityStatus, NodeCapability
-from tableforge.domain.ids import JobId, NodeId, new_experiment_id, new_job_id
+from tableforge.domain.ids import ExperimentId, JobId, NodeId, new_experiment_id, new_job_id
 from tableforge.domain.jobs import Job, JobSpec, JobType
 from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
+from tableforge.infrastructure.sqlite.experiments import SQLiteExperimentRepository
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
 from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
+from tableforge.worker.loop import JsonLineLogger, WorkerLoop
 from tableforge.worker.runtime import WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
@@ -46,6 +49,23 @@ def main() -> None:
     worker = subparsers.add_parser("worker")
     worker_subparsers = worker.add_subparsers(dest="worker_command", required=True)
     worker_subparsers.add_parser("run-once")
+    worker_start = worker_subparsers.add_parser("start")
+    worker_start.add_argument("--max-jobs", type=int)
+    worker_start.add_argument("--idle-seconds", type=float, default=1.0)
+
+    experiment = subparsers.add_parser("experiment")
+    experiment_subparsers = experiment.add_subparsers(
+        dest="experiment_command", required=True
+    )
+    experiment_create = experiment_subparsers.add_parser("create")
+    experiment_create.add_argument("--preset", required=True)
+    experiment_start = experiment_subparsers.add_parser("start")
+    experiment_start.add_argument("experiment_id")
+    experiment_status = experiment_subparsers.add_parser("status")
+    experiment_status.add_argument("experiment_id")
+    experiment_stop = experiment_subparsers.add_parser("stop")
+    experiment_stop.add_argument("experiment_id")
+    experiment_subparsers.add_parser("list")
 
     node = subparsers.add_parser("node")
     node_subparsers = node.add_subparsers(dest="node_command", required=True)
@@ -58,13 +78,13 @@ def main() -> None:
         raise SystemExit(exit_code)
     service = _local_service(args.data_dir)
     if args.command == "job" and args.job_command == "submit-simulation":
-        created = submit_simulation(
+        created_job = submit_simulation(
             service,
             hands=args.hands,
             seed_start=args.seed_start,
             idempotency_key=args.idempotency_key,
         )
-        print(created.spec.job_id)
+        print(created_job.spec.job_id)
     elif args.command == "job" and args.job_command == "list":
         for queued_job in service.list_jobs():
             print(f"{queued_job.spec.job_id}\t{queued_job.status.value}")
@@ -98,6 +118,45 @@ def main() -> None:
         runtime = _local_worker(service, args.data_dir)
         lease = runtime.run_once()
         print("idle" if lease is None else lease.job.spec.job_id)
+    elif args.command == "worker" and args.worker_command == "start":
+        WorkerLoop(
+            runtime=_local_worker(service, args.data_dir),
+            logger=JsonLineLogger(),
+            idle_seconds=args.idle_seconds,
+        ).run(max_jobs=args.max_jobs)
+    elif args.command == "experiment":
+        experiments = _experiment_service(service, args.data_dir)
+        now = datetime.now(UTC)
+        if args.experiment_command == "create":
+            created_experiment = experiments.create(args.preset, now)
+            print(created_experiment.experiment_id)
+        elif args.experiment_command == "start":
+            started = experiments.start(ExperimentId(args.experiment_id), now)
+            print(f"{started.experiment_id}\t{started.status.value}")
+        elif args.experiment_command == "status":
+            current = experiments.status(ExperimentId(args.experiment_id), now)
+            jobs = service.jobs.list_jobs(current.experiment_id)
+            print(
+                json.dumps(
+                    {
+                        "experiment_id": str(current.experiment_id),
+                        "jobs": {
+                            status: sum(job.status.value == status for job in jobs)
+                            for status in sorted({job.status.value for job in jobs})
+                        },
+                        "preset": current.config.preset_key,
+                        "revision": current.revision,
+                        "status": current.status.value,
+                    },
+                    sort_keys=True,
+                )
+            )
+        elif args.experiment_command == "stop":
+            stopped = experiments.stop(ExperimentId(args.experiment_id), now)
+            print(f"{stopped.experiment_id}\t{stopped.status.value}")
+        elif args.experiment_command == "list":
+            for current in experiments.list_experiments():
+                print(f"{current.experiment_id}\t{current.status.value}")
     elif args.command == "node" and args.node_command == "init":
         capability = _discover_local_worker(args.data_dir)
         service.register_node(capability, datetime.now(UTC))
@@ -157,6 +216,15 @@ def _discover_local_worker(data_dir: Path) -> NodeCapability:
         roles=("simulation",),
         storage_path=data_dir,
     ).discover()
+
+
+def _experiment_service(
+    coordinator: CoordinatorService, data_dir: Path
+) -> ExperimentService:
+    return ExperimentService(
+        experiments=SQLiteExperimentRepository(data_dir / "tableforge.db"),
+        coordinator=coordinator,
+    )
 
 
 def _local_worker(service: CoordinatorService, data_dir: Path) -> WorkerRuntime:

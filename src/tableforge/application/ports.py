@@ -8,6 +8,7 @@ from typing import BinaryIO, Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.capabilities import NodeCapability
+from tableforge.domain.experiments import Experiment, ExperimentConfig, ExperimentStatus
 from tableforge.domain.ids import ExperimentId, JobId, NodeId
 from tableforge.domain.jobs import (
     Job,
@@ -112,6 +113,24 @@ class JobRepository(Protocol):
     def list_jobs(self, experiment_id: ExperimentId | None = None) -> tuple[Job, ...]: ...
 
     def requeue_expired(self, now: datetime) -> int: ...
+
+
+class ExperimentRepository(Protocol):
+    def create(
+        self, experiment_id: ExperimentId, config: ExperimentConfig, now: datetime
+    ) -> Experiment: ...
+
+    def get(self, experiment_id: ExperimentId) -> Experiment: ...
+
+    def update_status(
+        self,
+        experiment_id: ExperimentId,
+        expected_revision: int,
+        status: ExperimentStatus,
+        now: datetime,
+    ) -> Experiment: ...
+
+    def list_experiments(self) -> tuple[Experiment, ...]: ...
 
 
 class NodeRepository(Protocol):
