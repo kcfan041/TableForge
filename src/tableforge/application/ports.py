@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -49,6 +50,14 @@ class JobRepository(Protocol):
 
     def claim_next(
         self, node_id: NodeId, now: datetime, duration: timedelta
+    ) -> JobLease | None: ...
+
+    def claim_compatible(
+        self,
+        node_id: NodeId,
+        now: datetime,
+        duration: timedelta,
+        compatible: Callable[[Job], bool],
     ) -> JobLease | None: ...
 
     def renew(
