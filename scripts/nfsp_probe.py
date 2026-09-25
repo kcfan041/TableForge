@@ -49,9 +49,11 @@ def main() -> None:
         else:
             losses = {}
         snapshot = agent.to_bundle()
-        benchmark = run_benchmark(
-            lambda: NfspAgent.from_bundle(snapshot, inference_only=True), args.deals
-        )
+
+        def frozen(bundle: bytes = snapshot) -> NfspAgent:
+            return NfspAgent.from_bundle(bundle, inference_only=True)
+
+        benchmark = run_benchmark(frozen, args.deals)
         print(
             json.dumps(
                 {
