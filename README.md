@@ -4,6 +4,7 @@
 
 - 開發進度：[docs/status.md](docs/status.md)
 - 架構規格：[docs/architecture/README.md](docs/architecture/README.md)
+- 長期願景：[docs/vision.md](docs/vision.md)
 
 ## 安裝
 

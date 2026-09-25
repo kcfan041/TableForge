@@ -227,8 +227,13 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **學習效果驗證**：用 5070 Ti 跑較長的訓練與較多評估手數，確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
+1. **學習效果驗證**：用 5070 Ti 跑較長的訓練與較多評估手數，確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。後續的新演算法與 6-Max 都以此為前提。
 2. **多人共用（模式 B：信任的小團體）**：依 `architecture/07-multi-party-and-trust.md` 的 S0–S5 進行。S0 即兩台電腦實機驗收（需要私有網路，例如 Tailscale）與 Mac 驗證。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-4. **CUDA Worker 容器**（需要 WSL2 後端）。
-5. **O0–O7 對手建模**。
+4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。需要第 1 項已證明 NFSP 會變強，作為比較基準。
+5. **6-Max**：撲克引擎支援最多 6 人，並以同樣嚴格的 property test 與 soak test 驗證；多演算法可真正同坐一桌。
+6. **網頁介面**：呈現節點與硬體能力、實驗、checkpoint 與 matchup matrix；只呈現 Application 層的判定結果，不阻塞 CLI。多人共用的權限管理完成後再加入管理功能。
+7. **CUDA Worker 容器**（需要 WSL2 後端）。
+8. **O0–O7 對手建模**。
+
+長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。
