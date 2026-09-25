@@ -228,7 +228,7 @@ uv run tableforge doctor
 依建議優先順序：
 
 1. **學習效果驗證**：用 5070 Ti 跑較長的訓練與較多評估手數，確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
-2. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-3. **兩台電腦實機驗收**（需要 Tailscale）與 Mac 驗證。
+2. **多人共用（模式 B：信任的小團體）**：依 `architecture/07-multi-party-and-trust.md` 的 S0–S5 進行。S0 即兩台電腦實機驗收（需要私有網路，例如 Tailscale）與 Mac 驗證。
+3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **CUDA Worker 容器**（需要 WSL2 後端）。
 5. **O0–O7 對手建模**。

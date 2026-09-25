@@ -12,6 +12,7 @@
 4. [部署與演進](04-deployment-and-evolution.md)：容器、單機/兩節點部署、監控、GC、里程碑與 federation 演進。
 5. [對手建模](05-opponent-modeling.md)：Session/Participant identity、跨手牌記憶、context snapshot、自適應策略與分散式正確性。
 6. [節點能力與使用者操作](06-capability-and-user-operations.md)：硬體偵測、workload 相容判斷、測試分級、CLI 與 UI 責任。
+7. [多人共用與信任模型](07-multi-party-and-trust.md)：四種共用模式的差距分析、信任的小團體（模式 B）的身分、權限、配額與路線。
 
 ## 第一版架構決策
 
@@ -23,6 +24,7 @@
 - 跨程序契約使用 versioned Protobuf/gRPC。
 - 第一版只做 Heads-Up、Rule Bots、NFSP；其餘演算法使用同一 Job/Artifact/Agent 邊界擴充。
 - 硬體能力與 workload 相容判斷位於 Scheduler/Application 層；CLI 與後續 UI 只呈現相同判定結果。
+- 多人共用的下一階段目標為信任的小團體（模式 B）：單一 Coordinator 不變，在控制面加入使用者、專案權限、配額與稽核；公開志願計算與去中心化不在近期範圍。
 
 ## 實作起點
 

@@ -233,6 +233,8 @@ tableforge experiment status <id>
 - REST gateway與Dashboard
 - audit retention與administrative API
 
+具體範圍、分階段路線（S0–S5）與驗收條件見 `07-multi-party-and-trust.md`；第一個目標是信任的小團體共用一個叢集。
+
 這些功能位於 control plane 外層。Poker Engine、Worker executor、Job lifecycle、ArtifactRef 不應因加入 UI 或帳號系統而改寫。
 
 ## 12. 技術選擇

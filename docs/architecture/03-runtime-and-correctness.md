@@ -144,6 +144,8 @@ Job 保持 RUNNING，Worker按退避策略重試上傳並續租。若超過最�
 - secrets 由環境或 secret mount 提供，不寫入 config/artifact/log
 - privileged hand history 與 experience 使用不同權限
 
+此前提只防外人闖入與資料損壞，不防已加入的節點作惡。多人共用時的身分、權限與信任擴充見 `07-multi-party-and-trust.md`。
+
 第三方 Agent 尚未支援。加入時必須新增 container sandbox、唯讀 root filesystem、資源限制、無 outbound network、action timeout；不能直接沿用可信 Agent runtime。
 
 ## 10. Capability Preflight 與資源錯誤
