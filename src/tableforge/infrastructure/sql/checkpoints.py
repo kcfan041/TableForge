@@ -64,12 +64,20 @@ class SqlCheckpointRepository:
     ) -> Checkpoint:
         require_aware(now)
         with self._db.transaction() as connection:
-            row = connection.execute(
-                f"SELECT * FROM checkpoints WHERE checkpoint_id = ?{self._db.lock_for_update}",
+            target_row = connection.execute(
+                "SELECT agent_id FROM checkpoints WHERE checkpoint_id = ?",
                 (str(checkpoint_id),),
             ).fetchone()
-            if row is None:
+            if target_row is None:
                 raise CheckpointTransitionError(f"unknown checkpoint {checkpoint_id}")
+            connection.execute(
+                "SELECT checkpoint_id FROM checkpoints WHERE agent_id = ? ORDER BY checkpoint_id"
+                f"{self._db.lock_for_update}",
+                (target_row["agent_id"],),
+            ).fetchall()
+            row = connection.execute(
+                "SELECT * FROM checkpoints WHERE checkpoint_id = ?", (str(checkpoint_id),)
+            ).fetchone()
             current = CheckpointStatus(row["status"])
             target = CheckpointStatus.ACTIVE if promote else CheckpointStatus.REJECTED
             if current is target:
@@ -79,11 +87,6 @@ class SqlCheckpointRepository:
                     f"cannot move checkpoint from {current.value} to {target.value}"
                 )
             if promote:
-                connection.execute(
-                    f"SELECT checkpoint_id FROM checkpoints WHERE agent_id = ? AND status = ?"
-                    f"{self._db.lock_for_update}",
-                    (row["agent_id"], CheckpointStatus.ACTIVE.value),
-                ).fetchall()
                 connection.execute(
                     """
                     UPDATE checkpoints SET status = ?, updated_at = ?

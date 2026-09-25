@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tableforge._generated.tableforge.v1 import common_pb2, coordinator_pb2
 from tableforge.application.ports import LeaseFencedError
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.service import CoordinatorService
@@ -25,7 +26,7 @@ from tableforge.infrastructure.sqlite.auth import SQLiteAuthRepository
 from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
 from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
 from tableforge.transport.client import GrpcCoordinatorClient, create_channel, enroll
-from tableforge.transport.errors import RemoteCoordinatorError
+from tableforge.transport.errors import ERROR_METADATA_KEY, RemoteCoordinatorError
 from tableforge.transport.server import RunningServer, start_server
 from tableforge.transport.tls import generate_self_signed
 from tableforge.worker.runtime import WorkerRuntime
@@ -208,3 +209,112 @@ def test_invalid_lease_duration_is_rejected(harness: Harness) -> None:
         client.claim_job(node_id, capability(node_id), harness.clock.now(), timedelta(days=2))
 
     assert error.value.code == "INVALID_LEASE_DURATION"
+
+
+@pytest.fixture
+def s3_harness(tmp_path: Path, s3_store: object) -> Iterator[Harness]:
+    database = tmp_path / "tableforge.db"
+    service = CoordinatorService(
+        jobs=SQLiteJobRepository(database),
+        artifacts=s3_store,  # type: ignore[arg-type]
+        workloads=BUILTIN_WORKLOADS,
+        nodes=SQLiteNodeRepository(database),
+    )
+    auth = SQLiteAuthRepository(database)
+    clock = MutableClock(datetime.now(UTC))
+    server = start_server(service, auth, clock, "localhost:0", None)
+    try:
+        yield Harness(service, auth, server, clock, f"localhost:{server.port}", None)
+    finally:
+        server.stop(0)
+
+
+@pytest.mark.s3
+def test_direct_transfer_bypasses_coordinator(s3_harness: Harness, tmp_path: Path) -> None:
+    from tableforge.observability import COUNTERS
+
+    client = connect(s3_harness, NodeId("node-a"))
+    content = b"y" * (3 * 1024 * 1024 + 5)
+    descriptor = ArtifactDescriptor(
+        new_artifact_id(), ArtifactKind.DIAGNOSTIC, "application/octet-stream", "1"
+    )
+    before = COUNTERS.snapshot()
+
+    uploaded = client.upload_artifact(descriptor, content)
+    downloaded, path = client.download_artifact(
+        str(uploaded.descriptor.artifact_id), tmp_path / "cache"
+    )
+    again = client.upload_artifact(
+        ArtifactDescriptor(new_artifact_id(), ArtifactKind.DIAGNOSTIC, "text/plain", "1"),
+        content,
+    )
+
+    after = COUNTERS.snapshot()
+
+    def delta(direction: str) -> float:
+        key = ("tableforge_artifact_bytes_total", (("direction", direction),))
+        return after.get(key, 0.0) - before.get(key, 0.0)
+
+    assert path.read_bytes() == content
+    assert downloaded.sha256 == uploaded.sha256 == again.sha256
+    assert delta("upload") == 0 and delta("download") == 0
+    assert delta("direct_upload") == 2 * len(content)
+    assert delta("direct_download") == len(content)
+
+
+@pytest.mark.s3
+def test_worker_completes_job_through_direct_storage(s3_harness: Harness) -> None:
+    job = spec("direct-job")
+    s3_harness.service.create_job(job)
+    node_id = NodeId("node-direct")
+    client = connect(s3_harness, node_id)
+
+    WorkerRuntime(
+        node_id=node_id,
+        capability=capability(node_id),
+        coordinator=client,
+        clock=s3_harness.clock,
+        lease_duration=timedelta(minutes=5),
+        simulation_executor=SimulationExecutor(),
+    ).run_once()
+
+    output = s3_harness.service.job_outputs(job.job_id)[0].artifact
+    assert s3_harness.service.get_job(job.job_id).status is JobStatus.SUCCEEDED
+    assert s3_harness.service.artifacts.exists(output.sha256)
+
+
+@pytest.mark.s3
+def test_commit_without_upload_is_rejected(s3_harness: Harness) -> None:
+    client = connect(s3_harness, NodeId("node-a"))
+    ref = common_pb2.ArtifactRef(
+        artifact_id="ghost",
+        sha256=hashlib.sha256(b"never uploaded").hexdigest(),
+        size_bytes=14,
+        media_type="text/plain",
+        kind=common_pb2.ARTIFACT_KIND_DIAGNOSTIC,
+        schema_version="1",
+    )
+
+    import grpc
+
+    with pytest.raises(grpc.RpcError) as error:
+        client._artifacts.CommitUpload(  # noqa: SLF001
+            coordinator_pb2.CommitUploadRequest(descriptor=ref), metadata=client._metadata
+        )
+
+    assert error.value.code() is grpc.StatusCode.FAILED_PRECONDITION  # type: ignore[attr-defined]
+    codes = dict(error.value.trailing_metadata() or ())  # type: ignore[attr-defined]
+    assert codes.get(ERROR_METADATA_KEY) == "ARTIFACT_MISSING"
+
+
+def test_local_store_falls_back_to_streaming(harness: Harness, tmp_path: Path) -> None:
+    client = connect(harness, NodeId("node-a"))
+    content = b"streamed"
+    uploaded = client.upload_artifact(
+        ArtifactDescriptor(new_artifact_id(), ArtifactKind.DIAGNOSTIC, "text/plain", "1"), content
+    )
+
+    _, path = client.download_artifact(str(uploaded.descriptor.artifact_id), tmp_path / "c")
+
+    assert path.read_bytes() == content
+    assert client._direct is False  # noqa: SLF001

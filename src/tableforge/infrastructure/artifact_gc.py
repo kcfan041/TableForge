@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
-import time
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
-from tableforge.application.ports import CheckpointRepository, JobRepository
+from tableforge.application.ports import ArtifactStore, CheckpointRepository, JobRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,9 +17,7 @@ class GcReport:
     dry_run: bool
 
 
-def referenced_hashes(
-    jobs: JobRepository, checkpoints: CheckpointRepository
-) -> set[str]:
+def referenced_hashes(jobs: JobRepository, checkpoints: CheckpointRepository) -> set[str]:
     referenced: set[str] = set()
     for job in jobs.list_jobs():
         referenced.update(artifact.sha256 for artifact in job.spec.inputs)
@@ -52,44 +48,31 @@ def _payload_references(payload: bytes, referenced: set[str]) -> None:
 
 
 def collect_garbage(
-    artifact_root: Path,
+    store: ArtifactStore,
     referenced: set[str],
-    grace_seconds: float,
+    grace: timedelta,
     dry_run: bool,
-    now: float | None = None,
+    now: datetime | None = None,
 ) -> GcReport:
-    current = time.time() if now is None else now
-    objects_root = artifact_root / "sha256"
-    metadata_root = artifact_root / "metadata"
+    current = datetime.now(UTC) if now is None else now
     candidates = 0
     deleted_files = 0
     deleted_bytes = 0
     kept_recent = 0
-    removed_hashes: set[str] = set()
-    if objects_root.exists():
-        for path in objects_root.rglob("*"):
-            if not path.is_file() or path.name in referenced:
-                continue
-            candidates += 1
-            stat = path.stat()
-            if current - stat.st_mtime < grace_seconds:
-                kept_recent += 1
-                continue
-            removed_hashes.add(path.name)
-            deleted_bytes += stat.st_size
-            deleted_files += 1
-            if not dry_run:
-                os.remove(path)
-    if not dry_run and removed_hashes and metadata_root.exists():
-        for metadata in metadata_root.glob("*.json"):
-            if metadata.name.endswith(".pending.json"):
-                continue
-            try:
-                data = json.loads(metadata.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if data.get("sha256") in removed_hashes:
-                metadata.unlink(missing_ok=True)
+    doomed: list[str] = []
+    for item in store.list_objects():
+        if item.storage_key.rsplit("/", 1)[-1] in referenced:
+            continue
+        candidates += 1
+        if current - item.modified_at < grace:
+            kept_recent += 1
+            continue
+        doomed.append(item.storage_key)
+        deleted_bytes += item.size_bytes
+        deleted_files += 1
+    if not dry_run:
+        for storage_key in doomed:
+            store.delete_object(storage_key)
     return GcReport(
         referenced=len(referenced),
         candidates=candidates,

@@ -8,6 +8,7 @@ import pytest
 
 from tableforge.composition import Repositories, repositories_for
 from tableforge.infrastructure.sql import Database, SQLiteDatabase
+from tests.s3_support import s3_store  # noqa: F401
 
 POSTGRES_URL_ENV = "TABLEFORGE_TEST_POSTGRES_URL"
 DEFAULT_POSTGRES_URL = "postgresql://tableforge:tableforge@127.0.0.1:55432/tableforge"

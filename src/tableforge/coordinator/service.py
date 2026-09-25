@@ -4,7 +4,13 @@ import json
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 
-from tableforge.application.ports import ArtifactStore, JobRepository, NodeRepository
+from tableforge.application.ports import (
+    ArtifactStore,
+    DirectArtifactStore,
+    JobRepository,
+    NodeRepository,
+    SignedTransfer,
+)
 from tableforge.capability.evaluator import assess_compatibility
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.capabilities import (
@@ -26,6 +32,10 @@ from tableforge.domain.jobs import (
 from tableforge.domain.nodes import RegisteredNode
 
 
+class DirectTransferUnavailableError(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CoordinatorService:
     jobs: JobRepository
@@ -33,6 +43,8 @@ class CoordinatorService:
     workloads: tuple[WorkloadProfile, ...]
     nodes: NodeRepository | None = None
     node_ttl: timedelta = timedelta(minutes=2)
+    direct_transfer: bool = True
+    presign_ttl: timedelta = timedelta(minutes=15)
 
     def create_job(self, spec: JobSpec) -> Job:
         self._workload_for(spec)
@@ -156,14 +168,36 @@ class CoordinatorService:
         return self.jobs.outputs(job_id)
 
     def upload_artifact(self, descriptor: ArtifactDescriptor, content: bytes) -> Artifact:
-        import io
-
-        grant = self.artifacts.begin_upload(descriptor)
-        sha256, size = self.artifacts.write_upload(grant, io.BytesIO(content))
-        return self.artifacts.commit_upload(grant, sha256, size)
+        return self.artifacts.put(descriptor, content)
 
     def read_artifact(self, artifact_id: str) -> bytes:
-        return self.artifacts.get_download(artifact_id).path.read_bytes()
+        return self.artifacts.read(artifact_id)[1]
+
+    def direct_artifacts(self) -> DirectArtifactStore | None:
+        store = self.artifacts
+        if self.direct_transfer and hasattr(store, "sign_upload"):
+            return store  # type: ignore[return-value]
+        return None
+
+    def sign_artifact_upload(self, sha256: str, size_bytes: int) -> SignedTransfer:
+        store = self._require_direct()
+        return store.sign_upload(sha256, size_bytes, self.presign_ttl)
+
+    def register_artifact(
+        self, descriptor: ArtifactDescriptor, sha256: str, size_bytes: int
+    ) -> Artifact:
+        return self._require_direct().register(descriptor, sha256, size_bytes)
+
+    def sign_artifact_download(self, artifact_id: str) -> tuple[Artifact, SignedTransfer]:
+        store = self._require_direct()
+        artifact = store.get(artifact_id)
+        return artifact, store.sign_download(artifact, self.presign_ttl)
+
+    def _require_direct(self) -> DirectArtifactStore:
+        store = self.direct_artifacts()
+        if store is None:
+            raise DirectTransferUnavailableError("artifact store does not support direct transfer")
+        return store
 
     def _workload_for(self, spec: JobSpec) -> WorkloadProfile:
         candidates = [

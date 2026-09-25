@@ -518,3 +518,150 @@ class DownloadArtifactChunk(_message.Message):
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
 Global___DownloadArtifactChunk: _TypeAlias = DownloadArtifactChunk  # noqa: Y015
+
+@_typing.final
+class HttpHeader(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    NAME_FIELD_NUMBER: _builtins.int
+    VALUE_FIELD_NUMBER: _builtins.int
+    name: _builtins.str
+    value: _builtins.str
+    def __init__(
+        self,
+        *,
+        name: _builtins.str = ...,
+        value: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["name", b"name", "value", b"value"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___HttpHeader: _TypeAlias = HttpHeader  # noqa: Y015
+
+@_typing.final
+class SignedTransfer(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    METHOD_FIELD_NUMBER: _builtins.int
+    URL_FIELD_NUMBER: _builtins.int
+    HEADERS_FIELD_NUMBER: _builtins.int
+    EXPIRES_AT_FIELD_NUMBER: _builtins.int
+    method: _builtins.str
+    url: _builtins.str
+    @_builtins.property
+    def headers(self) -> _containers.RepeatedCompositeFieldContainer[Global___HttpHeader]: ...
+    @_builtins.property
+    def expires_at(self) -> _timestamp_pb2.Timestamp: ...
+    def __init__(
+        self,
+        *,
+        method: _builtins.str = ...,
+        url: _builtins.str = ...,
+        headers: _abc.Iterable[Global___HttpHeader] | None = ...,
+        expires_at: _timestamp_pb2.Timestamp | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["expires_at", b"expires_at"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["expires_at", b"expires_at", "headers", b"headers", "method", b"method", "url", b"url"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___SignedTransfer: _TypeAlias = SignedTransfer  # noqa: Y015
+
+@_typing.final
+class RequestUploadRequest(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    SHA256_FIELD_NUMBER: _builtins.int
+    SIZE_BYTES_FIELD_NUMBER: _builtins.int
+    sha256: _builtins.str
+    size_bytes: _builtins.int
+    def __init__(
+        self,
+        *,
+        sha256: _builtins.str = ...,
+        size_bytes: _builtins.int = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["sha256", b"sha256", "size_bytes", b"size_bytes"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___RequestUploadRequest: _TypeAlias = RequestUploadRequest  # noqa: Y015
+
+@_typing.final
+class RequestUploadResponse(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    DIRECT_FIELD_NUMBER: _builtins.int
+    ALREADY_STORED_FIELD_NUMBER: _builtins.int
+    TRANSFER_FIELD_NUMBER: _builtins.int
+    direct: _builtins.bool
+    already_stored: _builtins.bool
+    @_builtins.property
+    def transfer(self) -> Global___SignedTransfer: ...
+    def __init__(
+        self,
+        *,
+        direct: _builtins.bool = ...,
+        already_stored: _builtins.bool = ...,
+        transfer: Global___SignedTransfer | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["transfer", b"transfer"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["already_stored", b"already_stored", "direct", b"direct", "transfer", b"transfer"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___RequestUploadResponse: _TypeAlias = RequestUploadResponse  # noqa: Y015
+
+@_typing.final
+class CommitUploadRequest(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    DESCRIPTOR_FIELD_NUMBER: _builtins.int
+    @_builtins.property
+    def descriptor(self) -> _common_pb2.ArtifactRef: ...
+    def __init__(
+        self,
+        *,
+        descriptor: _common_pb2.ArtifactRef | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["descriptor", b"descriptor"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["descriptor", b"descriptor"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___CommitUploadRequest: _TypeAlias = CommitUploadRequest  # noqa: Y015
+
+@_typing.final
+class RequestDownloadResponse(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    DIRECT_FIELD_NUMBER: _builtins.int
+    ARTIFACT_FIELD_NUMBER: _builtins.int
+    TRANSFER_FIELD_NUMBER: _builtins.int
+    direct: _builtins.bool
+    @_builtins.property
+    def artifact(self) -> _common_pb2.Artifact: ...
+    @_builtins.property
+    def transfer(self) -> Global___SignedTransfer: ...
+    def __init__(
+        self,
+        *,
+        direct: _builtins.bool = ...,
+        artifact: _common_pb2.Artifact | None = ...,
+        transfer: Global___SignedTransfer | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["artifact", b"artifact", "transfer", b"transfer"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["artifact", b"artifact", "direct", b"direct", "transfer", b"transfer"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___RequestDownloadResponse: _TypeAlias = RequestDownloadResponse  # noqa: Y015

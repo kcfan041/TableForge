@@ -24,6 +24,9 @@ service CoordinatorService {
 service ArtifactService {
   rpc UploadArtifact(stream UploadArtifactChunk) returns (UploadArtifactResponse);
   rpc DownloadArtifact(DownloadArtifactRequest) returns (stream DownloadArtifactChunk);
+  rpc RequestUpload(RequestUploadRequest) returns (RequestUploadResponse);
+  rpc CommitUpload(CommitUploadRequest) returns (UploadArtifactResponse);
+  rpc RequestDownload(DownloadArtifactRequest) returns (RequestDownloadResponse);
 }
 
 message EnrollRequest {
@@ -128,4 +131,37 @@ message DownloadArtifactRequest {
 message DownloadArtifactChunk {
   Artifact artifact = 1;
   bytes data = 2;
+}
+
+message HttpHeader {
+  string name = 1;
+  string value = 2;
+}
+
+message SignedTransfer {
+  string method = 1;
+  string url = 2;
+  repeated HttpHeader headers = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message RequestUploadRequest {
+  string sha256 = 1;
+  uint64 size_bytes = 2;
+}
+
+message RequestUploadResponse {
+  bool direct = 1;
+  bool already_stored = 2;
+  SignedTransfer transfer = 3;
+}
+
+message CommitUploadRequest {
+  ArtifactRef descriptor = 1;
+}
+
+message RequestDownloadResponse {
+  bool direct = 1;
+  Artifact artifact = 2;
+  SignedTransfer transfer = 3;
 }

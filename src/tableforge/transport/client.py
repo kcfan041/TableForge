@@ -12,12 +12,12 @@ from typing import TypeVar
 
 import grpc
 
-from tableforge._generated.tableforge.v1 import coordinator_pb2, coordinator_pb2_grpc
+from tableforge._generated.tableforge.v1 import common_pb2, coordinator_pb2, coordinator_pb2_grpc
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.capabilities import NodeCapability
 from tableforge.domain.ids import JobId, NodeId
 from tableforge.domain.jobs import Job, JobLease
-from tableforge.transport import convert
+from tableforge.transport import convert, direct
 from tableforge.transport.errors import (
     ERROR_METADATA_KEY,
     EXCEPTIONS_BY_CODE,
@@ -89,6 +89,7 @@ class GrpcCoordinatorClient:
     ) -> None:
         self._cache_dir = cache_dir
         self._cache_max_bytes = cache_max_bytes
+        self._direct: bool | None = None
         self._stub = coordinator_pb2_grpc.CoordinatorServiceStub(channel)
         self._artifacts = coordinator_pb2_grpc.ArtifactServiceStub(channel)
         self._metadata = (("authorization", f"Bearer {session_token}"),)
@@ -172,9 +173,7 @@ class GrpcCoordinatorClient:
         )
         return convert.job_from_proto(response.job)
 
-    def renew_job(
-        self, job_id: JobId, token: str, now: datetime, duration: timedelta
-    ) -> JobLease:
+    def renew_job(self, job_id: JobId, token: str, now: datetime, duration: timedelta) -> JobLease:
         del now
         request = coordinator_pb2.RenewLeaseRequest(
             job_id=str(job_id),
@@ -231,21 +230,23 @@ class GrpcCoordinatorClient:
         )
         return self._terminal_call(
             job_id,
-            lambda: self._stub.FailJob(
-                request, metadata=self._metadata, timeout=self._retry.timeout
-            ).job,
+            lambda: (
+                self._stub.FailJob(
+                    request, metadata=self._metadata, timeout=self._retry.timeout
+                ).job
+            ),
         )
 
     def acknowledge_cancel(self, job_id: JobId, token: str, now: datetime) -> Job:
         del now
-        request = coordinator_pb2.AcknowledgeCancelRequest(
-            job_id=str(job_id), lease_token=token
-        )
+        request = coordinator_pb2.AcknowledgeCancelRequest(job_id=str(job_id), lease_token=token)
         return self._terminal_call(
             job_id,
-            lambda: self._stub.AcknowledgeCancel(
-                request, metadata=self._metadata, timeout=self._retry.timeout
-            ).job,
+            lambda: (
+                self._stub.AcknowledgeCancel(
+                    request, metadata=self._metadata, timeout=self._retry.timeout
+                ).job
+            ),
         )
 
     def _terminal_call(self, job_id: JobId, operation: Callable[[], object]) -> Job:
@@ -273,7 +274,51 @@ class GrpcCoordinatorClient:
         ref = convert.artifact_ref_to_proto(descriptor)
         ref.sha256 = hashlib.sha256(content).hexdigest()
         ref.size_bytes = len(content)
+        if self._direct is not False:
+            artifact = self._upload_direct(ref, content)
+            if artifact is not None:
+                return artifact
+        return self._upload_streamed(ref, content)
 
+    def _upload_direct(self, ref: common_pb2.ArtifactRef, content: bytes) -> Artifact | None:
+        request = coordinator_pb2.RequestUploadRequest(sha256=ref.sha256, size_bytes=ref.size_bytes)
+        response, _ = self._call(
+            lambda: self._artifacts.RequestUpload(
+                request, metadata=self._metadata, timeout=self._retry.timeout
+            )
+        )
+        if not response.direct:
+            self._direct = False
+            return None
+        self._direct = True
+        if not response.already_stored:
+            transfer = convert.transfer_from_proto(response.transfer)
+            self._with_direct_retry(lambda: direct.put(transfer, content))
+        committed, _ = self._call(
+            lambda: self._artifacts.CommitUpload(
+                coordinator_pb2.CommitUploadRequest(descriptor=ref),
+                metadata=self._metadata,
+                timeout=self._retry.timeout,
+            )
+        )
+        artifact = convert.artifact_from_proto(committed.artifact)
+        if artifact.sha256 != ref.sha256:
+            raise RemoteCoordinatorError("ARTIFACT_HASH_MISMATCH", "server stored different bytes")
+        return artifact
+
+    def _with_direct_retry(self, operation: Callable[[], T]) -> T:
+        backoff = self._retry.initial_backoff
+        for attempt in range(1, self._retry.attempts + 1):
+            try:
+                return operation()
+            except direct.DirectTransferError as error:
+                if not error.retryable or attempt == self._retry.attempts:
+                    raise RemoteCoordinatorError("DIRECT_TRANSFER_FAILED", str(error)) from error
+                self._sleep(backoff)
+                backoff = min(backoff * 2, self._retry.max_backoff)
+        raise AssertionError("unreachable")
+
+    def _upload_streamed(self, ref: common_pb2.ArtifactRef, content: bytes) -> Artifact:
         def chunks() -> Iterator[coordinator_pb2.UploadArtifactChunk]:
             offsets = range(0, max(len(content), 1), CHUNK_SIZE)
             for index, offset in enumerate(offsets):
@@ -305,7 +350,41 @@ class GrpcCoordinatorClient:
 
     def download_artifact(self, artifact_id: str, cache_dir: Path) -> tuple[Artifact, Path]:
         request = coordinator_pb2.DownloadArtifactRequest(artifact_id=artifact_id)
+        fetched: tuple[Artifact, bytes] | None = None
+        if self._direct is not False:
+            fetched = self._download_direct(request, cache_dir)
+        if fetched is None:
+            fetched = self._download_streamed(request)
+        artifact, body = fetched
+        return artifact, self._store_in_cache(cache_dir, artifact, body)
 
+    def _download_direct(
+        self, request: coordinator_pb2.DownloadArtifactRequest, cache_dir: Path
+    ) -> tuple[Artifact, bytes] | None:
+        response, _ = self._call(
+            lambda: self._artifacts.RequestDownload(
+                request, metadata=self._metadata, timeout=self._retry.timeout
+            )
+        )
+        if not response.direct:
+            self._direct = False
+            return None
+        self._direct = True
+        artifact = convert.artifact_from_proto(response.artifact)
+        cached = cache_dir / artifact.sha256
+        if cached.is_file():
+            content = cached.read_bytes()
+            if hashlib.sha256(content).hexdigest() == artifact.sha256:
+                return artifact, content
+        transfer = convert.transfer_from_proto(response.transfer)
+        body = self._with_direct_retry(
+            lambda: direct.get(transfer, artifact.sha256, artifact.size_bytes)
+        )
+        return artifact, body
+
+    def _download_streamed(
+        self, request: coordinator_pb2.DownloadArtifactRequest
+    ) -> tuple[Artifact, bytes]:
         def fetch() -> tuple[Artifact, bytes]:
             artifact: Artifact | None = None
             body = bytearray()
@@ -322,10 +401,15 @@ class GrpcCoordinatorClient:
         (artifact, body), _ = self._call(fetch)
         if hashlib.sha256(body).hexdigest() != artifact.sha256 or len(body) != artifact.size_bytes:
             raise RemoteCoordinatorError("ARTIFACT_HASH_MISMATCH", "downloaded bytes are corrupt")
+        return artifact, body
+
+    def _store_in_cache(self, cache_dir: Path, artifact: Artifact, body: bytes) -> Path:
         cache_dir.mkdir(parents=True, exist_ok=True)
         path = cache_dir / artifact.sha256
         if not path.exists():
             temporary = cache_dir / f"{artifact.sha256}.{secrets.token_hex(6)}.part"
             temporary.write_bytes(body)
             os.replace(temporary, path)
-        return artifact, path
+        else:
+            os.utime(path)
+        return path

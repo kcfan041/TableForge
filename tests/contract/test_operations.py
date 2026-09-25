@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import os
 import time
@@ -109,11 +108,8 @@ def test_metrics_render_prometheus_text(repositories: Repositories) -> None:
 
 
 def _store_blob(store: LocalArtifactStore, content: bytes) -> str:
-    grant = store.begin_upload(
-        ArtifactDescriptor(new_artifact_id(), ArtifactKind.DIAGNOSTIC, "text/plain", "1")
-    )
-    digest, size = store.write_upload(grant, io.BytesIO(content))
-    return store.commit_upload(grant, digest, size).sha256
+    descriptor = ArtifactDescriptor(new_artifact_id(), ArtifactKind.DIAGNOSTIC, "text/plain", "1")
+    return store.put(descriptor, content).sha256
 
 
 def test_gc_deletes_only_old_unreferenced_objects(
@@ -132,8 +128,8 @@ def test_gc_deletes_only_old_unreferenced_objects(
         os.utime(path, (old, old))
     referenced = referenced_hashes(repositories.jobs, repositories.checkpoints)
 
-    dry = collect_garbage(tmp_path / "artifacts", referenced, 3600, dry_run=True)
-    real = collect_garbage(tmp_path / "artifacts", referenced, 3600, dry_run=False)
+    dry = collect_garbage(store, referenced, timedelta(hours=1), dry_run=True)
+    real = collect_garbage(store, referenced, timedelta(hours=1), dry_run=False)
 
     assert (dry.deleted_files, dry.kept_recent) == (1, 1)
     assert store.exists(orphan) is False

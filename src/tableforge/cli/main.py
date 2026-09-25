@@ -351,9 +351,9 @@ def main() -> None:
         from tableforge.infrastructure.artifact_gc import collect_garbage, referenced_hashes
 
         gc_report = collect_garbage(
-            settings.data_dir / "artifacts",
+            service.artifacts,
             referenced_hashes(service.jobs, services.repositories.checkpoints),
-            grace_seconds=args.grace_hours * 3600,
+            grace=timedelta(hours=args.grace_hours),
             dry_run=args.dry_run,
         )
         print(json.dumps(asdict(gc_report), sort_keys=True))

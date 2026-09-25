@@ -30,6 +30,9 @@ postgres = [
     "psycopg-pool>=3.2",
     "psycopg[binary]>=3.2",
 ]
+s3 = [
+    "boto3>=1.35",
+]
 
 [dependency-groups]
 dev = [
@@ -63,6 +66,7 @@ markers = [
     "multiprocess: starts real coordinator and worker processes",
     "slow: long-running learning or soak tests",
     "postgres: runs against a real PostgreSQL server",
+    "s3: runs against a real S3-compatible object store",
 ]
 
 [tool.ruff]
@@ -81,3 +85,7 @@ packages = ["tableforge"]
 [[tool.mypy.overrides]]
 module = "tableforge._generated.*"
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true

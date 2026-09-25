@@ -136,12 +136,18 @@ class ArtifactServiceStub:
     def __new__(cls, channel: _aio.Channel) -> ArtifactServiceAsyncStub: ...
     UploadArtifact: _grpc.StreamUnaryMultiCallable[_coordinator_pb2.UploadArtifactChunk, _coordinator_pb2.UploadArtifactResponse]
     DownloadArtifact: _grpc.UnaryStreamMultiCallable[_coordinator_pb2.DownloadArtifactRequest, _coordinator_pb2.DownloadArtifactChunk]
+    RequestUpload: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.RequestUploadRequest, _coordinator_pb2.RequestUploadResponse]
+    CommitUpload: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.CommitUploadRequest, _coordinator_pb2.UploadArtifactResponse]
+    RequestDownload: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.DownloadArtifactRequest, _coordinator_pb2.RequestDownloadResponse]
 
 @_typing.type_check_only
 class ArtifactServiceAsyncStub(ArtifactServiceStub):
     def __init__(self, channel: _aio.Channel) -> None: ...
     UploadArtifact: _aio.StreamUnaryMultiCallable[_coordinator_pb2.UploadArtifactChunk, _coordinator_pb2.UploadArtifactResponse]  # type: ignore[assignment]
     DownloadArtifact: _aio.UnaryStreamMultiCallable[_coordinator_pb2.DownloadArtifactRequest, _coordinator_pb2.DownloadArtifactChunk]  # type: ignore[assignment]
+    RequestUpload: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.RequestUploadRequest, _coordinator_pb2.RequestUploadResponse]  # type: ignore[assignment]
+    CommitUpload: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.CommitUploadRequest, _coordinator_pb2.UploadArtifactResponse]  # type: ignore[assignment]
+    RequestDownload: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.DownloadArtifactRequest, _coordinator_pb2.RequestDownloadResponse]  # type: ignore[assignment]
 
 class ArtifactServiceServicer(metaclass=_abc_1.ABCMeta):
     @_abc_1.abstractmethod
@@ -157,5 +163,26 @@ class ArtifactServiceServicer(metaclass=_abc_1.ABCMeta):
         request: _coordinator_pb2.DownloadArtifactRequest,
         context: _ServicerContext,
     ) -> _typing.Union[_abc.Iterator[_coordinator_pb2.DownloadArtifactChunk], _abc.AsyncIterator[_coordinator_pb2.DownloadArtifactChunk]]: ...
+
+    @_abc_1.abstractmethod
+    def RequestUpload(
+        self,
+        request: _coordinator_pb2.RequestUploadRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.RequestUploadResponse, _abc.Awaitable[_coordinator_pb2.RequestUploadResponse]]: ...
+
+    @_abc_1.abstractmethod
+    def CommitUpload(
+        self,
+        request: _coordinator_pb2.CommitUploadRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.UploadArtifactResponse, _abc.Awaitable[_coordinator_pb2.UploadArtifactResponse]]: ...
+
+    @_abc_1.abstractmethod
+    def RequestDownload(
+        self,
+        request: _coordinator_pb2.DownloadArtifactRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.RequestDownloadResponse, _abc.Awaitable[_coordinator_pb2.RequestDownloadResponse]]: ...
 
 def add_ArtifactServiceServicer_to_server(servicer: ArtifactServiceServicer, server: _typing.Union[_grpc.Server, _aio.Server]) -> None: ...

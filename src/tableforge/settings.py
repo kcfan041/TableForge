@@ -30,6 +30,8 @@ class ArtifactSettings:
     access_key: str = ""
     secret_key: str = ""
     presign_seconds: int = 900
+    public_endpoint_url: str = ""
+    direct_transfer: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +65,8 @@ class Settings:
             raise SettingsError("postgres metadata backend requires metadata.url")
         if self.artifacts.backend not in ("local", "s3"):
             raise SettingsError(f"unknown artifact backend: {self.artifacts.backend}")
+        if not 60 <= self.artifacts.presign_seconds <= 3600:
+            raise SettingsError("artifacts.presign_seconds must be between 60 and 3600")
         if self.worker.lease_seconds <= 0 or self.worker.idle_seconds < 0:
             raise SettingsError("worker timing values must be positive")
         if self.worker.cache_max_bytes < 0:

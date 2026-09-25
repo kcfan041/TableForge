@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：M3b PostgreSQL 階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：M3b S3 artifact 階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -25,14 +25,14 @@
 | M3a 第 2 階段 | Mac 實機驗證、跨平台結果一致性 | 延後 | 需在 Mac 上執行 |
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
 | 營運 | 設定分層、outbox、metrics、artifact GC、session 輪換/撤銷 | 已完成 | `5e76237`、`e845d0c` |
-| M3b-1 | PostgreSQL metadata、schema migration、SQLite 資料搬移 | 已完成 | 本階段 |
-| M3b-2 | S3/MinIO artifact、Worker 直連 storage | 未開始 | 下一步 |
-| M3b-3 | Docker 映像與 Compose 部署 | 未開始 | |
+| M3b-1 | PostgreSQL metadata、schema migration、SQLite 資料搬移 | 已完成 | `817e9f7` |
+| M3b-2 | S3 相容 artifact store、Worker 直連 storage | 已完成 | 本階段 |
+| M3b-3 | Docker 映像與 Compose 部署 | 未開始 | 下一步 |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：284 個測試全部通過（含 RTX 2070 實機 GPU 測試，以及在 Docker PostgreSQL 17 上執行的 51 個 contract tests），Ruff、mypy strict 通過。沒有 PostgreSQL 時，那 51 個測試會自動略過。
+目前測試：302 個測試全部通過（含 RTX 2070 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -147,6 +147,19 @@
   - PostgreSQL 上跑完 `hu-nfsp-cpu-iterative`（13 個 Job，約 19 秒）。
   - `coordinator serve` 使用 PostgreSQL，4 個遠端 Worker 程序跑 `hu-rule-soak`（100 個 Job），中途強制關閉其中一個：100 個 Job 全部成功、沒有任何 Job 被完成兩次、被中斷的 Job 由其他 Worker 接手，metrics 與事件數正確。
 
+### M3b-2 S3 artifact 與 Worker 直連
+- **S3 相容 artifact store**：以 sha256 為 key 存放（`sha256/aa/bb/<hash>`），每個 artifact 的描述存在 `metadata/<id>.json`。上傳時附帶 `x-amz-checksum-sha256`，storage 本身會拒絕內容不符的上傳；以 `If-None-Match: *` 避免覆寫既有物件，多個 Worker 同時上傳同一份內容也安全。
+- **Worker 直連**：新增三個 RPC。Worker 先向 Coordinator 要一個有時效的簽名網址（預設 15 分鐘，上限 1 小時），直接對 storage 上傳或下載，再通知 Coordinator 登記。Coordinator 登記前會檢查物件確實存在、大小與 checksum 相符。已經存在的內容不會重複上傳。
+- **簽名網址的保護**：上傳網址綁定單一 key、sha256 與長度；改內容、拿掉 checksum header、改簽名、改 key、去掉簽名、過期都會被拒絕（測試逐一驗證）。
+- **自動退回**：本機 artifact store 不支援直連時，Worker 自動改用原本經過 Coordinator 的 gRPC 串流，不需要設定。也可用 `artifacts.direct_transfer = false` 強制關閉直連。
+- **介面整理**：artifact store 改成 `put`／`get`／`read`／`list_objects`／`delete_object`，本機與 S3 共用同一套 contract tests。`artifact gc` 改為透過 store 列舉物件，S3 也能用。Coordinator 在 Docker 內、Worker 在外面時，可用 `artifacts.public_endpoint_url` 指定 Worker 看到的 storage 位址。
+- **Storage 選擇**：MinIO 已不再公開提供社群版 Docker 映像（Docker Hub 與 quay.io 都無法下載），改用 Apache-2.0 授權的 RustFS 驗證。SeaweedFS 也測過，但預設設定不驗證簽名，不適合。程式只使用標準 S3 API，AWS S3、MinIO、Cloudflare R2 等都能用。
+- **並行問題修正**：6 個 checkpoint 同時升級時，PostgreSQL 會違反「每個 agent 只有一個 active」的唯一限制；改為先鎖定該 agent 的所有 checkpoint。Windows 上多執行緒同時寫入同一個 artifact，偶爾會在讀取驗證時遇到檔案被鎖，改為短暫重試。
+- 驗收（PostgreSQL + RustFS，3 個遠端 Worker 跑 `hu-nfsp-cpu-league`，中途強制關閉 1 個）：
+  - 47 個 Job 全部成功，matchup matrix 產生，沒有任何 Job 被完成兩次。
+  - Coordinator metrics 中經由 Coordinator 傳送的 artifact 流量為 0；直連上傳 4.5 MB、直連下載 45 MB。Coordinator 沒有建立本機 artifact 目錄。
+  - Bucket 中 55 個物件全部被 metadata 引用，`artifact gc` 沒有可刪除的物件。
+
 ## 延後項目
 
 ### Mac 實機驗證（M3a 第 2 階段）
@@ -169,17 +182,17 @@ uv run tableforge doctor
 
 | 項目 | 規格 | 目前實作 |
 |---|---|---|
-| Artifact 傳輸 | Coordinator 不轉送大型 artifact，Worker 直接連 storage | 經由 Coordinator 的 gRPC 串流，單檔上限 1 GiB |
+| Artifact 傳輸（本機 store） | Coordinator 不轉送大型 artifact | 使用 S3 時 Worker 直連；使用本機 store 時仍經由 Coordinator，單檔上限 1 GiB |
 | Experience 格式 | Parquet shard | NPZ 形式的 zip（規格允許的替代格式，避免新增 pyarrow） |
 | RL buffer 跨輪保留 | 保留最近幾輪資料 | 每輪只使用當輪 shard；reservoir buffer 跨輪保留 |
 
-已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進；outbox 事件已加入；metadata 支援 PostgreSQL。
+已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進；outbox 事件已加入；metadata 支援 PostgreSQL；artifact 支援 S3 並由 Worker 直連。
 
 ## 下一步候選
 
 依建議優先順序：
 
-1. **M3b-2/3**：S3/MinIO 與 Worker 直連 storage、Docker 部署（進行中）。
+1. **M3b-3**：Docker 映像（Coordinator、CPU Worker、CUDA Worker）與 Compose 部署（進行中）。
 2. **學習效果驗證**：較長的訓練與評估設定（現在可用 GPU），確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **O0–O7 對手建模**。

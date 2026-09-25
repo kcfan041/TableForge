@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.auth import IssuedSession
@@ -40,16 +39,33 @@ class LeaseFencedError(Exception):
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class UploadGrant:
-    artifact_id: str
-    temporary_path: Path
+class ArtifactNotFoundError(Exception):
+    pass
+
+
+class ArtifactIntegrityError(Exception):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
-class DownloadGrant:
-    artifact: Artifact
-    path: Path
+class SignedTransfer:
+    """A short-lived HTTP request a worker may perform directly against object storage.
+
+    Uploads are bound to one storage key, one SHA-256, and one length through the signature,
+    so a worker cannot use the grant to write other content or other objects.
+    """
+
+    method: str
+    url: str
+    headers: tuple[tuple[str, str], ...]
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class StoredObject:
+    storage_key: str
+    size_bytes: int
+    modified_at: datetime
 
 
 class JobRepository(Protocol):
@@ -186,12 +202,36 @@ class AuthRepository(Protocol):
 
 
 class ArtifactStore(Protocol):
-    def begin_upload(self, descriptor: ArtifactDescriptor) -> UploadGrant: ...
+    def put(self, descriptor: ArtifactDescriptor, content: bytes) -> Artifact: ...
 
-    def write_upload(self, grant: UploadGrant, source: BinaryIO) -> tuple[str, int]: ...
+    def get(self, artifact_id: str) -> Artifact: ...
 
-    def commit_upload(self, grant: UploadGrant, sha256: str, size_bytes: int) -> Artifact: ...
-
-    def get_download(self, artifact_id: str) -> DownloadGrant: ...
+    def read(self, artifact_id: str) -> tuple[Artifact, bytes]: ...
 
     def exists(self, sha256: str) -> bool: ...
+
+    def list_objects(self) -> Iterator[StoredObject]: ...
+
+    def delete_object(self, storage_key: str) -> None: ...
+
+
+class DirectArtifactStore(ArtifactStore, Protocol):
+    """An artifact store that workers can reach without going through the coordinator."""
+
+    def sign_upload(self, sha256: str, size_bytes: int, ttl: timedelta) -> SignedTransfer: ...
+
+    def sign_download(self, artifact: Artifact, ttl: timedelta) -> SignedTransfer: ...
+
+    def register(self, descriptor: ArtifactDescriptor, sha256: str, size_bytes: int) -> Artifact:
+        """Record metadata for an object a worker uploaded with ``sign_upload``.
+
+        Raises ``ArtifactNotFoundError`` if the object is missing and
+        ``ArtifactIntegrityError`` if its stored checksum or size differs.
+        """
+        ...
+
+
+def storage_key_for(sha256: str) -> str:
+    if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
+        raise ValueError("sha256 must be 64 lowercase hex characters")
+    return f"sha256/{sha256[:2]}/{sha256[2:4]}/{sha256}"

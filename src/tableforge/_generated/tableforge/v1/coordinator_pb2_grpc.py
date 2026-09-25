@@ -503,6 +503,21 @@ class ArtifactServiceStub:
                 request_serializer=tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactRequest.SerializeToString,
                 response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactChunk.FromString,
                 _registered_method=True)
+        self.RequestUpload = channel.unary_unary(
+                '/tableforge.v1.ArtifactService/RequestUpload',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.RequestUploadRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RequestUploadResponse.FromString,
+                _registered_method=True)
+        self.CommitUpload = channel.unary_unary(
+                '/tableforge.v1.ArtifactService/CommitUpload',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.CommitUploadRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.UploadArtifactResponse.FromString,
+                _registered_method=True)
+        self.RequestDownload = channel.unary_unary(
+                '/tableforge.v1.ArtifactService/RequestDownload',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RequestDownloadResponse.FromString,
+                _registered_method=True)
 
 
 class ArtifactServiceServicer:
@@ -520,6 +535,24 @@ class ArtifactServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RequestUpload(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CommitUpload(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RequestDownload(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ArtifactServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -532,6 +565,21 @@ def add_ArtifactServiceServicer_to_server(servicer, server):
                     servicer.DownloadArtifact,
                     request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactRequest.FromString,
                     response_serializer=tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactChunk.SerializeToString,
+            ),
+            'RequestUpload': grpc.unary_unary_rpc_method_handler(
+                    servicer.RequestUpload,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RequestUploadRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.RequestUploadResponse.SerializeToString,
+            ),
+            'CommitUpload': grpc.unary_unary_rpc_method_handler(
+                    servicer.CommitUpload,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.CommitUploadRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.UploadArtifactResponse.SerializeToString,
+            ),
+            'RequestDownload': grpc.unary_unary_rpc_method_handler(
+                    servicer.RequestDownload,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.RequestDownloadResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -588,6 +636,87 @@ class ArtifactService:
             '/tableforge.v1.ArtifactService/DownloadArtifact',
             tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactRequest.SerializeToString,
             tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RequestUpload(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.ArtifactService/RequestUpload',
+            tableforge_dot_v1_dot_coordinator__pb2.RequestUploadRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.RequestUploadResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CommitUpload(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.ArtifactService/CommitUpload',
+            tableforge_dot_v1_dot_coordinator__pb2.CommitUploadRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.UploadArtifactResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RequestDownload(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.ArtifactService/RequestDownload',
+            tableforge_dot_v1_dot_coordinator__pb2.DownloadArtifactRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.RequestDownloadResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -9,8 +9,10 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from tableforge._generated.tableforge.v1 import (
     capabilities_pb2,
     common_pb2,
+    coordinator_pb2,
     jobs_pb2,
 )
+from tableforge.application.ports import SignedTransfer
 from tableforge.domain.artifacts import (
     Artifact,
     ArtifactDescriptor,
@@ -341,3 +343,21 @@ def _optional(message: Message, field: str) -> int | None:
     if not message.HasField(field):
         return None
     return int(getattr(message, field))
+
+
+def transfer_to_proto(value: SignedTransfer) -> coordinator_pb2.SignedTransfer:
+    return coordinator_pb2.SignedTransfer(
+        method=value.method,
+        url=value.url,
+        headers=[coordinator_pb2.HttpHeader(name=name, value=item) for name, item in value.headers],
+        expires_at=timestamp_to_proto(value.expires_at),
+    )
+
+
+def transfer_from_proto(message: coordinator_pb2.SignedTransfer) -> SignedTransfer:
+    return SignedTransfer(
+        method=message.method,
+        url=message.url,
+        headers=tuple((header.name, header.value) for header in message.headers),
+        expires_at=timestamp_from_proto(message.expires_at),
+    )

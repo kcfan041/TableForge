@@ -86,9 +86,7 @@ def copy_metadata(
             for table in TABLES:
                 columns = _columns(origin, source, table)
                 placeholders = ", ".join("?" for _ in columns)
-                insert = (
-                    f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
-                )
+                insert = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
                 timestamps = TIMESTAMP_COLUMNS[table] & set(columns)
                 copied = 0
                 offset = 0

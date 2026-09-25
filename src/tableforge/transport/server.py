@@ -15,8 +15,12 @@ from tableforge._generated.tableforge.v1 import (
     coordinator_pb2,
     coordinator_pb2_grpc,
 )
-from tableforge.application.ports import AuthRepository
-from tableforge.coordinator.service import CoordinatorService
+from tableforge.application.ports import (
+    ArtifactIntegrityError,
+    ArtifactNotFoundError,
+    AuthRepository,
+)
+from tableforge.coordinator.service import CoordinatorService, DirectTransferUnavailableError
 from tableforge.domain.auth import AuthenticationError
 from tableforge.domain.ids import JobId, NodeId
 from tableforge.observability import COUNTERS
@@ -39,9 +43,7 @@ class ServerConfig:
     session_ttl: timedelta = timedelta(days=7)
 
 
-def _authenticate(
-    auth: AuthRepository, context: grpc.ServicerContext, now: datetime
-) -> NodeId:
+def _authenticate(auth: AuthRepository, context: grpc.ServicerContext, now: datetime) -> NodeId:
     metadata = dict(context.invocation_metadata())
     header = metadata.get("authorization", "")
     if not isinstance(header, str) or not header.startswith("Bearer "):
@@ -178,9 +180,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
         caller = _authenticate(self._auth, context, now)
         _require_same_node(context, caller, request.node_id)
         _require_same_node(context, caller, request.capability.node_id)
-        duration = _lease_duration(
-            context, convert.duration_from_proto(request.lease_duration)
-        )
+        duration = _lease_duration(context, convert.duration_from_proto(request.lease_duration))
         capability = _guarded(context, lambda: convert.capability_from_proto(request.capability))
         lease = _guarded(
             context,
@@ -203,9 +203,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
     ) -> coordinator_pb2.RenewLeaseResponse:
         now = self._clock.now()
         _authenticate(self._auth, context, now)
-        duration = _lease_duration(
-            context, convert.duration_from_proto(request.lease_duration)
-        )
+        duration = _lease_duration(context, convert.duration_from_proto(request.lease_duration))
         lease = _guarded(
             context,
             lambda: self._service.renew_job(
@@ -272,9 +270,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
 
 
 class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
-    def __init__(
-        self, service: CoordinatorService, auth: AuthRepository, clock: Clock
-    ) -> None:
+    def __init__(self, service: CoordinatorService, auth: AuthRepository, clock: Clock) -> None:
         self._service = service
         self._auth = auth
         self._clock = clock
@@ -306,9 +302,7 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
                     "artifact exceeds maximum size",
                 )
         if descriptor_message is None:
-            _abort(
-                context, grpc.StatusCode.INVALID_ARGUMENT, "INVALID_ARGUMENT", "empty upload"
-            )
+            _abort(context, grpc.StatusCode.INVALID_ARGUMENT, "INVALID_ARGUMENT", "empty upload")
         content = buffer.getvalue()
         expected = descriptor_message.sha256
         if expected and hashlib.sha256(content).hexdigest() != expected:
@@ -319,13 +313,9 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
                 "uploaded content does not match declared hash",
             )
         descriptor = _guarded(context, lambda: convert.descriptor_from_proto(descriptor_message))
-        artifact = _guarded(
-            context, lambda: self._service.upload_artifact(descriptor, content)
-        )
+        artifact = _guarded(context, lambda: self._service.upload_artifact(descriptor, content))
         COUNTERS.increment("tableforge_artifact_bytes_total", len(content), direction="upload")
-        return coordinator_pb2.UploadArtifactResponse(
-            artifact=convert.artifact_to_proto(artifact)
-        )
+        return coordinator_pb2.UploadArtifactResponse(artifact=convert.artifact_to_proto(artifact))
 
     def DownloadArtifact(
         self,
@@ -334,35 +324,91 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
     ) -> Iterator[coordinator_pb2.DownloadArtifactChunk]:
         _authenticate(self._auth, context, self._clock.now())
         try:
-            grant = self._service.artifacts.get_download(request.artifact_id)
-        except Exception as error:
+            stored, content = self._service.artifacts.read(request.artifact_id)
+        except ArtifactNotFoundError as error:
             _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", str(error))
-        artifact = convert.artifact_to_proto(grant.artifact)
-        first = True
-        with grant.path.open("rb") as source:
-            while True:
-                data = source.read(CHUNK_SIZE)
-                if not data and not first:
-                    break
-                chunk = coordinator_pb2.DownloadArtifactChunk(data=data)
-                if data:
-                    COUNTERS.increment(
-                        "tableforge_artifact_bytes_total", len(data), direction="download"
-                    )
-                if first:
-                    chunk.artifact.CopyFrom(artifact)
-                    first = False
-                yield chunk
-                if not data:
-                    break
+        except ArtifactIntegrityError as error:
+            _abort(context, grpc.StatusCode.DATA_LOSS, "ARTIFACT_HASH_MISMATCH", str(error))
+        artifact = convert.artifact_to_proto(stored)
+        offsets = range(0, max(len(content), 1), CHUNK_SIZE)
+        for index, offset in enumerate(offsets):
+            data = content[offset : offset + CHUNK_SIZE]
+            chunk = coordinator_pb2.DownloadArtifactChunk(data=data)
+            if index == 0:
+                chunk.artifact.CopyFrom(artifact)
+            if data:
+                COUNTERS.increment(
+                    "tableforge_artifact_bytes_total", len(data), direction="download"
+                )
+            yield chunk
+
+    def RequestUpload(
+        self, request: coordinator_pb2.RequestUploadRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.RequestUploadResponse:
+        _authenticate(self._auth, context, self._clock.now())
+        if request.size_bytes > MAX_ARTIFACT_BYTES:
+            _abort(
+                context,
+                grpc.StatusCode.RESOURCE_EXHAUSTED,
+                "ARTIFACT_TOO_LARGE",
+                "artifact exceeds maximum size",
+            )
+        if self._service.direct_artifacts() is None:
+            return coordinator_pb2.RequestUploadResponse(direct=False)
+        if self._service.artifacts.exists(request.sha256):
+            return coordinator_pb2.RequestUploadResponse(direct=True, already_stored=True)
+        transfer = _guarded(
+            context,
+            lambda: self._service.sign_artifact_upload(request.sha256, request.size_bytes),
+        )
+        return coordinator_pb2.RequestUploadResponse(
+            direct=True, transfer=convert.transfer_to_proto(transfer)
+        )
+
+    def CommitUpload(
+        self, request: coordinator_pb2.CommitUploadRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.UploadArtifactResponse:
+        _authenticate(self._auth, context, self._clock.now())
+        descriptor = _guarded(context, lambda: convert.descriptor_from_proto(request.descriptor))
+        try:
+            artifact = self._service.register_artifact(
+                descriptor, request.descriptor.sha256, request.descriptor.size_bytes
+            )
+        except ArtifactNotFoundError as error:
+            _abort(context, grpc.StatusCode.FAILED_PRECONDITION, "ARTIFACT_MISSING", str(error))
+        except ArtifactIntegrityError as error:
+            _abort(context, grpc.StatusCode.DATA_LOSS, "ARTIFACT_HASH_MISMATCH", str(error))
+        except DirectTransferUnavailableError as error:
+            _abort(context, grpc.StatusCode.FAILED_PRECONDITION, "DIRECT_UNAVAILABLE", str(error))
+        COUNTERS.increment(
+            "tableforge_artifact_bytes_total", artifact.size_bytes, direction="direct_upload"
+        )
+        return coordinator_pb2.UploadArtifactResponse(artifact=convert.artifact_to_proto(artifact))
+
+    def RequestDownload(
+        self, request: coordinator_pb2.DownloadArtifactRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.RequestDownloadResponse:
+        _authenticate(self._auth, context, self._clock.now())
+        if self._service.direct_artifacts() is None:
+            return coordinator_pb2.RequestDownloadResponse(direct=False)
+        try:
+            artifact, transfer = self._service.sign_artifact_download(request.artifact_id)
+        except ArtifactNotFoundError as error:
+            _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", str(error))
+        COUNTERS.increment(
+            "tableforge_artifact_bytes_total", artifact.size_bytes, direction="direct_download"
+        )
+        return coordinator_pb2.RequestDownloadResponse(
+            direct=True,
+            artifact=convert.artifact_to_proto(artifact),
+            transfer=convert.transfer_to_proto(transfer),
+        )
 
 
 class MetricsInterceptor(grpc.ServerInterceptor):
     def intercept_service(
         self,
-        continuation: Callable[
-            [grpc.HandlerCallDetails], grpc.RpcMethodHandler[Any, Any] | None
-        ],
+        continuation: Callable[[grpc.HandlerCallDetails], grpc.RpcMethodHandler[Any, Any] | None],
         handler_call_details: grpc.HandlerCallDetails,
     ) -> grpc.RpcMethodHandler[Any, Any] | None:
         handler = continuation(handler_call_details)

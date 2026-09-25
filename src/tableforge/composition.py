@@ -64,8 +64,10 @@ def repositories_for(database: Database) -> Repositories:
 
 
 def build_artifact_store(settings: Settings) -> ArtifactStore:
-    if settings.artifacts.backend != "local":
-        raise NotImplementedError(f"artifact backend '{settings.artifacts.backend}'")
+    if settings.artifacts.backend == "s3":
+        from tableforge.infrastructure.s3_artifacts import S3ArtifactStore
+
+        return S3ArtifactStore.from_settings(settings.artifacts)
     return LocalArtifactStore(settings.data_dir / "artifacts")
 
 
@@ -85,6 +87,8 @@ def build_services(settings: Settings) -> Services:
         workloads=BUILTIN_WORKLOADS,
         nodes=repositories.nodes,
         node_ttl=timedelta(seconds=settings.coordinator.node_ttl_seconds),
+        direct_transfer=settings.artifacts.direct_transfer,
+        presign_ttl=timedelta(seconds=settings.artifacts.presign_seconds),
     )
     return Services(
         settings=settings,

@@ -5,156 +5,149 @@ import json
 import os
 import secrets
 import time
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO
 
-from tableforge.application.ports import DownloadGrant, UploadGrant
-from tableforge.domain.artifacts import Artifact, ArtifactDescriptor, ArtifactKind
-from tableforge.domain.ids import ArtifactId
+from tableforge.application.ports import (
+    ArtifactIntegrityError,
+    ArtifactNotFoundError,
+    StoredObject,
+    storage_key_for,
+)
+from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
+from tableforge.infrastructure.artifact_metadata import (
+    artifact_from_record,
+    artifact_record,
+)
 
-
-class ArtifactNotFoundError(Exception):
-    pass
-
-
-class ArtifactIntegrityError(Exception):
-    pass
+__all__ = ["ArtifactIntegrityError", "ArtifactNotFoundError", "LocalArtifactStore"]
 
 
 class LocalArtifactStore:
     def __init__(self, root: Path) -> None:
         self._root = root
-        self._objects = root / "objects"
         self._uploads = root / "uploads"
         self._metadata = root / "metadata"
-        for directory in (self._objects, self._uploads, self._metadata):
+        for directory in (self._uploads, self._metadata, root / "sha256"):
             directory.mkdir(parents=True, exist_ok=True)
 
-    def begin_upload(self, descriptor: ArtifactDescriptor) -> UploadGrant:
-        path = self._uploads / f"{descriptor.artifact_id}.{secrets.token_hex(8)}.part"
-        _write_json_atomic(
-            _pending_path(path),
-            {
-                "artifact_id": str(descriptor.artifact_id),
-                "kind": descriptor.kind.value,
-                "media_type": descriptor.media_type,
-                "schema_version": descriptor.schema_version,
-            },
-        )
-        return UploadGrant(artifact_id=str(descriptor.artifact_id), temporary_path=path)
+    @property
+    def root(self) -> Path:
+        return self._root
 
-    def write_upload(self, grant: UploadGrant, source: BinaryIO) -> tuple[str, int]:
-        digest = hashlib.sha256()
-        size = 0
-        with grant.temporary_path.open("wb") as target:
-            while chunk := source.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
-                target.write(chunk)
-            target.flush()
-            os.fsync(target.fileno())
-        return digest.hexdigest(), size
-
-    def commit_upload(self, grant: UploadGrant, sha256: str, size_bytes: int) -> Artifact:
-        pending_path = _pending_path(grant.temporary_path)
-        if not pending_path.exists() or not grant.temporary_path.exists():
-            raise ArtifactNotFoundError(grant.artifact_id)
-        actual_sha256, actual_size = _hash_file(grant.temporary_path)
-        if actual_sha256 != sha256 or actual_size != size_bytes:
-            raise ArtifactIntegrityError(grant.artifact_id)
-        descriptor_data = json.loads(pending_path.read_text(encoding="utf-8"))
-        descriptor = ArtifactDescriptor(
-            artifact_id=ArtifactId(descriptor_data["artifact_id"]),
-            kind=ArtifactKind(descriptor_data["kind"]),
-            media_type=descriptor_data["media_type"],
-            schema_version=descriptor_data["schema_version"],
-        )
-        storage_key = f"sha256/{sha256[:2]}/{sha256[2:4]}/{sha256}"
+    def put(self, descriptor: ArtifactDescriptor, content: bytes) -> Artifact:
+        sha256 = hashlib.sha256(content).hexdigest()
+        storage_key = storage_key_for(sha256)
         destination = self._root / storage_key
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists():
+        if not destination.is_file():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._uploads / f"{sha256}.{secrets.token_hex(8)}.part"
+            with temporary.open("wb") as target:
+                target.write(content)
+                target.flush()
+                os.fsync(target.fileno())
             try:
-                os.replace(grant.temporary_path, destination)
+                os.replace(temporary, destination)
             except OSError:
-                if not destination.exists():
+                temporary.unlink(missing_ok=True)
+                if not destination.is_file():
                     raise
-        if grant.temporary_path.exists():
-            existing_sha256, existing_size = _hash_file(destination)
-            if existing_sha256 != sha256 or existing_size != size_bytes:
-                raise ArtifactIntegrityError(storage_key)
-            grant.temporary_path.unlink(missing_ok=True)
-        artifact = Artifact.available(descriptor, sha256, size_bytes, storage_key)
-        _write_json_atomic(
-            self._metadata / f"{grant.artifact_id}.json",
-            {
-                "artifact_id": grant.artifact_id,
-                "kind": descriptor.kind.value,
-                "media_type": descriptor.media_type,
-                "schema_version": descriptor.schema_version,
-                "sha256": sha256,
-                "size_bytes": size_bytes,
-                "storage_key": storage_key,
-                "created_at": artifact.created_at.isoformat(),
-            },
-        )
-        pending_path.unlink(missing_ok=True)
+        actual_sha256, actual_size = _hash_file(destination)
+        if actual_sha256 != sha256 or actual_size != len(content):
+            raise ArtifactIntegrityError(storage_key)
+        artifact = Artifact.available(descriptor, sha256, len(content), storage_key)
+        self._write_metadata(artifact)
         return artifact
 
-    def get_download(self, artifact_id: str) -> DownloadGrant:
-        metadata_path = self._metadata / f"{artifact_id}.json"
-        if not metadata_path.exists():
-            raise ArtifactNotFoundError(artifact_id)
-        data = json.loads(metadata_path.read_text(encoding="utf-8"))
-        path = self._root / data["storage_key"]
-        actual_sha256, actual_size = _hash_file(path)
-        if actual_sha256 != data["sha256"] or actual_size != data["size_bytes"]:
+    def get(self, artifact_id: str) -> Artifact:
+        path = self._metadata_path(artifact_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise ArtifactNotFoundError(artifact_id) from error
+        return artifact_from_record(data)
+
+    def read(self, artifact_id: str) -> tuple[Artifact, bytes]:
+        artifact = self.get(artifact_id)
+        try:
+            content = (self._root / artifact.storage_key).read_bytes()
+        except FileNotFoundError as error:
+            raise ArtifactNotFoundError(artifact_id) from error
+        if (
+            hashlib.sha256(content).hexdigest() != artifact.sha256
+            or len(content) != artifact.size_bytes
+        ):
             raise ArtifactIntegrityError(artifact_id)
-        descriptor = ArtifactDescriptor(
-            artifact_id=ArtifactId(data["artifact_id"]),
-            kind=ArtifactKind(data["kind"]),
-            media_type=data["media_type"],
-            schema_version=data["schema_version"],
-        )
-        artifact = Artifact.available(
-            descriptor=descriptor,
-            sha256=data["sha256"],
-            size_bytes=data["size_bytes"],
-            storage_key=data["storage_key"],
-        )
-        return DownloadGrant(artifact=artifact, path=path)
+        return artifact, content
+
+    def path_for(self, artifact: Artifact) -> Path:
+        return self._root / artifact.storage_key
 
     def exists(self, sha256: str) -> bool:
-        return (self._root / f"sha256/{sha256[:2]}/{sha256[2:4]}/{sha256}").is_file()
+        return (self._root / storage_key_for(sha256)).is_file()
+
+    def list_objects(self) -> Iterator[StoredObject]:
+        for path in (self._root / "sha256").rglob("*"):
+            if path.is_file():
+                stat = path.stat()
+                yield StoredObject(
+                    storage_key=path.relative_to(self._root).as_posix(),
+                    size_bytes=stat.st_size,
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, UTC),
+                )
+
+    def delete_object(self, storage_key: str) -> None:
+        sha256 = storage_key.rsplit("/", 1)[-1]
+        (self._root / storage_key_for(sha256)).unlink(missing_ok=True)
+        for metadata in self._metadata.glob("*.json"):
+            try:
+                data = json.loads(metadata.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if data.get("storage_key") == storage_key:
+                metadata.unlink(missing_ok=True)
+
+    def _metadata_path(self, artifact_id: str) -> Path:
+        if (
+            not artifact_id
+            or "/" in artifact_id
+            or "\\" in artifact_id
+            or artifact_id in (".", "..")
+        ):
+            raise ArtifactNotFoundError(artifact_id)
+        return self._metadata / f"{artifact_id}.json"
+
+    def _write_metadata(self, artifact: Artifact) -> None:
+        path = self._metadata_path(str(artifact.descriptor.artifact_id))
+        temporary = path.with_name(f"{path.name}.{secrets.token_hex(8)}.tmp")
+        with temporary.open("w", encoding="utf-8", newline="\n") as target:
+            json.dump(artifact_record(artifact), target, sort_keys=True, separators=(",", ":"))
+            target.flush()
+            os.fsync(target.fileno())
+        for attempt in range(20):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    temporary.unlink(missing_ok=True)
+                    raise
+                time.sleep(0.01 * (attempt + 1))
 
 
 def _hash_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        with path.open("rb") as source:
-            while chunk := source.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
-    except FileNotFoundError as error:
-        raise ArtifactNotFoundError(str(path)) from error
-    return digest.hexdigest(), size
-
-
-def _pending_path(upload: Path) -> Path:
-    return upload.with_name(upload.name + ".pending.json")
-
-
-def _write_json_atomic(path: Path, data: object) -> None:
-    temporary = path.with_name(f"{path.name}.{secrets.token_hex(8)}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="\n") as target:
-        json.dump(data, target, sort_keys=True, separators=(",", ":"))
-        target.flush()
-        os.fsync(target.fileno())
     for attempt in range(20):
         try:
-            os.replace(temporary, path)
-            return
+            digest = hashlib.sha256()
+            size = 0
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    size += len(chunk)
+            return digest.hexdigest(), size
         except PermissionError:
             if attempt == 19:
                 raise
             time.sleep(0.01 * (attempt + 1))
+    raise AssertionError("unreachable")
