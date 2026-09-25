@@ -15,34 +15,51 @@ from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.experiments import ExperimentService
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
-from tableforge.infrastructure.sqlite.auth import SQLiteAuthRepository
-from tableforge.infrastructure.sqlite.checkpoints import SQLiteCheckpointRepository
-from tableforge.infrastructure.sqlite.experiments import SQLiteExperimentRepository
-from tableforge.infrastructure.sqlite.jobs import SQLiteJobRepository
-from tableforge.infrastructure.sqlite.nodes import SQLiteNodeRepository
+from tableforge.infrastructure.sql import (
+    Database,
+    SqlAuthRepository,
+    SqlCheckpointRepository,
+    SqlEventLog,
+    SqlExperimentRepository,
+    SQLiteDatabase,
+    SqlJobRepository,
+    SqlNodeRepository,
+)
 from tableforge.settings import Settings
 
 
 @dataclass(frozen=True, slots=True)
 class Repositories:
+    database: Database
     jobs: JobRepository
     nodes: NodeRepository
     experiments: ExperimentRepository
     checkpoints: CheckpointRepository
     auth: AuthRepository
+    events: SqlEventLog
+
+
+def open_database(settings: Settings) -> Database:
+    if settings.metadata.backend == "postgres":
+        from tableforge.infrastructure.sql.postgres import PostgresDatabase
+
+        return PostgresDatabase(settings.metadata.url)
+    return SQLiteDatabase(settings.database_path)
 
 
 def build_repositories(settings: Settings) -> Repositories:
-    if settings.metadata.backend != "sqlite":
-        raise NotImplementedError(f"metadata backend '{settings.metadata.backend}'")
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    database = settings.database_path
+    return repositories_for(open_database(settings))
+
+
+def repositories_for(database: Database) -> Repositories:
     return Repositories(
-        jobs=SQLiteJobRepository(database),
-        nodes=SQLiteNodeRepository(database),
-        experiments=SQLiteExperimentRepository(database),
-        checkpoints=SQLiteCheckpointRepository(database),
-        auth=SQLiteAuthRepository(database),
+        database=database,
+        jobs=SqlJobRepository(database),
+        nodes=SqlNodeRepository(database),
+        experiments=SqlExperimentRepository(database),
+        checkpoints=SqlCheckpointRepository(database),
+        auth=SqlAuthRepository(database),
+        events=SqlEventLog(database),
     )
 
 

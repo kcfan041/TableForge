@@ -102,6 +102,38 @@ metrics_listen = "127.0.0.1:9464"   # Prometheus /metrics，留空則不啟用
 
 設定名稱或數值錯誤時，指令會直接報錯。
 
+### PostgreSQL
+
+預設使用 SQLite，適合單機或一個 Coordinator。要讓多個 Coordinator 程序共用資料，或資料量較大時，改用 PostgreSQL：
+
+```
+uv sync --extra learning --extra postgres
+```
+
+```toml
+[metadata]
+backend = "postgres"
+url = "postgresql://tableforge:<密碼>@<主機>:5432/tableforge"
+```
+
+密碼也可以改用環境變數 `TABLEFORGE_METADATA__URL`，避免寫進檔案。第一次連線時會自動建立資料表。
+
+把現有 SQLite 資料搬過去（目標資料庫必須是空的）：
+
+```
+uv run tableforge metadata copy-from-sqlite .tableforge/tableforge.db
+```
+
+Artifact 檔案仍在 `<data-dir>/artifacts`，換資料目錄時要一起複製。
+
+開發時可用 Docker 啟動測試用 PostgreSQL，contract tests 會自動偵測並在 SQLite 與 PostgreSQL 各跑一次：
+
+```
+docker run -d --name tableforge-pg-test --memory 1g -p 127.0.0.1:55432:5432 -e POSTGRES_USER=tableforge -e POSTGRES_PASSWORD=tableforge -e POSTGRES_DB=tableforge postgres:17-alpine
+```
+
+其他位置可用 `TABLEFORGE_TEST_POSTGRES_URL` 指定；設定 `TABLEFORGE_DISABLE_POSTGRES_TESTS=1` 則略過。
+
 ## 兩台電腦
 
 在 Coordinator 電腦上：
@@ -141,6 +173,8 @@ uv run tableforge worker start --remote
 | `checkpoint list/show` | 查看 NFSP checkpoint 與升級紀錄 |
 | `league matrix <id> [--json]` | 查看 League 的 matchup matrix |
 | `events tail [--after N]` | 查看狀態變更事件 |
+| `metadata migrate-schema` | 建立或升級資料表，顯示 schema 版本 |
+| `metadata copy-from-sqlite <db>` | 把 SQLite 資料搬到 PostgreSQL |
 | `artifact gc [--dry-run] [--grace-hours H]` | 刪除沒有被引用的舊 artifact |
 | `coordinator init/serve/enrollment-token` | 遠端 Coordinator；`serve --metrics-listen` 啟用 metrics |
 
@@ -165,5 +199,5 @@ uv run python scripts/generate_protos.py
 - 只支援 Heads-Up；6-Max、Deep CFR、PPO 尚未實作。
 - GPU 只支援 NVIDIA CUDA；Apple Silicon 的 MPS 尚未支援。
 - Windows 上 GPU 記憶體也會佔用系統記憶體配額，page file 太小時可用的 batch 會變小（`doctor` 會顯示警告）。
-- Metadata 使用 SQLite，適合單一 Coordinator。
+- Artifact 仍存在 Coordinator 本機，並經由 Coordinator 傳給 Worker；S3/MinIO 尚未支援。
 - 完整清單見 [docs/status.md](docs/status.md)。

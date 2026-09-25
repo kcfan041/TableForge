@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+
+from tableforge.infrastructure.sql.database import Connection, Database
 
 
 @dataclass
@@ -42,13 +43,10 @@ _HELP = {
 
 
 def _query(
-    connection: sqlite3.Connection, sql: str, parameters: tuple[object, ...] = ()
+    connection: Connection, sql: str, parameters: tuple[object, ...] = ()
 ) -> list[tuple[object, ...]]:
-    try:
-        return [tuple(row) for row in connection.execute(sql, parameters).fetchall()]
-    except sqlite3.OperationalError:
-        return []
-
+    rows = connection.execute(sql, parameters).fetchall()
+    return [tuple(row.values()) if isinstance(row, dict) else tuple(row) for row in rows]
 
 def _escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
@@ -60,13 +58,13 @@ def _line(name: str, value: float, labels: tuple[tuple[str, str], ...] = ()) -> 
     return f"{name}{suffix} {value:g}"
 
 
-def render_metrics(database: Path, now_iso: str, counters: Counters = COUNTERS) -> str:
+def render_metrics(database: Database, now: datetime, counters: Counters = COUNTERS) -> str:
     samples: dict[str, list[str]] = {}
 
     def add(name: str, value: float, **labels: str) -> None:
         samples.setdefault(name, []).append(_line(name, value, tuple(sorted(labels.items()))))
 
-    with sqlite3.connect(database, timeout=30.0) as connection:
+    with database.read() as connection:
         for status, count in _query(connection, "SELECT status, COUNT(*) FROM jobs GROUP BY 1"):
             add("tableforge_jobs", float(count), status=str(status))  # type: ignore[arg-type]
         for (count,) in _query(
@@ -76,7 +74,7 @@ def render_metrics(database: Path, now_iso: str, counters: Counters = COUNTERS) 
         for (count,) in _query(
             connection,
             "SELECT COUNT(*) FROM job_attempts WHERE active = 1 AND expires_at <= ?",
-            (now_iso,),
+            (database.timestamp(now),),
         ):
             add("tableforge_expired_active_leases", float(count))  # type: ignore[arg-type]
         for (count,) in _query(connection, "SELECT COUNT(*) FROM nodes"):

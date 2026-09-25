@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：第一版收尾（設定、營運、GPU）階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：M3b PostgreSQL 階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -17,20 +17,22 @@
 | M1 | Heads-Up Poker Engine、Rule Bots、資金守恆 | 已完成 | `f3b1679`–`df4b40d` |
 | M2 | 單機工作流：lease、heartbeat、失敗/取消、experiment、worker loop | 已完成 | `5b27e50`–`de6318d` |
 | C0/C1 | 能力模型、CPU/RAM/磁碟偵測、`doctor` | 已完成 | `ab79ff0`、`0e95ed3` |
-| C2 | NVIDIA GPU 偵測、GPU 測試分級 | 已完成 | 本階段 |
+| C2 | NVIDIA GPU 偵測、GPU 測試分級 | 已完成 | `ca5e60e` |
 | C3 | Scheduler 資源過濾、reservation、capability revision | 已完成 | `179933e` |
-| C4 | 降級執行計畫（fallback）、OOM 分類 | 已完成 | 本階段 |
+| C4 | 降級執行計畫（fallback）、OOM 分類 | 已完成 | `ca5e60e` |
 | C5 | UI 呈現能力資訊 | 未開始 | 平台化階段 |
 | M3a | gRPC 傳輸、enrollment/session、TLS、artifact 傳輸 | 已完成 | `61cf545`、`b5c4c51` |
 | M3a 第 2 階段 | Mac 實機驗證、跨平台結果一致性 | 延後 | 需在 Mac 上執行 |
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
 | 營運 | 設定分層、outbox、metrics、artifact GC、session 輪換/撤銷 | 已完成 | `5e76237`、`e845d0c` |
-| M3b | PostgreSQL、MinIO、Docker | 未開始 | 下一步 |
+| M3b-1 | PostgreSQL metadata、schema migration、SQLite 資料搬移 | 已完成 | 本階段 |
+| M3b-2 | S3/MinIO artifact、Worker 直連 storage | 未開始 | 下一步 |
+| M3b-3 | Docker 映像與 Compose 部署 | 未開始 | |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：219 個測試全部通過（含 RTX 2070 實機 GPU 測試），Ruff、mypy strict 通過。
+目前測試：284 個測試全部通過（含 RTX 2070 實機 GPU 測試，以及在 Docker PostgreSQL 17 上執行的 51 個 contract tests），Ruff、mypy strict 通過。沒有 PostgreSQL 時，那 51 個測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -131,6 +133,20 @@
   - `hu-nfsp-gpu-iterative` 實跑：13 個 Job 全部成功，3 個 learner 都以 `cuda:0`、batch 8192 執行，約 6 分鐘。
   - 完整測試連續 3 次全部通過。
 
+### M3b-1 PostgreSQL
+- **共用 SQL 實作**：Job、Node、Experiment、Checkpoint、Auth、Event 六個 repository 只寫一份（`infrastructure/sql/`），SQLite 與 PostgreSQL 只有連線、鎖定語法和時間型別不同。原本的 `SQLite*Repository` 類別保留，改為包一層。
+- **並行安全**：PostgreSQL 領取 Job 時先掃描候選，再對單筆用 `FOR UPDATE SKIP LOCKED` 鎖定，多個 Coordinator 程序或執行緒同時領取不會拿到同一個 Job，也不會互相等待。續租、完成、失敗、取消、checkpoint 升級、experiment revision、session 輪換都會先鎖定該列。一次掃描 64 筆，第一批都不相容時會繼續往下找。
+- **Outbox**：狀態變更與事件在同一個 transaction 寫入；PostgreSQL 的事件序號使用 identity 欄位。
+- **Schema 版本管理**：`schema_migrations` 表記錄版本；PostgreSQL 用 advisory lock 避免多個程序同時升級。資料庫版本比程式新時直接拒絕啟動。舊版 SQLite 資料庫會自動補上欄位。
+- **時間**：PostgreSQL 使用 `TIMESTAMPTZ`；SQLite 一律先轉成 UTC 再存。修正了一個既有問題：以不同時區的時間寫入時，SQLite 以文字比較 lease 到期時間會出錯。
+- **設定**：`metadata.backend = "postgres"` 與 `metadata.url`；log 中的密碼會遮蔽。安裝：`uv sync --extra postgres`（psycopg 3 + 連線池）。
+- **搬移**：`metadata copy-from-sqlite <舊 tableforge.db>`，整個搬移在一個 transaction 內完成；目標不是空的會拒絕，失敗時不留下任何資料。保留所有 ID、revision、attempt 紀錄與事件序號，搬移後新事件接續原序號。`metadata migrate-schema` 顯示目前 schema 版本。
+- **測試**：contract tests 改為同一份測試同時跑 SQLite 與 PostgreSQL（每個測試使用獨立 schema）。新增並行測試：20 個執行緒搶 12 個 Job、16 個執行緒同時用相同冪等鍵建立 Job、16 個執行緒同時推進同一個實驗、6 個 checkpoint 同時升級。
+- 驗收（Docker PostgreSQL 17，限制 1 GiB 記憶體）：
+  - SQLite 上跑完的實驗搬到 PostgreSQL 後狀態一致；再次搬移被拒絕。
+  - PostgreSQL 上跑完 `hu-nfsp-cpu-iterative`（13 個 Job，約 19 秒）。
+  - `coordinator serve` 使用 PostgreSQL，4 個遠端 Worker 程序跑 `hu-rule-soak`（100 個 Job），中途強制關閉其中一個：100 個 Job 全部成功、沒有任何 Job 被完成兩次、被中斷的 Job 由其他 Worker 接手，metrics 與事件數正確。
+
 ## 延後項目
 
 ### Mac 實機驗證（M3a 第 2 階段）
@@ -154,17 +170,16 @@ uv run tableforge doctor
 | 項目 | 規格 | 目前實作 |
 |---|---|---|
 | Artifact 傳輸 | Coordinator 不轉送大型 artifact，Worker 直接連 storage | 經由 Coordinator 的 gRPC 串流，單檔上限 1 GiB |
-| 兩節點 metadata | PostgreSQL | 仍為 SQLite（單一 Coordinator 可運作） |
 | Experience 格式 | Parquet shard | NPZ 形式的 zip（規格允許的替代格式，避免新增 pyarrow） |
 | RL buffer 跨輪保留 | 保留最近幾輪資料 | 每輪只使用當輪 shard；reservoir buffer 跨輪保留 |
 
-已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進；outbox 事件已加入。
+已修正的差異：NFSP 訓練改讀 dataset snapshot；experiment 改由背景推進；outbox 事件已加入；metadata 支援 PostgreSQL。
 
 ## 下一步候選
 
 依建議優先順序：
 
-1. **M3b**：PostgreSQL adapter、S3/MinIO 與 Worker 直連 storage、Docker 部署（進行中）。
+1. **M3b-2/3**：S3/MinIO 與 Worker 直連 storage、Docker 部署（進行中）。
 2. **學習效果驗證**：較長的訓練與評估設定（現在可用 GPU），確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **O0–O7 對手建模**。

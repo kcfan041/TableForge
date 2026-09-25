@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import asdict
@@ -129,6 +130,12 @@ def main() -> None:
     artifact_gc.add_argument("--dry-run", action="store_true")
     artifact_gc.add_argument("--grace-hours", type=float, default=24.0)
 
+    metadata = subparsers.add_parser("metadata")
+    metadata_subparsers = metadata.add_subparsers(dest="metadata_command", required=True)
+    metadata_subparsers.add_parser("migrate-schema")
+    metadata_copy = metadata_subparsers.add_parser("copy-from-sqlite")
+    metadata_copy.add_argument("source", type=Path)
+
     checkpoint = subparsers.add_parser("checkpoint")
     checkpoint_subparsers = checkpoint.add_subparsers(
         dest="checkpoint_command", required=True
@@ -184,6 +191,9 @@ def main() -> None:
             settings,
             args.max_jobs,
         )
+        return
+    if args.command == "metadata":
+        _metadata_command(args, settings)
         return
     services = build_services(settings)
     service = services.coordinator
@@ -322,9 +332,7 @@ def main() -> None:
         revoked = services.repositories.auth.revoke_node(NodeId(args.node_id))
         print(f"{args.node_id}\trevoked_sessions={revoked}")
     elif args.command == "events":
-        from tableforge.infrastructure.sqlite.events import SQLiteEventLog
-
-        for event in SQLiteEventLog(settings.database_path).list_events(args.after, args.limit):
+        for event in services.repositories.events.list_events(args.after, args.limit):
             print(
                 json.dumps(
                     {
@@ -497,7 +505,7 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
 
             metrics = start_metrics_server(
                 settings.coordinator.metrics_listen,
-                lambda: render_metrics(settings.database_path, datetime.now(UTC).isoformat()),
+                lambda: render_metrics(services.repositories.database, datetime.now(UTC)),
             )
             logger.emit("metrics_started", port=metrics.port)
         stop = _stop_event()
@@ -515,6 +523,44 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             metrics.stop()
         running.stop(5.0)
         logger.emit("coordinator_stopped")
+
+
+def _metadata_command(args: argparse.Namespace, settings: Settings) -> None:
+    from tableforge.composition import open_database
+    from tableforge.infrastructure.sql.copy import TargetNotEmptyError, copy_metadata
+    from tableforge.infrastructure.sql.migrations import schema_version
+
+    target = open_database(settings)
+    try:
+        if args.metadata_command == "migrate-schema":
+            print(
+                json.dumps(
+                    {"backend": target.name, "schema_version": schema_version(target)},
+                    sort_keys=True,
+                )
+            )
+            return
+        source_path: Path = args.source
+        if not source_path.is_file():
+            raise SystemExit(f"source database not found: {source_path}")
+        if target.name != "postgres":
+            raise SystemExit("copy-from-sqlite requires metadata.backend = postgres")
+        from tableforge.infrastructure.sql import SQLiteDatabase
+
+        source = SQLiteDatabase(source_path)
+        try:
+            report = copy_metadata(
+                source,
+                target,
+                progress=lambda table, rows: print(
+                    json.dumps({"copied": rows, "table": table}), file=sys.stderr
+                ),
+            )
+        except TargetNotEmptyError as error:
+            raise SystemExit(str(error)) from error
+        print(json.dumps({"rows": report.rows, "total": report.total}, sort_keys=True))
+    finally:
+        target.close()
 
 
 def _enroll_node(args: argparse.Namespace) -> None:
