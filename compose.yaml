@@ -1,0 +1,114 @@
+# TableForge full stack: PostgreSQL + S3-compatible storage + coordinator + CPU workers.
+#
+#   copy docker/.env.example .env      # then change every password
+#   docker compose up -d --build
+#   docker compose up -d --scale worker=4
+#
+# Host-side (e.g. GPU) workers join through 127.0.0.1:7443 and the "host" storage endpoint;
+# see README "Docker".
+name: tableforge
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tableforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: tableforge
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tableforge -d tableforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+    cpus: 2
+    logging: *logging
+
+  storage:
+    image: rustfs/rustfs:latest@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+    volumes:
+      - storage-data:/data
+    ports:
+      - "127.0.0.1:${STORAGE_HOST_PORT:-59000}:9000"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9000"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+    cpus: 1
+    logging: *logging
+
+  coordinator:
+    build:
+      context: .
+      target: coordinator
+    image: tableforge/coordinator:${TABLEFORGE_TAG:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    environment:
+      TABLEFORGE_METADATA__BACKEND: postgres
+      TABLEFORGE_METADATA__URL: postgresql://tableforge:${POSTGRES_PASSWORD:?}@postgres:5432/tableforge
+      TABLEFORGE_ARTIFACTS__BACKEND: s3
+      TABLEFORGE_ARTIFACTS__BUCKET: tableforge
+      TABLEFORGE_ARTIFACTS__ENDPOINT_URL: http://storage:9000
+      TABLEFORGE_ARTIFACTS__ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      TABLEFORGE_ARTIFACTS__SECRET_KEY: ${S3_SECRET_KEY:?}
+      TABLEFORGE_ARTIFACTS__ENDPOINTS: host=http://127.0.0.1:${STORAGE_HOST_PORT:-59000}
+      TABLEFORGE_COORDINATOR__METRICS_LISTEN: 0.0.0.0:9464
+      TABLEFORGE_TLS_HOSTS: coordinator,localhost,127.0.0.1
+      TABLEFORGE_ENROLLMENT_MAX_USES: ${ENROLLMENT_MAX_USES:-16}
+      TABLEFORGE_ENROLLMENT_TTL_MINUTES: ${ENROLLMENT_TTL_MINUTES:-1440}
+    volumes:
+      - coordinator-data:/data
+      - shared:/shared
+    ports:
+      - "127.0.0.1:${COORDINATOR_HOST_PORT:-7443}:7443"
+      - "127.0.0.1:${METRICS_HOST_PORT:-9464}:9464"
+    mem_limit: 1g
+    cpus: 2
+    logging: *logging
+
+  worker:
+    build:
+      context: .
+      target: worker-cpu
+    image: tableforge/worker-cpu:${TABLEFORGE_TAG:-dev}
+    restart: unless-stopped
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      TABLEFORGE_COORDINATOR_ADDRESS: coordinator:7443
+      TABLEFORGE_WORKER__IDLE_SECONDS: "1"
+      TABLEFORGE_WORKER__CACHE_MAX_BYTES: "2147483648"
+    volumes:
+      - shared:/shared:ro
+    deploy:
+      replicas: ${CPU_WORKERS:-2}
+    mem_limit: 2g
+    cpus: 2
+    logging: *logging
+
+volumes:
+  postgres-data:
+  storage-data:
+  coordinator-data:
+  shared:

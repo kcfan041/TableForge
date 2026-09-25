@@ -138,6 +138,22 @@ def test_large_gpu_runs_at_full_batch() -> None:
     assert result.plan.adjustments == ()
 
 
+def test_idle_16gb_gpu_runs_at_full_batch() -> None:
+    result = assess_compatibility(node((gpu(16, 15.2),), ("cpu", "cuda")), SMALL_GPU)
+
+    assert result.status is CompatibilityStatus.SUPPORTED
+    assert result.plan is not None
+    assert result.plan.batch_size == SMALL_GPU.fallback_batch_sizes[0]
+
+
+def test_16gb_gpu_shared_with_another_program_is_degraded() -> None:
+    result = assess_compatibility(node((gpu(16, 6.4),), ("cpu", "cuda")), SMALL_GPU)
+
+    assert result.status is CompatibilityStatus.DEGRADED
+    assert result.plan is not None
+    assert result.plan.batch_size == 131_072
+
+
 def test_8gb_gpu_is_degraded_to_smaller_batch() -> None:
     result = assess_compatibility(node((gpu(8, 6.0),), ("cpu", "cuda")), SMALL_GPU)
 

@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：M3b S3 artifact 階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：M3b Docker 部署階段（第一版收尾完成）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -26,13 +26,14 @@
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
 | 營運 | 設定分層、outbox、metrics、artifact GC、session 輪換/撤銷 | 已完成 | `5e76237`、`e845d0c` |
 | M3b-1 | PostgreSQL metadata、schema migration、SQLite 資料搬移 | 已完成 | `817e9f7` |
-| M3b-2 | S3 相容 artifact store、Worker 直連 storage | 已完成 | 本階段 |
-| M3b-3 | Docker 映像與 Compose 部署 | 未開始 | 下一步 |
+| M3b-2 | S3 相容 artifact store、Worker 直連 storage | 已完成 | `5f7e613` |
+| M3b-3 | Docker 映像與 Compose 部署、主機 GPU Worker | 已完成 | 本階段 |
+| M3b-3 CUDA 容器 | GPU Worker 在容器內執行 | 延後 | 需要 Docker Desktop 的 WSL2 後端 |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 
-目前測試：302 個測試全部通過（含 RTX 2070 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：314 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -116,7 +117,7 @@
 - **安全**：`node revoke <node-id>` 立即撤銷節點所有 session；`node rotate-session` 換新 session，舊 token 立即失效。Enrollment token 固定以 `tfe_` 開頭，避免被 CLI 誤當成參數（先前約 1/64 機率失敗）。
 - 驗收：單元與 contract tests；實跑 coordinator + 遠端 worker：rotate 後完成 Job、metrics 與 events 正確、revoke 後 worker 被拒（UNAUTHENTICATED）。
 
-### C2/C4 GPU（RTX 2070 8 GB 實機）
+### C2/C4 GPU（RTX 2070 8 GB 開發，RTX 5070 Ti 16 GB 重新驗證）
 - **CUDA 版 PyTorch**：Windows／Linux 自動從 PyTorch cu130 index 安裝（macOS 仍用一般版本）。安裝：`uv sync --extra learning --extra gpu`。
 - **GPU 偵測**：優先用 NVML，失敗時改用 `nvidia-smi`；讀型號、VRAM 總量與可用量、driver、compute capability。偵測失敗記為警告，不當成 0。`doctor` 顯示每張 GPU。
 - **Windows 記憶體限制**：Windows 上 GPU 配置也會佔用系統 commit（實測每配置 512 MiB，commit 就少約 512 MiB）。本機 page file 較小時，實際能用的 VRAM 比顯示的少，因此可用 VRAM 取「GPU 可用量」與「系統 commit 餘量減 1 GiB」的較小者，並給出 `GPU_MEMORY_LIMITED_BY_SYSTEM_COMMIT` 警告。
@@ -132,6 +133,10 @@
   - GPU 與 CPU 訓練同一份資料，結果在誤差 1e-3 內一致；GPU checkpoint 可在 CPU 載入。
   - `hu-nfsp-gpu-iterative` 實跑：13 個 Job 全部成功，3 個 learner 都以 `cuda:0`、batch 8192 執行，約 6 分鐘。
   - 完整測試連續 3 次全部通過。
+- **換成 RTX 5070 Ti（16 GB，compute 12.0，Blackwell）後重新驗證**：
+  - PyTorch 2.14 cu130 原生支援 sm_120，不需要改程式；GPU 測試全部通過，16 GB 分級測試不再略過。
+  - `doctor` 正確顯示 5070 Ti。GPU 空閒時 `hu-nfsp-small-gpu` 以完整 batch（262,144）執行；同時有其他程式（例如遊戲）佔用 GPU 時，依剩餘 VRAM 自動降為 131,072，實測峰值 2.7 GiB，未超過預估。
+  - 在 Compose 驗收中跑完 `hu-nfsp-gpu-iterative`（見 M3b-3）。
 
 ### M3b-1 PostgreSQL
 - **共用 SQL 實作**：Job、Node、Experiment、Checkpoint、Auth、Event 六個 repository 只寫一份（`infrastructure/sql/`），SQLite 與 PostgreSQL 只有連線、鎖定語法和時間型別不同。原本的 `SQLite*Repository` 類別保留，改為包一層。
@@ -160,7 +165,37 @@
   - Coordinator metrics 中經由 Coordinator 傳送的 artifact 流量為 0；直連上傳 4.5 MB、直連下載 45 MB。Coordinator 沒有建立本機 artifact 目錄。
   - Bucket 中 55 個物件全部被 metadata 引用，`artifact gc` 沒有可刪除的物件。
 
+### M3b-3 Docker 部署與主機 GPU Worker
+- **映像**（單一 `Dockerfile`，base image 以 digest 固定）：
+  - `coordinator`：212 MB，只含 PostgreSQL 與 S3 用戶端，不含 PyTorch。
+  - `worker-cpu`：1.13 GB，使用 lock 檔的版本，但把 PyTorch 換成同版本的 CPU 版，並移除 CUDA 函式庫。
+  - `worker-cuda`：Dockerfile 已寫好，這台電腦沒有建置（見延後項目）。
+  - 以非 root 使用者（uid 10001）執行。
+- **Compose**：
+  - `compose.yaml`：PostgreSQL + RustFS + Coordinator + CPU Workers（`CPU_WORKERS` 或 `--scale worker=N`），每個服務都有記憶體與 CPU 上限，對外 port 只開在 `127.0.0.1`。密碼放在 `.env`（範本 `docker/.env.example`，`.env` 不進 git），沒設定時 Compose 直接報錯。
+  - `compose.minimal.yaml`：只有 Coordinator（SQLite、本機 storage）與 CPU Workers。
+- **自動加入**：Coordinator 啟動時建立 TLS 憑證和一個可多次使用的註冊碼（預設 16 次、24 小時），放在共用 volume；Worker 容器啟動時自動註冊，憑證存在自己的 volume，重啟不需重新註冊。
+- **可重複使用的註冊碼**：`coordinator enrollment-token --max-uses N --output <檔案>`；同一個節點重複註冊不會多算次數，超過上限就拒絕，並行註冊也不會超過（SQLite 與 PostgreSQL 都測過）。`node enroll --token-file`、`--bundle <資料夾>`（資料夾內含註冊碼與憑證）。
+- **多個 storage 位址**：容器內的 Worker 用 `storage:9000`，Windows 上的 Worker 用 `127.0.0.1:59000`。Coordinator 設定 `artifacts.endpoints = "host=http://127.0.0.1:59000"`，Worker 設定 `artifacts.endpoint = "host"`，Coordinator 依名稱用對應位址簽名。只能選 Coordinator 設定檔列出的名稱；把網址改到其他主機會因簽名不符被拒絕。
+- **主機 GPU Worker**：從 Compose 取出註冊碼與憑證，在 Windows 上用 `uv run` 執行 Worker，直接使用 5070 Ti。
+- **小修正**：
+  - 設定只讀取 `TABLEFORGE_<區段>__<名稱>` 格式的環境變數，`TABLEFORGE_ROLE` 等其他變數不再被誤判為錯誤。
+  - Worker 閒置時只記錄一次 log，不再每秒一行。
+  - log 立即輸出，不被緩衝。
+- 驗收（全新 volume，Compose 的 3 個 CPU Worker + Windows 上 5070 Ti 的 GPU Worker，同時跑 `hu-nfsp-cpu-league` 與 `hu-nfsp-gpu-iterative`，第 26 秒 `docker kill` 一個 CPU Worker 容器）：
+  - 60 個 Job 全部成功（league 47 個、GPU 13 個），沒有 Job 被完成兩次；被中斷的 Job 由其他 Worker 接手。
+  - 3 個 CUDA learner 全部由主機 GPU Worker 執行（`cuda:0`、batch 8192），沒有派給 CPU Worker。
+  - Artifact 全部直連 storage：上傳 50 MB、下載 198 MB，經過 Coordinator 的流量為 0。
+  - Bucket 中 71 個物件全部被引用；結束時沒有殘留的 lease。
+  - `compose.minimal.yaml` 跑完 `hu-rule-smoke`。
+
 ## 延後項目
+
+### CUDA Worker 容器
+這台電腦的 Docker Desktop 使用 Hyper-V 後端，無法把 GPU 交給容器（只有 WSL2 後端支援 `--gpus`）。另外，Docker 的網路層（gVisor）同時下載多個數百 MB 的 CUDA 套件時會停住，建置 `worker-cuda` 兩次都失敗。目前改在主機上執行 GPU Worker。要驗證 CUDA 容器時：
+1. Docker Desktop 改用 WSL2 後端，以 `%USERPROFILE%\.wslconfig` 設定記憶體上限。
+2. 先在主機下載好 CUDA 套件，建置時從本機安裝，不經過 Docker 網路。
+3. `docker run --gpus all tableforge/worker-cuda doctor` 確認看得到 GPU，再加入 Compose 跑一次 GPU 實驗。
 
 ### Mac 實機驗證（M3a 第 2 階段）
 在 Mac 上執行：
@@ -192,7 +227,8 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **M3b-3**：Docker 映像（Coordinator、CPU Worker、CUDA Worker）與 Compose 部署（進行中）。
-2. **學習效果驗證**：較長的訓練與評估設定（現在可用 GPU），確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
-3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-4. **O0–O7 對手建模**。
+1. **學習效果驗證**：用 5070 Ti 跑較長的訓練與較多評估手數，確認模型相對 Rule Bots 有顯著進步。目前第 4 輪仍輸給 Tight bot。
+2. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+3. **兩台電腦實機驗收**（需要 Tailscale）與 Mac 驗證。
+4. **CUDA Worker 容器**（需要 WSL2 後端）。
+5. **O0–O7 對手建模**。

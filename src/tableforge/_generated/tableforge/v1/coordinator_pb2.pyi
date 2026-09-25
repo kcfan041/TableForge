@@ -482,15 +482,19 @@ class DownloadArtifactRequest(_message.Message):
     DESCRIPTOR: _descriptor.Descriptor
 
     ARTIFACT_ID_FIELD_NUMBER: _builtins.int
+    ENDPOINT_FIELD_NUMBER: _builtins.int
     artifact_id: _builtins.str
+    endpoint: _builtins.str
+    """Name of a storage endpoint configured on the coordinator; empty for the default."""
     def __init__(
         self,
         *,
         artifact_id: _builtins.str = ...,
+        endpoint: _builtins.str = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["artifact_id", b"artifact_id"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["artifact_id", b"artifact_id", "endpoint", b"endpoint"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
@@ -577,17 +581,21 @@ class RequestUploadRequest(_message.Message):
 
     SHA256_FIELD_NUMBER: _builtins.int
     SIZE_BYTES_FIELD_NUMBER: _builtins.int
+    ENDPOINT_FIELD_NUMBER: _builtins.int
     sha256: _builtins.str
     size_bytes: _builtins.int
+    endpoint: _builtins.str
+    """Name of a storage endpoint configured on the coordinator; empty for the default."""
     def __init__(
         self,
         *,
         sha256: _builtins.str = ...,
         size_bytes: _builtins.int = ...,
+        endpoint: _builtins.str = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["sha256", b"sha256", "size_bytes", b"size_bytes"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["endpoint", b"endpoint", "sha256", b"sha256", "size_bytes", b"size_bytes"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 

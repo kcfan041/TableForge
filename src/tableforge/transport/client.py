@@ -86,10 +86,12 @@ class GrpcCoordinatorClient:
         sleep: Callable[[float], None] = time.sleep,
         cache_dir: Path | None = None,
         cache_max_bytes: int | None = None,
+        storage_endpoint: str = "",
     ) -> None:
         self._cache_dir = cache_dir
         self._cache_max_bytes = cache_max_bytes
         self._direct: bool | None = None
+        self._storage_endpoint = storage_endpoint
         self._stub = coordinator_pb2_grpc.CoordinatorServiceStub(channel)
         self._artifacts = coordinator_pb2_grpc.ArtifactServiceStub(channel)
         self._metadata = (("authorization", f"Bearer {session_token}"),)
@@ -281,7 +283,9 @@ class GrpcCoordinatorClient:
         return self._upload_streamed(ref, content)
 
     def _upload_direct(self, ref: common_pb2.ArtifactRef, content: bytes) -> Artifact | None:
-        request = coordinator_pb2.RequestUploadRequest(sha256=ref.sha256, size_bytes=ref.size_bytes)
+        request = coordinator_pb2.RequestUploadRequest(
+            sha256=ref.sha256, size_bytes=ref.size_bytes, endpoint=self._storage_endpoint
+        )
         response, _ = self._call(
             lambda: self._artifacts.RequestUpload(
                 request, metadata=self._metadata, timeout=self._retry.timeout
@@ -349,7 +353,9 @@ class GrpcCoordinatorClient:
         return content
 
     def download_artifact(self, artifact_id: str, cache_dir: Path) -> tuple[Artifact, Path]:
-        request = coordinator_pb2.DownloadArtifactRequest(artifact_id=artifact_id)
+        request = coordinator_pb2.DownloadArtifactRequest(
+            artifact_id=artifact_id, endpoint=self._storage_endpoint
+        )
         fetched: tuple[Artifact, bytes] | None = None
         if self._direct is not False:
             fetched = self._download_direct(request, cache_dir)

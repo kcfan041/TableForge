@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,7 @@ class RemoteCredentials:
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
+        temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
         temporary.write_text(
             json.dumps(
                 {
@@ -44,11 +45,15 @@ class RemoteCredentials:
         return create_channel(self.target, ca)
 
     def client(
-        self, cache_dir: Path | None = None, cache_max_bytes: int | None = None
+        self,
+        cache_dir: Path | None = None,
+        cache_max_bytes: int | None = None,
+        storage_endpoint: str = "",
     ) -> GrpcCoordinatorClient:
         return GrpcCoordinatorClient(
             self.channel(),
             self.session_token,
             cache_dir=cache_dir,
             cache_max_bytes=cache_max_bytes,
+            storage_endpoint=storage_endpoint,
         )

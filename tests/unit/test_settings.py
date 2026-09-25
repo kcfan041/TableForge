@@ -41,6 +41,19 @@ def test_unknown_keys_and_bad_values_are_rejected(tmp_path: Path) -> None:
         load_settings(tmp_path, environ={"TABLEFORGE_METADATA__BACKEND": "postgres"})
 
 
+def test_environment_variables_without_section_are_ignored(tmp_path: Path) -> None:
+    settings = load_settings(
+        tmp_path,
+        environ={
+            "TABLEFORGE_ROLE": "worker",
+            "TABLEFORGE_DATA_DIR": "/data",
+            "TABLEFORGE_TEST_POSTGRES_URL": "postgresql://x",
+        },
+    )
+
+    assert settings.data_dir == tmp_path
+
+
 def test_explicit_missing_config_file_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(SettingsError, match="not found"):
         load_settings(tmp_path, config_file=tmp_path / "missing.toml", environ={})
@@ -61,3 +74,16 @@ def test_redaction_hides_secrets(tmp_path: Path) -> None:
     assert "hunter2" not in redacted
     assert "s3cr3t" not in redacted
     assert "postgresql://forge:***@db:5432/tf" in redacted
+
+
+def test_invalid_storage_endpoint_list_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="artifacts.endpoints"):
+        load_settings(tmp_path, environ={"TABLEFORGE_ARTIFACTS__ENDPOINTS": "docker"})
+    settings = load_settings(
+        tmp_path,
+        environ={
+            "TABLEFORGE_ARTIFACTS__ENDPOINTS": "host=http://127.0.0.1:59000",
+            "TABLEFORGE_ARTIFACTS__ENDPOINT": "host",
+        },
+    )
+    assert settings.artifacts.endpoint == "host"

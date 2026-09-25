@@ -318,3 +318,44 @@ def test_local_store_falls_back_to_streaming(harness: Harness, tmp_path: Path) -
 
     assert path.read_bytes() == content
     assert client._direct is False  # noqa: SLF001
+
+
+@pytest.mark.s3
+def test_worker_uses_its_named_storage_endpoint(s3_harness: Harness, tmp_path: Path) -> None:
+    from urllib.parse import urlsplit
+
+    token = s3_harness.auth.create_enrollment_token(s3_harness.clock.now(), timedelta(hours=1))
+    channel = create_channel(s3_harness.target, s3_harness.ca)
+    session, _ = enroll(channel, NodeId("node-alias"), token)
+    client = GrpcCoordinatorClient(channel, session, storage_endpoint="alias")
+    content = b"via alias" * 1000
+
+    uploaded = client.upload_artifact(
+        ArtifactDescriptor(new_artifact_id(), ArtifactKind.DIAGNOSTIC, "text/plain", "1"), content
+    )
+    response = client._artifacts.RequestDownload(  # noqa: SLF001
+        coordinator_pb2.DownloadArtifactRequest(
+            artifact_id=str(uploaded.descriptor.artifact_id), endpoint="alias"
+        ),
+        metadata=client._metadata,  # noqa: SLF001
+    )
+    _, path = client.download_artifact(str(uploaded.descriptor.artifact_id), tmp_path / "c")
+
+    assert path.read_bytes() == content
+    assert urlsplit(response.transfer.url).hostname == "localhost"
+
+
+@pytest.mark.s3
+def test_unknown_storage_endpoint_is_rejected(s3_harness: Harness) -> None:
+    token = s3_harness.auth.create_enrollment_token(s3_harness.clock.now(), timedelta(hours=1))
+    channel = create_channel(s3_harness.target, s3_harness.ca)
+    session, _ = enroll(channel, NodeId("node-bad"), token)
+    client = GrpcCoordinatorClient(channel, session, storage_endpoint="nowhere")
+
+    with pytest.raises(RemoteCoordinatorError) as error:
+        client.upload_artifact(
+            ArtifactDescriptor(new_artifact_id(), ArtifactKind.DIAGNOSTIC, "text/plain", "1"),
+            b"x",
+        )
+
+    assert error.value.code == "UNKNOWN_ENDPOINT"

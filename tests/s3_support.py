@@ -67,6 +67,7 @@ def s3_store() -> Iterator[object]:
             endpoint_url=S3_ENDPOINT,
             access_key=S3_ACCESS_KEY,
             secret_key=S3_SECRET_KEY,
+            endpoints=f"alias={alias_endpoint(S3_ENDPOINT)}",
         )
     )
     yield store
@@ -76,3 +77,10 @@ def s3_store() -> Iterator[object]:
         for item in page.get("Contents", ()):
             client.delete_object(Bucket=bucket, Key=item["Key"])  # type: ignore[attr-defined]
     client.delete_bucket(Bucket=bucket)  # type: ignore[attr-defined]
+
+
+def alias_endpoint(endpoint: str) -> str:
+    """The same S3 server reached through a different host name."""
+    if "127.0.0.1" in endpoint:
+        return endpoint.replace("127.0.0.1", "localhost")
+    return endpoint.replace("localhost", "127.0.0.1")

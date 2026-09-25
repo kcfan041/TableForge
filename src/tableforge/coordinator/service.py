@@ -179,19 +179,23 @@ class CoordinatorService:
             return store  # type: ignore[return-value]
         return None
 
-    def sign_artifact_upload(self, sha256: str, size_bytes: int) -> SignedTransfer:
+    def sign_artifact_upload(
+        self, sha256: str, size_bytes: int, endpoint: str = ""
+    ) -> SignedTransfer:
         store = self._require_direct()
-        return store.sign_upload(sha256, size_bytes, self.presign_ttl)
+        return store.sign_upload(sha256, size_bytes, self.presign_ttl, endpoint)
 
     def register_artifact(
         self, descriptor: ArtifactDescriptor, sha256: str, size_bytes: int
     ) -> Artifact:
         return self._require_direct().register(descriptor, sha256, size_bytes)
 
-    def sign_artifact_download(self, artifact_id: str) -> tuple[Artifact, SignedTransfer]:
+    def sign_artifact_download(
+        self, artifact_id: str, endpoint: str = ""
+    ) -> tuple[Artifact, SignedTransfer]:
         store = self._require_direct()
         artifact = store.get(artifact_id)
-        return artifact, store.sign_download(artifact, self.presign_ttl)
+        return artifact, store.sign_download(artifact, self.presign_ttl, endpoint)
 
     def _require_direct(self) -> DirectArtifactStore:
         store = self.direct_artifacts()

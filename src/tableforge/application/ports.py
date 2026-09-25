@@ -182,7 +182,9 @@ class CheckpointRepository(Protocol):
 
 
 class AuthRepository(Protocol):
-    def create_enrollment_token(self, now: datetime, ttl: timedelta) -> str: ...
+    def create_enrollment_token(
+        self, now: datetime, ttl: timedelta, max_uses: int = 1
+    ) -> str: ...
 
     def enroll(
         self,
@@ -218,9 +220,13 @@ class ArtifactStore(Protocol):
 class DirectArtifactStore(ArtifactStore, Protocol):
     """An artifact store that workers can reach without going through the coordinator."""
 
-    def sign_upload(self, sha256: str, size_bytes: int, ttl: timedelta) -> SignedTransfer: ...
+    def sign_upload(
+        self, sha256: str, size_bytes: int, ttl: timedelta, endpoint: str = ""
+    ) -> SignedTransfer: ...
 
-    def sign_download(self, artifact: Artifact, ttl: timedelta) -> SignedTransfer: ...
+    def sign_download(
+        self, artifact: Artifact, ttl: timedelta, endpoint: str = ""
+    ) -> SignedTransfer: ...
 
     def register(self, descriptor: ArtifactDescriptor, sha256: str, size_bytes: int) -> Artifact:
         """Record metadata for an object a worker uploaded with ``sign_upload``.

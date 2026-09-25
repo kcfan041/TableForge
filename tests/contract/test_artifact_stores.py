@@ -185,3 +185,44 @@ def test_register_rejects_size_mismatch(s3_store: Any) -> None:
 
     with pytest.raises(ArtifactIntegrityError):
         s3_store.register(descriptor(), artifact.sha256, artifact.size_bytes + 1)
+
+
+@pytest.mark.s3
+def test_named_endpoint_signs_for_that_host(s3_store: Any) -> None:
+    from urllib.parse import urlsplit
+
+    from tableforge.infrastructure.s3_artifacts import UnknownEndpointError
+
+    content = b"named endpoint bytes"
+    sha256 = hashlib.sha256(content).hexdigest()
+    default = s3_store.sign_upload(sha256, len(content), timedelta(minutes=5))
+    aliased = s3_store.sign_upload(sha256, len(content), timedelta(minutes=5), "alias")
+
+    assert urlsplit(default.url).hostname != urlsplit(aliased.url).hostname
+    direct.put(aliased, content)
+    artifact = s3_store.register(descriptor(), sha256, len(content))
+    download = s3_store.sign_download(artifact, timedelta(minutes=5), "alias")
+    assert direct.get(download, sha256, len(content)) == content
+    rehosted = replace(
+        download,
+        url=download.url.replace(
+            urlsplit(download.url).netloc, urlsplit(default.url).netloc, 1
+        ),
+    )
+    assert _http(rehosted) == 403
+    assert s3_store.endpoint_names == ("alias",)
+    with pytest.raises(UnknownEndpointError):
+        s3_store.sign_download(artifact, timedelta(minutes=5), "missing")
+
+
+def test_endpoint_list_validation() -> None:
+    from tableforge.infrastructure.s3_artifacts import parse_endpoints
+
+    assert parse_endpoints(" docker=http://rustfs:9000 , host=http://127.0.0.1:59000 ") == {
+        "docker": "http://rustfs:9000",
+        "host": "http://127.0.0.1:59000",
+    }
+    assert parse_endpoints("") == {}
+    for bad in ("docker", "=http://x", "a=ftp://x", "a=http://x,a=http://y", "a b=http://x"):
+        with pytest.raises(ValueError):
+            parse_endpoints(bad)

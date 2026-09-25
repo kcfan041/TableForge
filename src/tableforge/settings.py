@@ -31,6 +31,8 @@ class ArtifactSettings:
     secret_key: str = ""
     presign_seconds: int = 900
     public_endpoint_url: str = ""
+    endpoints: str = ""
+    endpoint: str = ""
     direct_transfer: bool = True
 
 
@@ -67,6 +69,12 @@ class Settings:
             raise SettingsError(f"unknown artifact backend: {self.artifacts.backend}")
         if not 60 <= self.artifacts.presign_seconds <= 3600:
             raise SettingsError("artifacts.presign_seconds must be between 60 and 3600")
+        from tableforge.infrastructure.s3_artifacts import parse_endpoints
+
+        try:
+            parse_endpoints(self.artifacts.endpoints)
+        except ValueError as error:
+            raise SettingsError(f"artifacts.endpoints: {error}") from error
         if self.worker.lease_seconds <= 0 or self.worker.idle_seconds < 0:
             raise SettingsError("worker timing values must be positive")
         if self.worker.cache_max_bytes < 0:
@@ -110,7 +118,7 @@ def load_settings(
     env_values = {
         key.removeprefix(ENV_PREFIX).lower().replace("__", "."): value
         for key, value in environment.items()
-        if key.startswith(ENV_PREFIX)
+        if key.startswith(ENV_PREFIX) and "__" in key.removeprefix(ENV_PREFIX)
     }
     settings = _apply(settings, env_values, source="environment")
     if overrides:

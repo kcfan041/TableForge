@@ -279,6 +279,30 @@ CREATE INDEX job_attempts_node_active ON job_attempts(node_id, active);
 CREATE INDEX node_sessions_node ON node_sessions(node_id)
 """
 
+SQLITE_V3 = """
+ALTER TABLE enrollment_tokens ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS enrollment_token_uses (
+    token_hash TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    used_at TEXT NOT NULL,
+    PRIMARY KEY (token_hash, node_id)
+);
+INSERT INTO enrollment_token_uses (token_hash, node_id, used_at)
+SELECT token_hash, used_by_node, used_at FROM enrollment_tokens WHERE used_by_node IS NOT NULL
+"""
+
+POSTGRES_V3 = """
+ALTER TABLE enrollment_tokens ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE enrollment_token_uses (
+    token_hash TEXT NOT NULL REFERENCES enrollment_tokens(token_hash),
+    node_id TEXT NOT NULL,
+    used_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (token_hash, node_id)
+);
+INSERT INTO enrollment_token_uses (token_hash, node_id, used_at)
+SELECT token_hash, used_by_node, used_at FROM enrollment_tokens WHERE used_by_node IS NOT NULL
+"""
+
 _LEGACY_ATTEMPT_COLUMNS = {
     "error_code": "TEXT",
     "error_summary": "TEXT",
@@ -327,10 +351,12 @@ MIGRATIONS: dict[str, tuple[Migration, ...]] = {
     "sqlite": (
         Migration(1, "initial schema", _sqlite_v1),
         Migration(2, "query indexes", _script(SQLITE_V2)),
+        Migration(3, "multi-use enrollment tokens", _script(SQLITE_V3)),
     ),
     "postgres": (
         Migration(1, "initial schema", _script(POSTGRES_V1)),
         Migration(2, "query indexes", _script(POSTGRES_V2)),
+        Migration(3, "multi-use enrollment tokens", _script(POSTGRES_V3)),
     ),
 }
 

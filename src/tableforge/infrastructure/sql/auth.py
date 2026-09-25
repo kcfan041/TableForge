@@ -15,16 +15,25 @@ class SqlAuthRepository:
     def __init__(self, database: Database) -> None:
         self._db = database
 
-    def create_enrollment_token(self, now: datetime, ttl: timedelta) -> str:
+    def create_enrollment_token(self, now: datetime, ttl: timedelta, max_uses: int = 1) -> str:
         require_aware(now)
+        if max_uses < 1:
+            raise ValueError("max_uses must be at least 1")
+        if ttl <= timedelta(0):
+            raise ValueError("enrollment token ttl must be positive")
         token = f"{ENROLLMENT_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
         with self._db.transaction() as connection:
             connection.execute(
                 """
-                INSERT INTO enrollment_tokens (token_hash, created_at, expires_at)
-                VALUES (?, ?, ?)
+                INSERT INTO enrollment_tokens (token_hash, created_at, expires_at, max_uses)
+                VALUES (?, ?, ?, ?)
                 """,
-                (_hash(token), self._db.timestamp(now), self._db.timestamp(now + ttl)),
+                (
+                    _hash(token),
+                    self._db.timestamp(now),
+                    self._db.timestamp(now + ttl),
+                    max_uses,
+                ),
             )
         return token
 
@@ -48,12 +57,32 @@ class SqlAuthRepository:
             ).fetchone()
             if row is None or parse_timestamp(row["expires_at"]) <= now:
                 raise AuthenticationError("invalid or expired enrollment token")
-            if row["used_by_node"] is not None and row["used_by_node"] != str(node_id):
-                raise AuthenticationError("enrollment token already used")
-            connection.execute(
-                "UPDATE enrollment_tokens SET used_by_node = ?, used_at = ? WHERE token_hash = ?",
-                (str(node_id), self._db.timestamp(now), token_hash),
-            )
+            previous = connection.execute(
+                "SELECT 1 FROM enrollment_token_uses WHERE token_hash = ? AND node_id = ?",
+                (token_hash, str(node_id)),
+            ).fetchone()
+            if previous is None:
+                used = connection.execute(
+                    "SELECT COUNT(*) AS count FROM enrollment_token_uses WHERE token_hash = ?",
+                    (token_hash,),
+                ).fetchone()
+                if int(used["count"]) >= int(row["max_uses"]):
+                    raise AuthenticationError("enrollment token already used")
+                connection.execute(
+                    """
+                    INSERT INTO enrollment_token_uses (token_hash, node_id, used_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (token_hash, str(node_id), self._db.timestamp(now)),
+                )
+                if row["used_by_node"] is None:
+                    connection.execute(
+                        """
+                        UPDATE enrollment_tokens SET used_by_node = ?, used_at = ?
+                        WHERE token_hash = ?
+                        """,
+                        (str(node_id), self._db.timestamp(now), token_hash),
+                    )
             connection.execute(
                 """
                 INSERT INTO node_sessions (token_hash, node_id, created_at, expires_at)

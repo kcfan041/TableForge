@@ -151,6 +151,7 @@ access_key = "..."
 secret_key = "..."                        # 建議改用 TABLEFORGE_ARTIFACTS__SECRET_KEY
 presign_seconds = 900                     # 簽名網址有效時間，60–3600 秒
 # public_endpoint_url = "http://<Worker 看得到的位址>:9000"  # Coordinator 與 Worker 看到的位址不同時
+# endpoints = "host=http://127.0.0.1:59000"  # 額外的具名位址，Worker 以 endpoint = "host" 選用
 ```
 
 只有 Coordinator 需要金鑰；Worker 不需要任何 storage 設定。Bucket 不存在時會自動建立。
@@ -187,6 +188,63 @@ uv run tableforge worker start --remote
 
 `coordinator serve` 會在背景自動推進實驗，多台 Worker 可平行執行同一輪的 Actor Job。Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。兩台電腦必須能互相連線；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
 
+## Docker
+
+需要 Docker Desktop（或 Linux 上的 Docker Engine 與 Compose v2）。
+
+### 完整部署（PostgreSQL + S3 storage + Coordinator + CPU Workers）
+
+```
+copy docker\.env.example .env      # Linux/macOS 用 cp；然後把所有密碼改掉
+docker compose up -d --build --wait
+```
+
+- 預設啟動 2 個 CPU Worker，可在 `.env` 調整 `CPU_WORKERS`，或執行 `docker compose up -d --scale worker=4`。
+- Worker 啟動時會自動向 Coordinator 註冊，不需要手動操作。
+- 服務只對本機開放：Coordinator `127.0.0.1:7443`、metrics `127.0.0.1:9464`、storage `127.0.0.1:59000`。
+
+操作實驗時在 Coordinator 容器裡執行指令：
+
+```
+docker compose exec coordinator tableforge --data-dir /data experiment create --preset hu-nfsp-cpu-league
+docker compose exec coordinator tableforge --data-dir /data experiment start <experiment-id>
+docker compose exec coordinator tableforge --data-dir /data experiment status <experiment-id>
+```
+
+停止：`docker compose down`。加上 `-v` 會連資料一起刪除。
+
+### 最小部署（SQLite，不需要資料庫與 storage）
+
+```
+docker compose -f compose.minimal.yaml up -d --build --wait
+```
+
+### 讓 Windows 主機上的 GPU 加入
+
+這台電腦的 Docker Desktop 無法把 GPU 交給容器，所以 GPU Worker 直接在主機上執行，連到 Compose 裡的 Coordinator：
+
+```
+docker compose cp coordinator:/shared/. .tableforge-host\bundle
+uv run tableforge --data-dir .tableforge-host\gpu node enroll --coordinator localhost:7443 --bundle .tableforge-host\bundle
+```
+
+在 `.tableforge-host\gpu\tableforge.toml` 寫入：
+
+```toml
+[artifacts]
+endpoint = "host"
+```
+
+然後啟動：
+
+```
+uv run tableforge --data-dir .tableforge-host\gpu worker start --remote
+```
+
+`endpoint = "host"` 讓 Coordinator 簽發主機連得到的 storage 位址（`127.0.0.1:59000`）；容器內的 Worker 則使用 `storage:9000`。`.tableforge-host\` 內含註冊碼，已被 git 忽略。
+
+`Dockerfile` 另外提供 `worker-cuda` 映像，給支援容器 GPU 的 Linux 主機或 WSL2 後端使用：`docker build --target worker-cuda -t tableforge/worker-cuda .`，執行時加上 `--gpus all`。這台電腦尚未驗證。
+
 ## 常用指令
 
 | 指令 | 說明 |
@@ -196,7 +254,7 @@ uv run tableforge worker start --remote
 | `worker start [--remote] [--max-jobs N] [--no-gpu]` | 持續領取並執行 Job，`Ctrl+C` 停止 |
 | `worker run-once` | 只執行一個 Job |
 | `job submit-simulation/list/status/cancel` | 直接操作 Job |
-| `node init/status/enroll` | 節點註冊與狀態 |
+| `node init/status/enroll` | 節點註冊與狀態；`enroll` 可用 `--token`、`--token-file` 或 `--bundle` |
 | `node revoke <node-id>` | 在 Coordinator 上立即撤銷某個節點的所有 session |
 | `node rotate-session` | 在 Worker 上換一個新的 session，舊的立即失效 |
 | `checkpoint list/show` | 查看 NFSP checkpoint 與升級紀錄 |
@@ -205,7 +263,7 @@ uv run tableforge worker start --remote
 | `metadata migrate-schema` | 建立或升級資料表，顯示 schema 版本 |
 | `metadata copy-from-sqlite <db>` | 把 SQLite 資料搬到 PostgreSQL |
 | `artifact gc [--dry-run] [--grace-hours H]` | 刪除沒有被引用的舊 artifact |
-| `coordinator init/serve/enrollment-token` | 遠端 Coordinator；`serve --metrics-listen` 啟用 metrics |
+| `coordinator init/serve/enrollment-token` | 遠端 Coordinator；`serve --metrics-listen` 啟用 metrics；`enrollment-token --max-uses N --output <檔案>` 產生可多次使用的註冊碼 |
 
 ## 開發
 
@@ -229,5 +287,5 @@ uv run python scripts/generate_protos.py
 - GPU 只支援 NVIDIA CUDA；Apple Silicon 的 MPS 尚未支援。
 - Windows 上 GPU 記憶體也會佔用系統記憶體配額，page file 太小時可用的 batch 會變小（`doctor` 會顯示警告）。
 - 使用本機 artifact store 時，artifact 經由 Coordinator 傳送，單檔上限 1 GiB；使用 S3 則沒有這個限制。
-- Docker 映像與 Compose 部署尚未提供。
+- CUDA Worker 容器尚未在實機驗證；Windows 上請在主機執行 GPU Worker。
 - 完整清單見 [docs/status.md](docs/status.md)。

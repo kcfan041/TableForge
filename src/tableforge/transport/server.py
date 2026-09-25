@@ -23,6 +23,7 @@ from tableforge.application.ports import (
 from tableforge.coordinator.service import CoordinatorService, DirectTransferUnavailableError
 from tableforge.domain.auth import AuthenticationError
 from tableforge.domain.ids import JobId, NodeId
+from tableforge.infrastructure.s3_artifacts import UnknownEndpointError
 from tableforge.observability import COUNTERS
 from tableforge.transport import convert
 from tableforge.transport.errors import ERROR_CODES, ERROR_METADATA_KEY
@@ -357,10 +358,14 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
             return coordinator_pb2.RequestUploadResponse(direct=False)
         if self._service.artifacts.exists(request.sha256):
             return coordinator_pb2.RequestUploadResponse(direct=True, already_stored=True)
-        transfer = _guarded(
-            context,
-            lambda: self._service.sign_artifact_upload(request.sha256, request.size_bytes),
-        )
+        try:
+            transfer = self._service.sign_artifact_upload(
+                request.sha256, request.size_bytes, request.endpoint
+            )
+        except UnknownEndpointError as error:
+            _abort(context, grpc.StatusCode.INVALID_ARGUMENT, "UNKNOWN_ENDPOINT", str(error))
+        except ValueError as error:
+            _abort(context, grpc.StatusCode.INVALID_ARGUMENT, "INVALID_ARGUMENT", str(error))
         return coordinator_pb2.RequestUploadResponse(
             direct=True, transfer=convert.transfer_to_proto(transfer)
         )
@@ -392,9 +397,13 @@ class ArtifactServicer(coordinator_pb2_grpc.ArtifactServiceServicer):
         if self._service.direct_artifacts() is None:
             return coordinator_pb2.RequestDownloadResponse(direct=False)
         try:
-            artifact, transfer = self._service.sign_artifact_download(request.artifact_id)
+            artifact, transfer = self._service.sign_artifact_download(
+                request.artifact_id, request.endpoint
+            )
         except ArtifactNotFoundError as error:
             _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", str(error))
+        except UnknownEndpointError as error:
+            _abort(context, grpc.StatusCode.INVALID_ARGUMENT, "UNKNOWN_ENDPOINT", str(error))
         COUNTERS.increment(
             "tableforge_artifact_bytes_total", artifact.size_bytes, direction="direct_download"
         )

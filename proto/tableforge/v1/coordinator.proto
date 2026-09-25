@@ -126,6 +126,8 @@ message UploadArtifactResponse {
 
 message DownloadArtifactRequest {
   string artifact_id = 1;
+  // Name of a storage endpoint configured on the coordinator; empty for the default.
+  string endpoint = 2;
 }
 
 message DownloadArtifactChunk {
@@ -148,6 +150,8 @@ message SignedTransfer {
 message RequestUploadRequest {
   string sha256 = 1;
   uint64 size_bytes = 2;
+  // Name of a storage endpoint configured on the coordinator; empty for the default.
+  string endpoint = 3;
 }
 
 message RequestUploadResponse {

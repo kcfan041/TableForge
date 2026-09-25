@@ -37,9 +37,11 @@ class S3ArtifactStore:
         client: Any,
         bucket: str,
         presign_client: Any | None = None,
+        named_presign_clients: dict[str, Any] | None = None,
     ) -> None:
         self._s3 = client
         self._presign = presign_client or client
+        self._named = dict(named_presign_clients or {})
         self._bucket = bucket
 
     @classmethod
@@ -47,9 +49,23 @@ class S3ArtifactStore:
         client = _client(settings, settings.endpoint_url)
         public = settings.public_endpoint_url or settings.endpoint_url
         presign = client if public == settings.endpoint_url else _client(settings, public)
-        store = cls(client, settings.bucket, presign)
+        endpoints = parse_endpoints(settings.endpoints)
+        named = {name: _client(settings, url) for name, url in endpoints.items()}
+        store = cls(client, settings.bucket, presign, named)
         store.ensure_bucket()
         return store
+
+    @property
+    def endpoint_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._named))
+
+    def _signer(self, endpoint: str) -> Any:
+        if not endpoint:
+            return self._presign
+        try:
+            return self._named[endpoint]
+        except KeyError:
+            raise UnknownEndpointError(endpoint) from None
 
     @property
     def bucket(self) -> str:
@@ -135,13 +151,15 @@ class S3ArtifactStore:
     def exists(self, sha256: str) -> bool:
         return self._head(storage_key_for(sha256)) is not None
 
-    def sign_upload(self, sha256: str, size_bytes: int, ttl: timedelta) -> SignedTransfer:
+    def sign_upload(
+        self, sha256: str, size_bytes: int, ttl: timedelta, endpoint: str = ""
+    ) -> SignedTransfer:
         key = storage_key_for(sha256)
         if size_bytes < 0:
             raise ValueError("size_bytes cannot be negative")
         seconds = _ttl_seconds(ttl)
         checksum = _b64(sha256)
-        url = self._presign.generate_presigned_url(
+        url = self._signer(endpoint).generate_presigned_url(
             "put_object",
             Params={
                 "Bucket": self._bucket,
@@ -161,9 +179,11 @@ class S3ArtifactStore:
             expires_at=datetime.now(UTC) + timedelta(seconds=seconds),
         )
 
-    def sign_download(self, artifact: Artifact, ttl: timedelta) -> SignedTransfer:
+    def sign_download(
+        self, artifact: Artifact, ttl: timedelta, endpoint: str = ""
+    ) -> SignedTransfer:
         seconds = _ttl_seconds(ttl)
-        url = self._presign.generate_presigned_url(
+        url = self._signer(endpoint).generate_presigned_url(
             "get_object",
             Params={"Bucket": self._bucket, "Key": artifact.storage_key},
             ExpiresIn=seconds,
@@ -270,3 +290,28 @@ def _ttl_seconds(ttl: timedelta) -> int:
 def _code(error: Exception) -> str:
     response = getattr(error, "response", {}) or {}
     return str(response.get("Error", {}).get("Code", ""))
+
+
+class UnknownEndpointError(ValueError):
+    pass
+
+
+def parse_endpoints(value: str) -> dict[str, str]:
+    """Parse ``name=url,name=url`` into a mapping of named public storage endpoints."""
+    endpoints: dict[str, str] = {}
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, separator, url = item.partition("=")
+        name, url = name.strip(), url.strip()
+        if not separator or not name or not url:
+            raise ValueError(f"invalid storage endpoint entry {item!r}; expected name=url")
+        if not name.replace("-", "").replace("_", "").isalnum():
+            raise ValueError(f"invalid storage endpoint name {name!r}")
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(f"storage endpoint {name!r} must be an http(s) URL")
+        if name in endpoints:
+            raise ValueError(f"duplicate storage endpoint name {name!r}")
+        endpoints[name] = url
+    return endpoints

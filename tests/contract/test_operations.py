@@ -198,3 +198,40 @@ def test_newer_schema_is_refused(repositories: Repositories) -> None:
 
     with pytest.raises(RuntimeError, match="newer than this TableForge"):
         migrate(database)
+
+
+def test_multi_use_token_admits_distinct_nodes_up_to_limit(
+    repositories: Repositories,
+) -> None:
+    auth = repositories.auth
+    token = auth.create_enrollment_token(NOW, timedelta(hours=1), max_uses=2)
+
+    first = auth.enroll(token, NodeId("worker-1"), NOW, timedelta(days=1))
+    second = auth.enroll(token, NodeId("worker-2"), NOW, timedelta(days=1))
+    again = auth.enroll(token, NodeId("worker-1"), NOW, timedelta(days=1))
+
+    assert {auth.authenticate(item.token, NOW) for item in (first, second, again)} == {
+        NodeId("worker-1"),
+        NodeId("worker-2"),
+    }
+    with pytest.raises(AuthenticationError, match="already used"):
+        auth.enroll(token, NodeId("worker-3"), NOW, timedelta(days=1))
+    with pytest.raises(ValueError):
+        auth.create_enrollment_token(NOW, timedelta(hours=1), max_uses=0)
+
+
+def test_multi_use_token_limit_holds_under_concurrency(repositories: Repositories) -> None:
+    auth = repositories.auth
+    token = auth.create_enrollment_token(NOW, timedelta(hours=1), max_uses=3)
+
+    def enroll(index: int) -> bool:
+        try:
+            auth.enroll(token, NodeId(f"racer-{index}"), NOW, timedelta(days=1))
+            return True
+        except AuthenticationError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(enroll, range(12)))
+
+    assert sum(results) == 3

@@ -1,0 +1,43 @@
+# Smallest TableForge deployment: one coordinator with SQLite and local artifacts,
+# plus CPU workers. Artifacts stream through the coordinator.
+#
+#   docker compose -f compose.minimal.yaml up -d --build
+name: tableforge-minimal
+
+services:
+  coordinator:
+    build:
+      context: .
+      target: coordinator
+    image: tableforge/coordinator:${TABLEFORGE_TAG:-dev}
+    restart: unless-stopped
+    environment:
+      TABLEFORGE_TLS_HOSTS: coordinator,localhost,127.0.0.1
+      TABLEFORGE_ENROLLMENT_MAX_USES: ${ENROLLMENT_MAX_USES:-16}
+    volumes:
+      - coordinator-data:/data
+      - shared:/shared
+    ports:
+      - "127.0.0.1:${COORDINATOR_HOST_PORT:-7443}:7443"
+    mem_limit: 1g
+
+  worker:
+    build:
+      context: .
+      target: worker-cpu
+    image: tableforge/worker-cpu:${TABLEFORGE_TAG:-dev}
+    restart: unless-stopped
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      TABLEFORGE_COORDINATOR_ADDRESS: coordinator:7443
+    volumes:
+      - shared:/shared:ro
+    deploy:
+      replicas: ${CPU_WORKERS:-2}
+    mem_limit: 2g
+
+volumes:
+  coordinator-data:
+  shared:

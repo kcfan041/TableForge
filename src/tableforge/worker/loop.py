@@ -14,9 +14,13 @@ class EventLogger(Protocol):
     def emit(self, event: str, **fields: object) -> None: ...
 
 
+def _print_line(line: str) -> None:
+    print(line, flush=True)
+
+
 @dataclass(frozen=True, slots=True)
 class JsonLineLogger:
-    sink: Callable[[str], None] = print
+    sink: Callable[[str], None] = _print_line
     context: tuple[tuple[str, object], ...] = ()
 
     def emit(self, event: str, **fields: object) -> None:
@@ -47,6 +51,7 @@ class WorkerLoop:
         max_jobs: int | None = None,
     ) -> int:
         completed = 0
+        idle = False
         self.logger.emit("worker_started", node_id=str(self.runtime.node_id))
         while not should_stop():
             lease = self.runtime.run_once()
@@ -54,11 +59,14 @@ class WorkerLoop:
                 if self.on_idle is not None and self.on_idle():
                     self.logger.emit("experiments_advanced", node_id=str(self.runtime.node_id))
                     continue
-                self.logger.emit("worker_idle", node_id=str(self.runtime.node_id))
+                if not idle:
+                    self.logger.emit("worker_idle", node_id=str(self.runtime.node_id))
+                    idle = True
                 if max_jobs is not None:
                     break
                 self.sleep(self.idle_seconds)
                 continue
+            idle = False
             completed += 1
             job = self.runtime.coordinator.get_job(lease.job.spec.job_id)
             self.logger.emit(

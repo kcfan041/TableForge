@@ -90,6 +90,8 @@ def main() -> None:
     coordinator_serve.add_argument("--metrics-listen")
     enrollment = coordinator_subparsers.add_parser("enrollment-token")
     enrollment.add_argument("--ttl-minutes", type=int, default=60)
+    enrollment.add_argument("--max-uses", type=int, default=1)
+    enrollment.add_argument("--output", type=Path)
 
     experiment = subparsers.add_parser("experiment")
     experiment_subparsers = experiment.add_subparsers(
@@ -111,7 +113,14 @@ def main() -> None:
     node_subparsers.add_parser("status")
     node_enroll = node_subparsers.add_parser("enroll")
     node_enroll.add_argument("--coordinator", required=True)
-    node_enroll.add_argument("--token", required=True)
+    token_source = node_enroll.add_mutually_exclusive_group(required=True)
+    token_source.add_argument("--token")
+    token_source.add_argument("--token-file", type=Path)
+    token_source.add_argument(
+        "--bundle",
+        type=Path,
+        help="directory containing enrollment-token and server.crt (e.g. copied from Compose)",
+    )
     node_enroll.add_argument("--ca-file", type=Path)
     node_enroll.add_argument("--insecure", action="store_true")
     node_revoke = node_subparsers.add_parser("revoke")
@@ -186,7 +195,9 @@ def main() -> None:
     if args.command == "worker" and args.worker_command == "start" and args.remote:
         _run_worker(
             RemoteCredentials.load(settings.data_dir / "coordinator.json").client(
-                settings.data_dir / "artifact-cache", settings.worker.cache_max_bytes
+                settings.data_dir / "artifact-cache",
+                settings.worker.cache_max_bytes,
+                settings.artifacts.endpoint,
             ),
             settings,
             args.max_jobs,
@@ -478,11 +489,16 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
         material = generate_self_signed(data_dir / "tls", tuple(args.host))
         print(material.certificate_path)
     elif args.coordinator_command == "enrollment-token":
-        print(
-            auth.create_enrollment_token(
-                datetime.now(UTC), timedelta(minutes=args.ttl_minutes)
-            )
+        if args.ttl_minutes < 1 or args.max_uses < 1:
+            raise SystemExit("--ttl-minutes and --max-uses must be at least 1")
+        token = auth.create_enrollment_token(
+            datetime.now(UTC), timedelta(minutes=args.ttl_minutes), args.max_uses
         )
+        if args.output is None:
+            print(token)
+        else:
+            _write_secret(args.output, token)
+            print(args.output)
     elif args.coordinator_command == "serve":
         tls = None
         if not args.insecure:
@@ -565,14 +581,40 @@ def _metadata_command(args: argparse.Namespace, settings: Settings) -> None:
 
 def _enroll_node(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
-    if args.ca_file is None and not args.insecure:
+    ca_file: Path | None = args.ca_file
+    token_file: Path | None = args.token_file
+    if args.bundle is not None:
+        token_file = args.bundle / "enrollment-token"
+        if ca_file is None and not args.insecure:
+            ca_file = args.bundle / "server.crt"
+    if ca_file is None and not args.insecure:
         raise SystemExit("--ca-file is required unless --insecure is used")
-    ca = None if args.insecure else args.ca_file.read_text(encoding="utf-8")
+    for required in (token_file, None if args.insecure else ca_file):
+        if required is not None and not required.is_file():
+            raise SystemExit(f"file not found: {required}")
+    ca = None if args.insecure or ca_file is None else ca_file.read_text(encoding="utf-8")
+    token: str = (
+        args.token if args.token else (token_file or Path()).read_text(encoding="utf-8").strip()
+    )
+    if not token:
+        raise SystemExit("enrollment token is empty")
     node_id = NodeIdentityStore(data_dir / "node-id").load_or_create()
     credentials = RemoteCredentials(args.coordinator, "", ca)
-    session, expires_at = enroll(credentials.channel(), node_id, args.token)
+    session, expires_at = enroll(credentials.channel(), node_id, token)
     RemoteCredentials(args.coordinator, session, ca).save(data_dir / "coordinator.json")
     print(f"{node_id}\tenrolled\texpires={expires_at.isoformat()}")
+
+
+def _write_secret(path: Path, value: str) -> None:
+    import os
+    import secrets as token_secrets
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{token_secrets.token_hex(6)}.tmp")
+    temporary.write_text(value + "\n", encoding="utf-8")
+    if os.name != "nt":
+        temporary.chmod(0o600)
+    os.replace(temporary, path)
 
 
 def _local_worker(service: CoordinatorClient, settings: Settings) -> WorkerRuntime:
