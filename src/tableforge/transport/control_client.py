@@ -93,6 +93,19 @@ class RemoteControl:
     def nodes(self) -> list[control_pb2.NodeView]:
         return list(self._call(self._stub.ListNodes, control_pb2.ListNodesRequest()).nodes)
 
+    def query(self, resource: str, argument: str = "") -> Any:
+        response = self._call(
+            self._stub.Query, control_pb2.QueryRequest(resource=resource, argument=argument)
+        )
+        return json.loads(response.json)
+
+    def command(self, action: str, arguments: dict[str, Any]) -> Any:
+        response = self._call(
+            self._stub.Command,
+            control_pb2.CommandRequest(action=action, json=json.dumps(arguments)),
+        )
+        return json.loads(response.json)
+
 
 def experiment_json(view: control_pb2.ExperimentView) -> dict[str, object]:
     report: dict[str, object] = {

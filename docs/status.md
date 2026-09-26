@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：U1 單一入口 `tableforge ui`：建立或加入叢集、背景叢集服務。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：U2 `tableforge ui` 內的叢集管理（依權限顯示）、ControlService 補齊、admin 邀請碼。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -35,13 +35,13 @@
 | 6-Max | 2–6 人撲克引擎、side pot、多人 Rule Bot simulation、座位輪替評估 | 已完成 | `d64d844`；NFSP 與 League 維持兩人 |
 | W1 | Coordinator 網頁介面：HTTP API、admin 角色、網頁登入、即時更新、React 前端 | 已完成 | `0890e7e` |
 | W2 | 測試者端本機控制台 `tableforge ui`（加入、連線檢查、啟停 Worker、log） | 已完成 | `30cfc2a` |
-| U1 | 單一入口：第一次開啟選「建立／加入」，建立叢集全自動、背景叢集服務、建立者自動成為 Worker | 已完成 | 本階段 |
-| U2 | `tableforge ui` 內的叢集管理頁面（依權限顯示）、`ControlService` 補齊、admin 邀請碼 | 未開始 | 下一個 |
+| U1 | 單一入口：第一次開啟選「建立／加入」，建立叢集全自動、背景叢集服務、建立者自動成為 Worker | 已完成 | `bedb6c2` |
+| U2 | `tableforge ui` 內的叢集管理頁面（依權限顯示）、`ControlService` 補齊、admin 邀請碼 | 已完成 | 本階段 |
 | U3 | Coordinator 遠端模式共用同一套 UI 並預設關閉；文件改成只介紹 `tableforge ui` | 未開始 | U2 之後 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：444 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：448 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -359,6 +359,23 @@
   9. 停止服務並關閉 UI，沒有殘留程序。
   - 以 Edge 截圖確認第一次開啟與建立後的畫面。
 
+### U2 `tableforge ui` 內的叢集管理
+- **同一套頁面、同一份資料**：新增 `web/views.py` 的 `ClusterViews`，把總覽、節點、preset、實驗（列表與明細、模擬結果彙總）、League 矩陣、checkpoint、事件、診斷、邀請碼、操作憑證，以及建立／開始／停止實驗、產生／撤銷邀請碼、撤銷憑證與節點，都集中在一處。
+  - Coordinator 的 HTTP API 改為呼叫它（網址與回應格式不變，W1 的測試全部照舊通過）。
+  - gRPC `ControlService` 新增 `Query` 與 `Command` 兩個 RPC（proto 只新增，舊版照常運作），回傳與 HTTP API 相同的 JSON。每個資源與動作需要的角色集中定義在 `QUERY_ROLES`、`COMMAND_ROLES`，兩條路徑共用。
+- **`tableforge ui` 顯示叢集管理**：本機伺服器用這台電腦存的操作憑證，透過 gRPC 呼叫 Coordinator（`/api/cluster/...`）。建立者連自己的叢集，加入者連別人的，程式相同，只差權限。
+  - 前端在本機模式會把所有頁面的請求改走 `/api/cluster/...`，即時更新改成每 2 秒輪詢一次新事件（Coordinator 可能在另一台電腦）。
+  - 側邊欄第一項是「這台電腦」（叢集服務、Worker、連線檢查），接著依權限顯示總覽、節點、實驗、Checkpoint、事件、診斷；管理者另有「邀請與憑證」。沒有管理權限的加入者只看到「這台電腦」。
+- **邀請碼**：
+  - 一個邀請碼可以同時給「提供運算」與管理權限；加入時兩者一起生效（`tableforge ui` 的加入流程本來就同時存下兩種憑證）。
+  - 連線位址自動使用建立叢集時選的位址（憑證中第一個非本機位址），收在「進階」裡，一般不需要改。
+  - **admin 邀請碼**：畫面上必須勾選確認，有效時間最多 1 小時（網頁、gRPC、CLI `--confirm-admin` 都強制檢查）；使用時記錄 `ADMIN_INVITE_REDEEMED` 事件（邀請碼、備註、新的操作憑證 ID），事件頁看得到。
+- 驗收：
+  - 新增測試：admin 邀請碼需要確認且不超過 1 小時、使用時留下事件；gRPC `Query`/`Command` 依角色放行或拒絕（viewer 不能建立實驗、不能看邀請碼，未確認的 admin 邀請碼被拒，找不到的實驗回 NOT_FOUND）。
+  - `scripts/cluster_ui_e2e.py`：以四個真實的 `tableforge ui` 程序（建立者、成員、檢視者、代理管理者）走完 11 個步驟，約 20 秒：建立叢集並取得管理者身分 → 建立者看得到管理資料與自動帶入的位址 → 產生 Worker＋操作者、檢視者、admin 邀請碼（未確認的 admin 被拒）→ 成員加入後取得操作者身分 → 成員建立並開始 6 人實驗、由自己的 Worker 跑完 4 個 Job → 建立者看得到成員的節點、實驗與事件 → 操作者不能用管理者功能 → 檢視者只能讀 → admin 邀請碼使用時留下事件 → 建立者撤銷成員的權限後成員立即失去管理權限 → 停止服務並關閉所有 UI。
+  - 四個端對端腳本（`cluster_ui_e2e`、`create_cluster_e2e`、`local_ui_e2e`、`web_e2e`）發生失敗或逾時時，都會先停止它們啟動的程序與叢集服務再結束（先前一次失敗曾留下佔用 7443 的背景服務，已修正並以強制逾時驗證不再殘留）。
+  - 以 Edge 截圖確認建立者的「這台電腦」、總覽、邀請與憑證，成員的實驗明細，以及檢視者的實驗列表。
+
 ## 暫停中：P1 模型強度
 
 為了讓測試者先使用平台，這項工作暫停在「已找到主要瓶頸、尚未修正」的狀態。回來時從「下一步」接續。
@@ -443,7 +460,7 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **U2、U3（下一個）**：見上方總覽。U2 讓 `tableforge ui` 依權限顯示叢集管理頁面（透過 gRPC `ControlService`，加入者與建立者走同一條路），並補齊事件、診斷與管理者功能；admin 邀請碼需要再次確認、最多 1 小時有效、使用時記錄。U3 讓 Coordinator 的遠端模式共用同一套 UI 並預設關閉，文件改成只介紹 `tableforge ui`。
+1. **U3（下一個）**：Coordinator 的遠端網頁模式預設關閉，由建立者在 UI 的進階設定開啟；README 與測試者指南改寫成只介紹 `tableforge ui`，指令版移到附錄。
 2. **學習效果驗證**：見上方「暫停中：P1 模型強度」，從「下一步（回來時）」接續。多演算法同桌對戰與 NFSP 多人化都以此為前提。
 3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
 4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。

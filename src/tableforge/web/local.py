@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from tableforge.transport.control_client import ControlError, RemoteControl
 from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.diagnostics import check_connection
 from tableforge.transport.join import JoinError, OperatorCredentials, join_with_code
@@ -318,6 +319,45 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             raise HTTPException(409, "this panel cannot host a cluster")
         return context.supervisor
 
+    def control() -> RemoteControl:
+        try:
+            credentials = OperatorCredentials.load(context.operator_dir)
+        except (JoinError, OSError, KeyError, ValueError) as error:
+            raise HTTPException(403, "this computer has no cluster management access") from error
+        return RemoteControl(credentials, timeout=20.0)
+
+    def remote(call: Callable[[RemoteControl], Any]) -> Any:
+        try:
+            return call(control())
+        except ControlError as error:
+            raise HTTPException(_http_status(error.code), str(error)) from error
+
+    @app.get("/api/cluster/session")
+    def cluster_session() -> dict[str, object]:
+        me = remote(lambda client: client.whoami())
+        return {
+            "operator_id": me.operator_id,
+            "role": me.role,
+            "label": me.label,
+            "cluster_id": me.cluster_id,
+            "csrf_token": None,
+        }
+
+    @app.get("/api/cluster/query/{resource}")
+    def cluster_query(resource: str, argument: str = "") -> Any:
+        return remote(lambda client: client.query(resource, argument))
+
+    @app.post("/api/cluster/command/{action}")
+    async def cluster_command(action: str, request: Request) -> Any:
+        body = await request.body()
+        try:
+            arguments = json.loads(body or b"{}")
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "arguments must be JSON") from error
+        if not isinstance(arguments, dict):
+            raise HTTPException(400, "arguments must be an object")
+        return await asyncio.to_thread(remote, lambda client: client.command(action, arguments))
+
     @app.get("/api/status")
     def get_status() -> dict[str, object]:
         return status()
@@ -428,6 +468,21 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             return HTMLResponse(html)
 
     return app
+
+
+def _http_status(code: str) -> int:
+    if code.startswith("HTTP_") and code[5:].isdigit():
+        return int(code[5:])
+    return {
+        "UNAUTHENTICATED": 401,
+        "ROLE_REQUIRED": 403,
+        "PERMISSION_DENIED": 403,
+        "NOT_FOUND": 404,
+        "CONFLICT": 409,
+        "INVALID_STATE": 409,
+        "UNAVAILABLE": 503,
+        "DEADLINE_EXCEEDED": 504,
+    }.get(code, 502)
 
 
 def wait_until_stopped(manager: WorkerManager, should_stop: Callable[[], bool]) -> None:

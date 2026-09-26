@@ -5,8 +5,8 @@ package tableforge.v1;
 import "google/protobuf/timestamp.proto";
 
 // Remote control plane for operators. Authenticated with an operator credential, never a
-// node session. Roles: viewer (read) and operator (read + create/start/stop).
-// Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+// node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+// (operator + invites and revocation). GC, migrations and certificates stay host-only.
 service ControlService {
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
   rpc ListPresets(ListPresetsRequest) returns (ListPresetsResponse);
@@ -18,6 +18,29 @@ service ControlService {
   rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
   rpc GetLeagueMatrix(ExperimentRequest) returns (LeagueMatrixView);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  // Everything below returns a JSON document with the same shape as the coordinator's
+  // HTTP API, so one web UI can be served either by the coordinator or by `tableforge ui`.
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc Command(CommandRequest) returns (QueryResponse);
+}
+
+// A read of the cluster state. `resource` is one of: overview, nodes, presets,
+// experiments, experiment, matrix, checkpoints, events, diagnostics, invites, operators.
+// `argument` is the experiment id for experiment/matrix and the limit for events.
+message QueryRequest {
+  string resource = 1;
+  string argument = 2;
+}
+
+message QueryResponse {
+  string json = 1;
+}
+
+// A change. `action` is one of: create_experiment, start_experiment, stop_experiment,
+// create_invite, revoke_invite, revoke_operator, revoke_node. `json` holds the arguments.
+message CommandRequest {
+  string action = 1;
+  string json = 2;
 }
 
 message WhoAmIRequest {}

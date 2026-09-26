@@ -27,8 +27,8 @@ if _version_not_supported:
 
 class ControlServiceStub:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read) and operator (read + create/start/stop).
-    Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+    (operator + invites and revocation). GC, migrations and certificates stay host-only.
     """
 
     def __init__(self, channel):
@@ -87,12 +87,22 @@ class ControlServiceStub:
                 request_serializer=tableforge_dot_v1_dot_control__pb2.ListNodesRequest.SerializeToString,
                 response_deserializer=tableforge_dot_v1_dot_control__pb2.ListNodesResponse.FromString,
                 _registered_method=True)
+        self.Query = channel.unary_unary(
+                '/tableforge.v1.ControlService/Query',
+                request_serializer=tableforge_dot_v1_dot_control__pb2.QueryRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_control__pb2.QueryResponse.FromString,
+                _registered_method=True)
+        self.Command = channel.unary_unary(
+                '/tableforge.v1.ControlService/Command',
+                request_serializer=tableforge_dot_v1_dot_control__pb2.CommandRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_control__pb2.QueryResponse.FromString,
+                _registered_method=True)
 
 
 class ControlServiceServicer:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read) and operator (read + create/start/stop).
-    Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+    (operator + invites and revocation). GC, migrations and certificates stay host-only.
     """
 
     def WhoAmI(self, request, context):
@@ -155,6 +165,20 @@ class ControlServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Query(self, request, context):
+        """Everything below returns a JSON document with the same shape as the coordinator's
+        HTTP API, so one web UI can be served either by the coordinator or by `tableforge ui`.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Command(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ControlServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -208,6 +232,16 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     request_deserializer=tableforge_dot_v1_dot_control__pb2.ListNodesRequest.FromString,
                     response_serializer=tableforge_dot_v1_dot_control__pb2.ListNodesResponse.SerializeToString,
             ),
+            'Query': grpc.unary_unary_rpc_method_handler(
+                    servicer.Query,
+                    request_deserializer=tableforge_dot_v1_dot_control__pb2.QueryRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_control__pb2.QueryResponse.SerializeToString,
+            ),
+            'Command': grpc.unary_unary_rpc_method_handler(
+                    servicer.Command,
+                    request_deserializer=tableforge_dot_v1_dot_control__pb2.CommandRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_control__pb2.QueryResponse.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'tableforge.v1.ControlService', rpc_method_handlers)
@@ -218,8 +252,8 @@ def add_ControlServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class ControlService:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read) and operator (read + create/start/stop).
-    Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+    (operator + invites and revocation). GC, migrations and certificates stay host-only.
     """
 
     @staticmethod
@@ -482,6 +516,60 @@ class ControlService:
             '/tableforge.v1.ControlService/ListNodes',
             tableforge_dot_v1_dot_control__pb2.ListNodesRequest.SerializeToString,
             tableforge_dot_v1_dot_control__pb2.ListNodesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Query(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.ControlService/Query',
+            tableforge_dot_v1_dot_control__pb2.QueryRequest.SerializeToString,
+            tableforge_dot_v1_dot_control__pb2.QueryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Command(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.ControlService/Command',
+            tableforge_dot_v1_dot_control__pb2.CommandRequest.SerializeToString,
+            tableforge_dot_v1_dot_control__pb2.QueryResponse.FromString,
             options,
             channel_credentials,
             insecure,

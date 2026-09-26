@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { api, type Session } from "../api";
+import { Shell } from "../App";
 import { Card, StatusBadge } from "../components";
 import { useI18n, type Locale, type MessageKey } from "../i18n";
 import { local, type DoctorReport, type LocalStatus, type LogLine, type WorkerView } from "./api";
@@ -271,78 +273,130 @@ function Workers({ status, refresh }: { status: LocalStatus; refresh: () => void
   );
 }
 
-export function LocalApp() {
-  const { t, locale, setLocale, formatDate } = useI18n();
-  const [status, error, refresh] = usePolling(local.status, 2000);
 
+function MachinePage({ status, refresh }: { status: LocalStatus; refresh: () => void }) {
+  const { t, formatDate } = useI18n();
   return (
-    <main className="local">
+    <section className="page">
       <header className="page-header">
-        <h1>{t("local.title")}</h1>
-        <select aria-label="language" value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
-          <option value="zh-Hant">繁體中文</option>
-          <option value="en">English</option>
-        </select>
+        <h1>{t("nav.machine")}</h1>
       </header>
-      {error ? <p className="error">{t("local.panelError", { message: error })}</p> : null}
-      {status === null ? (
+      <Card title={t("local.thisMachine")}>
+        <dl className="facts">
+          <dt>{t("local.cluster")}</dt>
+          <dd>
+            {status.node ? (
+              <>
+                <StatusBadge status="joined" />{" "}
+                {status.hosting.hosted ? t("local.clusterOwn") : t("local.clusterOther")}
+                <details className="small muted">
+                  <summary>{t("local.details")}</summary>
+                  <div>
+                    {t("local.detailCluster")}: <code>{status.node.cluster_id}</code>
+                  </div>
+                  <div>
+                    {t("local.detailCoordinator")}: <code>{status.node.coordinator}</code>
+                  </div>
+                  {status.node.session_expires_at ? (
+                    <div>
+                      {t("local.sessionExpires", { date: formatDate(status.node.session_expires_at) })}
+                    </div>
+                  ) : null}
+                  <div>
+                    {t("local.dataDir")}: <code className="wrap">{status.data_dir}</code>
+                  </div>
+                  <div>TableForge {status.version}</div>
+                </details>
+              </>
+            ) : (
+              <span className="muted">
+                {status.operator ? t("local.managementOnly") : t("local.notJoined")}
+              </span>
+            )}
+          </dd>
+          <dt>{t("local.webAccess")}</dt>
+          <dd>
+            {status.operator
+              ? t("local.webAccessRole", { role: t(`role.${status.operator.role}` as MessageKey) })
+              : t("local.webAccessNone")}
+          </dd>
+        </dl>
+      </Card>
+      {status.hosting.hosted ? <ClusterService status={status} refresh={refresh} /> : null}
+      {status.joined ? (
+        <>
+          <Workers status={status} refresh={refresh} />
+          <Doctor />
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+export function LocalApp() {
+  const { t, locale, setLocale } = useI18n();
+  const [status, error, refresh] = usePolling(local.status, 2000);
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionPending, setSessionPending] = useState(true);
+  const operatorKey = status?.operator ? `${status.operator.cluster_id}:${status.operator.role}` : "";
+  const serviceUp = status ? !status.hosting.hosted || Boolean(status.hosting.running) : false;
+
+  useEffect(() => {
+    if (status === null) return;
+    if (!operatorKey || !serviceUp) {
+      setSession(null);
+      setSessionPending(false);
+      return;
+    }
+    let cancelled = false;
+    setSessionPending(true);
+    api
+      .session()
+      .then((value) => {
+        if (!cancelled) setSession(value);
+      })
+      .catch(() => {
+        if (!cancelled) setSession(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status === null, operatorKey, serviceUp]);
+
+  if (status === null) {
+    return (
+      <main className="local">
+        {error ? <p className="error">{t("local.panelError", { message: error })}</p> : null}
         <p className="muted">{t("common.loading")}</p>
-      ) : (
-        <div className="page">
-          {status.joined || status.hosting.hosted ? (
-            <Card title={t("local.thisMachine")}>
-              <dl className="facts">
-                <dt>{t("local.cluster")}</dt>
-                <dd>
-                  {status.node ? (
-                    <>
-                      <StatusBadge status="joined" />{" "}
-                      {status.hosting.hosted ? t("local.clusterOwn") : t("local.clusterOther")}
-                      <details className="small muted">
-                        <summary>{t("local.details")}</summary>
-                        <div>
-                          {t("local.detailCluster")}: <code>{status.node.cluster_id}</code>
-                        </div>
-                        <div>
-                          {t("local.detailCoordinator")}: <code>{status.node.coordinator}</code>
-                        </div>
-                        {status.node.session_expires_at ? (
-                          <div>
-                            {t("local.sessionExpires", { date: formatDate(status.node.session_expires_at) })}
-                          </div>
-                        ) : null}
-                        <div>
-                          {t("local.dataDir")}: <code className="wrap">{status.data_dir}</code>
-                        </div>
-                        <div>TableForge {status.version}</div>
-                      </details>
-                    </>
-                  ) : (
-                    <span className="muted">{t("local.notJoined")}</span>
-                  )}
-                </dd>
-                <dt>{t("local.webAccess")}</dt>
-                <dd>
-                  {status.operator
-                    ? t("local.webAccessRole", {
-                        role: t(`role.${status.operator.role}` as MessageKey),
-                      })
-                    : t("local.webAccessNone")}
-                </dd>
-              </dl>
-            </Card>
-          ) : null}
-          {status.hosting.hosted ? <ClusterService status={status} refresh={refresh} /> : null}
-          {status.joined ? (
-            <>
-              <Workers status={status} refresh={refresh} />
-              <Doctor />
-            </>
-          ) : status.hosting.hosted ? null : (
-            <Setup onDone={refresh} />
-          )}
-        </div>
-      )}
-    </main>
+      </main>
+    );
+  }
+  if (!status.joined && !status.hosting.hosted && !status.operator) {
+    return (
+      <main className="local">
+        <header className="page-header">
+          <h1>{t("local.title")}</h1>
+          <select aria-label="language" value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+            <option value="zh-Hant">繁體中文</option>
+            <option value="en">English</option>
+          </select>
+        </header>
+        {error ? <p className="error">{t("local.panelError", { message: error })}</p> : null}
+        <Setup onDone={refresh} />
+      </main>
+    );
+  }
+  return (
+    <>
+      {error ? <p className="error banner">{t("local.panelError", { message: error })}</p> : null}
+      <Shell
+        session={session}
+        sessionPending={sessionPending}
+        machinePage={<MachinePage status={status} refresh={refresh} />}
+      />
+    </>
   );
 }

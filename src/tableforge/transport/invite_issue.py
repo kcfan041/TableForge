@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from tableforge.application.ports import AuthRepository
-from tableforge.domain.auth import Invite, InviteScope
+from tableforge.domain.auth import AdminInviteError, Invite, InviteScope, check_invite_request
 from tableforge.settings import Settings
 from tableforge.transport.invite import InviteCode
 from tableforge.transport.tls import TlsMaterial, covers
@@ -35,12 +35,17 @@ def issue_invite(
     ttl: timedelta,
     label: str,
     now: datetime,
+    confirm_admin: bool = False,
 ) -> IssuedInvite:
-    """Create a single-use invite code; shared by the CLI and the web API."""
+    """Create a single-use invite code; shared by the CLI, the web API and ControlService."""
     from tableforge.infrastructure.s3_artifacts import parse_endpoints
 
     if ttl <= timedelta(0):
         raise InviteIssueError("the invite lifetime must be positive")
+    try:
+        check_invite_request(scope, ttl, confirm_admin)
+    except AdminInviteError as error:
+        raise InviteIssueError(str(error)) from error
     material = coordinator_tls(settings)
     if not material.certificate_path.is_file():
         raise InviteIssueError(

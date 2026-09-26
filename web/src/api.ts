@@ -142,6 +142,7 @@ export interface Diagnostics {
   node_ttl_seconds: number;
   certificate: { present: boolean; hosts?: string[]; fingerprint?: string };
   unpublished_events: number;
+  advertised_address?: string;
 }
 
 export interface InviteView {
@@ -184,6 +185,16 @@ export class ApiError extends Error {
 let csrfToken: string | null = null;
 let onUnauthorized: () => void = () => undefined;
 
+// The same pages run in two places: served by the coordinator ("coordinator" mode, cookie
+// session) or inside `tableforge ui` ("local" mode). In local mode the local server holds
+// this machine's operator credential and forwards every call to the coordinator over
+// gRPC, so the page authenticates to the local server with its per-process token only.
+const localToken =
+  typeof document === "undefined"
+    ? ""
+    : (document.querySelector<HTMLMetaElement>('meta[name="tableforge-ui-token"]')?.content ?? "");
+export const localMode = localToken !== "";
+
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
@@ -196,6 +207,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  if (localMode) headers["X-TableForge-UI"] = localToken;
   const response = await fetch(path, {
     method,
     headers,
@@ -215,7 +227,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
-export const api = {
+export interface InviteRequest {
+  address?: string;
+  node: boolean;
+  role: Role | null;
+  ttl_hours: number;
+  label: string;
+  confirm_admin?: boolean;
+}
+
+function query<T>(resource: string, argument = ""): Promise<T> {
+  const suffix = argument ? `?argument=${encodeURIComponent(argument)}` : "";
+  return request<T>("GET", `/api/cluster/query/${resource}${suffix}`);
+}
+
+function command<T>(action: string, body: object): Promise<T> {
+  return request<T>("POST", `/api/cluster/command/${action}`, body);
+}
+
+const coordinatorApi = {
   session: () => request<Session>("GET", "/api/session"),
   login: (credential: string) => request<Session>("POST", "/api/session", { credential }),
   logout: () => request<{ ok: boolean }>("DELETE", "/api/session"),
@@ -235,15 +265,12 @@ export const api = {
     request<Matrix>("GET", `/api/experiments/${encodeURIComponent(id)}/matrix`),
   checkpoints: () => request<CheckpointView[]>("GET", "/api/checkpoints"),
   events: (limit = 200) => request<DomainEvent[]>("GET", `/api/events?limit=${limit}`),
+  eventsAfter: (after: number) =>
+    Promise.reject<{ latest: number; events: DomainEvent[] }>(new Error(`not used (${after})`)),
   diagnostics: () => request<Diagnostics>("GET", "/api/diagnostics"),
   invites: () => request<InviteView[]>("GET", "/api/admin/invites"),
-  createInvite: (body: {
-    address: string;
-    node: boolean;
-    role: Role | null;
-    ttl_hours: number;
-    label: string;
-  }) => request<CreatedInvite>("POST", "/api/admin/invites", body),
+  createInvite: (body: InviteRequest) =>
+    request<CreatedInvite>("POST", "/api/admin/invites", body),
   revokeInvite: (id: string) =>
     request<{ ok: boolean }>("DELETE", `/api/admin/invites/${encodeURIComponent(id)}`),
   operators: () => request<OperatorView[]>("GET", "/api/admin/operators"),
@@ -255,3 +282,31 @@ export const api = {
       `/api/admin/nodes/${encodeURIComponent(id)}/revoke`,
     ),
 };
+
+const localApi: typeof coordinatorApi = {
+  session: () => request<Session>("GET", "/api/cluster/session"),
+  login: () => Promise.reject(new ApiError(400, "not used in local mode")),
+  logout: () => Promise.resolve({ ok: true }),
+  overview: () => query<Overview>("overview"),
+  nodes: () => query<NodeView[]>("nodes"),
+  presets: () => query<Preset[]>("presets"),
+  experiments: () => query<ExperimentSummary[]>("experiments"),
+  experiment: (id) => query<ExperimentDetail>("experiment", id),
+  createExperiment: (preset) => command<ExperimentSummary>("create_experiment", { preset }),
+  startExperiment: (id) => command<ExperimentSummary>("start_experiment", { experiment_id: id }),
+  stopExperiment: (id) => command<ExperimentSummary>("stop_experiment", { experiment_id: id }),
+  matrix: (id) => query<Matrix>("matrix", id),
+  checkpoints: () => query<CheckpointView[]>("checkpoints"),
+  events: (limit = 200) => query<DomainEvent[]>("events", String(limit)),
+  eventsAfter: (after) =>
+    query<{ latest: number; events: DomainEvent[] }>("events_after", String(after)),
+  diagnostics: () => query<Diagnostics>("diagnostics"),
+  invites: () => query<InviteView[]>("invites"),
+  createInvite: (body) => command<CreatedInvite>("create_invite", body),
+  revokeInvite: (id) => command<{ ok: boolean }>("revoke_invite", { invite_id: id }),
+  operators: () => query<OperatorView[]>("operators"),
+  revokeOperator: (id) => command<{ ok: boolean }>("revoke_operator", { operator_id: id }),
+  revokeNode: (id) => command<{ revoked_sessions: number }>("revoke_node", { node_id: id }),
+};
+
+export const api = localMode ? localApi : coordinatorApi;

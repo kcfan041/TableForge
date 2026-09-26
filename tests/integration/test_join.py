@@ -10,7 +10,7 @@ import pytest
 
 from tableforge._generated.tableforge.v1 import coordinator_pb2
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
-from tableforge.composition import Repositories, repositories_for
+from tableforge.composition import Repositories, Services, repositories_for
 from tableforge.coordinator.experiments import ExperimentService
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.auth import InviteScope, OperatorRole
@@ -18,6 +18,7 @@ from tableforge.domain.capabilities import NodeCapability, RuntimeCapability, St
 from tableforge.domain.ids import NodeId
 from tableforge.infrastructure.local_artifacts import LocalArtifactStore
 from tableforge.infrastructure.sql import SQLiteDatabase
+from tableforge.settings import Settings
 from tableforge.transport.control import ControlServicer
 from tableforge.transport.control_client import ControlError, RemoteControl
 from tableforge.transport.credentials import RemoteCredentials
@@ -30,6 +31,7 @@ from tableforge.transport.join import (
 )
 from tableforge.transport.server import RunningServer, ServerConfig, start_server
 from tableforge.transport.tls import TlsMaterial, generate_self_signed
+from tableforge.web.views import ClusterViews
 from tableforge.worker.runtime import WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
@@ -74,6 +76,9 @@ def cluster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Cluster
     experiments = ExperimentService(repositories.experiments, service, repositories.checkpoints)
     tls = generate_self_signed(tmp_path / "tls", ())
     clock = Clock()
+    views = ClusterViews(
+        Services(Settings(data_dir=tmp_path), repositories, service, experiments), clock
+    )
     server = start_server(
         service,
         repositories.auth,
@@ -83,7 +88,9 @@ def cluster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Cluster
         config=ServerConfig(
             storage_endpoints=(("unreachable", "http://127.0.0.1:9"), ("", "http://localhost:1"))
         ),
-        control=ControlServicer(experiments, repositories.checkpoints, repositories.auth, clock),
+        control=ControlServicer(
+            experiments, repositories.checkpoints, repositories.auth, clock
+        ).with_views(views),
     )
     try:
         yield Cluster(repositories, service, tls, server, f"127.0.0.1:{server.port}", tmp_path)
@@ -149,6 +156,64 @@ def test_join_node_and_operator_then_work_and_control(cluster: Cluster) -> None:
     assert provenance[0].worker_id == started.worker_id
     assert any(view.node_id == "node-a" for view in control.nodes())
     assert control.get(experiment.experiment_id).job_counts["succeeded"] == 1
+
+
+def test_cluster_documents_over_grpc_follow_roles(cluster: Cluster) -> None:
+    def operator(role: OperatorRole, name: str) -> RemoteControl:
+        code = cluster.invite(InviteScope(node=False, role=role))
+        join(code, None, cluster.tmp / name, cluster.tmp / f"operators-{name}")
+        return RemoteControl(OperatorCredentials.load(cluster.tmp / f"operators-{name}"))
+
+    viewer = operator(OperatorRole.VIEWER, "viewer")
+    admin = RemoteControl(
+        OperatorCredentials(
+            cluster_id=str(cluster.repositories.auth.cluster_id(datetime.now(UTC))),
+            address=cluster.address,
+            ca_certificate=cluster.tls.certificate_path.read_text(encoding="utf-8"),
+            operator_id="",
+            token=cluster.repositories.auth.issue_operator(
+                OperatorRole.ADMIN, "root", datetime.now(UTC), timedelta(hours=1)
+            ).token,
+            role="admin",
+        )
+    )
+
+    overview = viewer.query("overview")
+    assert overview["nodes"] == {"total": 0, "online": 0}
+    assert any(item["key"] == "6max-rule-smoke" for item in viewer.query("presets"))
+    with pytest.raises(ControlError) as denied:
+        viewer.command("create_experiment", {"preset": "hu-rule-smoke"})
+    assert denied.value.code == "ROLE_REQUIRED"
+    with pytest.raises(ControlError):
+        viewer.query("invites")
+
+    created = admin.command("create_experiment", {"preset": "6max-rule-smoke"})
+    assert created["players"] == 6
+    assert (
+        admin.command("start_experiment", {"experiment_id": created["experiment_id"]})["status"]
+        == "running"
+    )
+    detail = viewer.query("experiment", created["experiment_id"])
+    assert detail["job_counts"] == {"queued": 4}
+    assert viewer.query("matrix", created["experiment_id"]) == {
+        "available": False,
+        "reason": "not_league",
+    }
+    assert any(event["type"] == "EXPERIMENT_RUNNING" for event in viewer.query("events", "50"))
+
+    invite = admin.command(
+        "create_invite", {"node": True, "label": "friend", "address": cluster.address}
+    )
+    assert InviteCode.decode(invite["invite"]).address == cluster.address
+    assert [item["label"] for item in admin.query("invites")].count("friend") == 1
+    with pytest.raises(ControlError) as unconfirmed:
+        admin.command("create_invite", {"role": "admin", "ttl_hours": 1})
+    assert "confirm" in str(unconfirmed.value)
+    with pytest.raises(ControlError) as missing:
+        viewer.query("experiment", "01a0dd5a-0000-7000-8000-000000000000")
+    assert missing.value.code in ("NOT_FOUND", "HTTP_404")
+    with pytest.raises(ControlError):
+        admin.query("no-such-resource")
 
 
 def test_one_node_runs_several_worker_slots(cluster: Cluster) -> None:

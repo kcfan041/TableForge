@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { DomainEvent } from "./api";
+import { api, localMode, type DomainEvent } from "./api";
 
 interface Live {
   connected: boolean;
@@ -26,6 +26,34 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const lastSequence = useRef(-1);
 
   useEffect(() => {
+    if (localMode) {
+      // Inside `tableforge ui` the coordinator may be on another machine; poll it through
+      // the local server instead of holding a stream open.
+      let cancelled = false;
+      let timer: number | undefined;
+      const poll = async () => {
+        try {
+          const result = await api.eventsAfter(lastSequence.current);
+          if (cancelled) return;
+          setConnected(true);
+          if (lastSequence.current < 0) {
+            lastSequence.current = result.latest;
+          } else if (result.events.length > 0) {
+            lastSequence.current = result.events[result.events.length - 1]!.sequence;
+            setLatest((previous) => [...result.events.slice().reverse(), ...previous].slice(0, 50));
+            setTick((value) => value + 1);
+          }
+        } catch {
+          if (!cancelled) setConnected(false);
+        }
+        if (!cancelled) timer = window.setTimeout(() => void poll(), 2000);
+      };
+      void poll();
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timer);
+      };
+    }
     let source: EventSource | null = null;
     let retry: number | undefined;
     let closed = false;

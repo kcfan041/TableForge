@@ -16,7 +16,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -29,10 +28,21 @@ from tableforge.transport.control_client import RemoteControl  # noqa: E402
 from tableforge.transport.join import OperatorCredentials  # noqa: E402
 from tableforge.web.cluster import Layout, ServiceConfig, port_open, process_alive  # noqa: E402
 
+STARTED_UIS: list[subprocess.Popen[str]] = []
+STARTED_HOMES: list[Path] = []
+
+
+def cleanup_started() -> None:
+    kill_everything(STARTED_UIS, STARTED_HOMES)
+
+
+local_ui_e2e.CLEANUPS.append(cleanup_started)
+
 
 def start_ui(
     home: Path, port: int, environment: dict[str, str]
 ) -> tuple[subprocess.Popen[str], Panel]:
+    STARTED_HOMES.append(home)
     ui = subprocess.Popen(
         [
             sys.executable,
@@ -53,6 +63,7 @@ def start_ui(
         env=environment,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
     )
+    STARTED_UIS.append(ui)
     panel = Panel(port)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -65,6 +76,27 @@ def start_ui(
             time.sleep(0.3)
     fail("ui did not come up")
     raise AssertionError
+
+
+def kill_everything(uis: list[subprocess.Popen[str]], homes: list[Path]) -> None:
+    """Kill leftover UIs and any background cluster service they started."""
+    for ui in uis:
+        if ui.poll() is None:
+            ui.kill()
+    for home in homes:
+        service = Layout(home).service_file
+        if not service.is_file():
+            continue
+        pid = ServiceConfig.load(service).pid
+        if process_alive(pid):
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"]
+                if sys.platform == "win32"
+                else ["kill", "-9", str(pid)],
+                capture_output=True,
+                check=False,
+            )
+    time.sleep(0.5)
 
 
 def close_ui(ui: subprocess.Popen[str]) -> str:
@@ -82,12 +114,7 @@ def close_ui(ui: subprocess.Popen[str]) -> str:
 
 def main() -> int:
     timeout = float(sys.argv[sys.argv.index("--timeout") + 1]) if "--timeout" in sys.argv else 300
-    timer = threading.Timer(
-        timeout,
-        lambda: (print(f"[FAIL] timed out during: {local_ui_e2e.STEP}", flush=True), os._exit(2)),
-    )
-    timer.daemon = True
-    timer.start()
+    local_ui_e2e.watchdog(timeout)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="tableforge-create-e2e-") as directory:
         home = Path(directory) / "home"
@@ -182,23 +209,10 @@ def main() -> int:
             expect(not process_alive(new_pid), "service still running")
             ok()
         finally:
-            if ui is not None and ui.poll() is None:
-                ui.kill()
-            config = layout.service_file
-            if config.is_file():
-                leftover = ServiceConfig.load(config).pid
-                if process_alive(leftover):
-                    subprocess.run(
-                        ["taskkill", "/PID", str(leftover), "/T", "/F"]
-                        if sys.platform == "win32"
-                        else ["kill", "-9", str(leftover)],
-                        capture_output=True,
-                        check=False,
-                    )
-                    time.sleep(1)
+            cleanup_started()
     print(f"all create-cluster checks passed in {time.monotonic() - started:.1f}s", flush=True)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(local_ui_e2e.run(main))

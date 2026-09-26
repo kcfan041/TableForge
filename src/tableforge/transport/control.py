@@ -22,6 +22,7 @@ from tableforge.domain.experiments import BUILTIN_PRESETS, Experiment
 from tableforge.domain.ids import AgentId, ExperimentId
 from tableforge.transport import convert
 from tableforge.transport.errors import ERROR_METADATA_KEY
+from tableforge.web.views import COMMAND_ROLES, QUERY_ROLES, ClusterViews, ViewError
 
 T = TypeVar("T")
 
@@ -52,6 +53,12 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
         self._checkpoints = checkpoints
         self._auth = auth
         self._clock = clock
+        self._views: ClusterViews | None = None
+
+    def with_views(self, views: ClusterViews) -> ControlServicer:
+        """Enable ``Query``/``Command`` (the full cluster documents used by the web UI)."""
+        self._views = views
+        return self
 
     def _operator(self, context: grpc.ServicerContext, required: OperatorRole) -> OperatorIdentity:
         header = dict(context.invocation_metadata()).get("authorization", "")
@@ -200,6 +207,61 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
         return control_pb2.LeagueMatrixView(
             available=True, matrix_json=json.dumps(encoded, sort_keys=True)
         )
+
+    def Query(
+        self, request: control_pb2.QueryRequest, context: grpc.ServicerContext
+    ) -> control_pb2.QueryResponse:
+        views = self._require_views(context)
+        required = QUERY_ROLES.get(request.resource)
+        if required is None:
+            _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", "unknown resource")
+        identity = self._operator(context, required)
+        result = self._documents(
+            context, lambda: views.query(request.resource, request.argument, identity)
+        )
+        return control_pb2.QueryResponse(json=json.dumps(result, sort_keys=True))
+
+    def Command(
+        self, request: control_pb2.CommandRequest, context: grpc.ServicerContext
+    ) -> control_pb2.QueryResponse:
+        views = self._require_views(context)
+        required = COMMAND_ROLES.get(request.action)
+        if required is None:
+            _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", "unknown action")
+        identity = self._operator(context, required)
+        try:
+            arguments = json.loads(request.json or "{}")
+        except json.JSONDecodeError:
+            _abort(context, grpc.StatusCode.INVALID_ARGUMENT, "INVALID", "arguments are not JSON")
+        if not isinstance(arguments, dict):
+            _abort(
+                context, grpc.StatusCode.INVALID_ARGUMENT, "INVALID", "arguments must be an object"
+            )
+        result = self._documents(
+            context, lambda: views.command(request.action, arguments, identity)
+        )
+        return control_pb2.QueryResponse(json=json.dumps(result, sort_keys=True))
+
+    def _require_views(self, context: grpc.ServicerContext) -> ClusterViews:
+        if self._views is None:
+            _abort(
+                context,
+                grpc.StatusCode.UNIMPLEMENTED,
+                "UNIMPLEMENTED",
+                "this coordinator does not serve cluster documents",
+            )
+        return self._views
+
+    def _documents(self, context: grpc.ServicerContext, operation: Callable[[], T]) -> T:
+        try:
+            return self._run(context, operation)
+        except ViewError as error:
+            status = {
+                400: grpc.StatusCode.INVALID_ARGUMENT,
+                403: grpc.StatusCode.PERMISSION_DENIED,
+                404: grpc.StatusCode.NOT_FOUND,
+            }.get(error.status, grpc.StatusCode.FAILED_PRECONDITION)
+            _abort(context, status, f"HTTP_{error.status}", str(error))
 
     def ListNodes(
         self, request: control_pb2.ListNodesRequest, context: grpc.ServicerContext

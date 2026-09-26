@@ -1,5 +1,6 @@
 export const zhHant = {
   "app.title": "TableForge",
+  "nav.machine": "這台電腦",
   "nav.overview": "總覽",
   "nav.nodes": "節點",
   "nav.experiments": "實驗",
@@ -62,7 +63,7 @@ export const zhHant = {
 
   "overview.title": "總覽",
   "overview.cluster": "叢集 ID",
-  "overview.version": "Coordinator 版本",
+  "overview.version": "叢集服務版本",
   "overview.nodes": "節點",
   "overview.nodesValue": "{online} 線上 / 共 {total}",
   "overview.gpus": "線上 GPU",
@@ -177,11 +178,19 @@ export const zhHant = {
   "invites.title": "邀請與憑證",
   "invites.adminOnly": "這一頁只有管理者可以使用。",
   "invites.create": "產生邀請碼",
-  "invites.address": "Coordinator 位址",
+  "invites.address": "連線位址",
   "invites.addressHelp":
-    "對方用來連線的 host:port，例如 Tailscale IP 100.x.y.z:7443。必須在 Coordinator 憑證涵蓋的位址內（見「診斷」頁）。",
-  "invites.node": "讓對方的電腦成為 Worker 節點",
-  "invites.role": "網頁與遠端操作權限",
+    "通常不用改，會自動使用建立叢集時選的位址。只有對方要用其他位址連線時才修改（必須在「診斷」頁列出的憑證位址內）。",
+  "invites.node": "讓對方的電腦提供運算（Worker）",
+  "invites.nodeHelp": "對方在自己的 TableForge 選「加入現有叢集」並貼上邀請碼後，就可以按「啟動 Worker」。",
+  "invites.roleHelp.none": "對方不能查看或操作叢集，只提供運算。",
+  "invites.roleHelp.viewer": "對方可以查看節點、實驗與結果。",
+  "invites.roleHelp.operator": "對方可以查看，也可以建立、開始、停止實驗。",
+  "invites.roleHelp.admin": "對方和你一樣可以管理整個叢集：產生邀請碼、撤銷別人的權限與電腦。",
+  "invites.adminConfirm": "我了解拿到這個邀請碼的人可以管理整個叢集。管理者邀請碼最多 1 小時有效，使用時會記錄在事件中。",
+  "invites.adminConfirmNeeded": "產生管理者邀請碼前，請先勾選確認。",
+  "invites.advanced": "進階：連線位址",
+  "invites.role": "叢集管理權限",
   "invites.roleNone": "不給",
   "invites.ttl": "有效時間（小時）",
   "invites.label": "備註（例如對方名字）",
@@ -189,7 +198,7 @@ export const zhHant = {
   "invites.result":
     "邀請碼（只會顯示這一次，請直接傳給對方）。對方使用一次後就會失效。",
   "invites.howToUse":
-    "對方的使用方式：含 Worker 節點時，在要當 Worker 的電腦執行 `uv run tableforge join <邀請碼>`；只有檢視者或操作者權限時，在這個網頁的登入畫面貼上。要同時做兩件事，請產生兩個邀請碼。",
+    "對方的使用方式：在自己的電腦執行 `uv run tableforge ui`，選「加入現有叢集」並貼上這個邀請碼。Worker 與管理權限會一起生效。",
   "invites.list": "邀請碼",
   "invites.empty": "還沒有邀請碼。",
   "invites.scope": "權限",
@@ -198,9 +207,9 @@ export const zhHant = {
   "invites.revoke": "撤銷",
   "invites.revokeConfirm": "撤銷這個尚未使用的邀請碼？",
   "invites.needScope": "至少要選擇 Worker 節點或一種操作權限。",
-  "invites.operators": "操作憑證",
+  "invites.operators": "有管理權限的人",
   "invites.operatorsHelp":
-    "每一個登入過網頁或 `tableforge remote` 的人都有一個憑證。撤銷後對方立即被登出。管理者憑證只能在 Coordinator 電腦上用 `tableforge coordinator admin` 產生。",
+    "每個用含管理權限的邀請碼加入的人都會列在這裡。撤銷後對方立即失去管理權限（他的電腦若也是 Worker，要另外在「節點」頁撤銷）。",
   "invites.current": "（你目前使用的）",
   "invites.revokeOperatorConfirm": "撤銷 {label} 的憑證？對方會立即被登出。",
 
@@ -216,6 +225,7 @@ export const zhHant = {
   "local.title": "TableForge",
   "local.clusterOwn": "你建立的叢集",
   "local.clusterOther": "已加入別人的叢集",
+  "local.managementOnly": "只有管理權限，這台電腦不提供運算",
   "local.details": "詳細資訊",
   "local.detailCluster": "叢集 ID",
   "local.detailCoordinator": "連線位址",

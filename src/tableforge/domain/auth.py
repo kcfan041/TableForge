@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from tableforge.domain.ids import InviteId, NodeId, OperatorId
@@ -25,9 +25,9 @@ class IssuedSession:
 class OperatorRole(StrEnum):
     """Remote control-plane roles.
 
-    ``admin`` may also create invites and revoke nodes, invites and credentials. It can
-    only be issued on the coordinator host (``tableforge coordinator admin``), never
-    through an invite, so a leaked invite cannot grant cluster administration. Schema
+    ``admin`` may also create invites and revoke nodes, invites and credentials. An admin
+    can hand the role on through an invite only with an explicit confirmation and a short
+    lifetime (``ADMIN_INVITE_MAX_TTL``); redeeming it is recorded as an event. Schema
     migrations, GC and certificate changes stay host-only for every role.
     """
 
@@ -40,7 +40,23 @@ class OperatorRole(StrEnum):
 
 
 _RANK = {OperatorRole.VIEWER: 0, OperatorRole.OPERATOR: 1, OperatorRole.ADMIN: 2}
-INVITABLE_ROLES = (OperatorRole.VIEWER, OperatorRole.OPERATOR)
+INVITABLE_ROLES = (OperatorRole.VIEWER, OperatorRole.OPERATOR, OperatorRole.ADMIN)
+ADMIN_INVITE_MAX_TTL = timedelta(hours=1)
+
+
+class AdminInviteError(ValueError):
+    """An admin invite was requested without confirmation or with too long a lifetime."""
+
+
+def check_invite_request(scope: InviteScope, ttl: timedelta, confirm_admin: bool) -> None:
+    if scope.role is OperatorRole.ADMIN:
+        if not confirm_admin:
+            raise AdminInviteError(
+                "an invite with the admin role lets its holder manage the whole cluster; "
+                "confirm it explicitly"
+            )
+        if ttl > ADMIN_INVITE_MAX_TTL:
+            raise AdminInviteError("an invite with the admin role can be valid for 1 hour at most")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +69,6 @@ class InviteScope:
     def __post_init__(self) -> None:
         if not self.node and self.role is None:
             raise ValueError("an invite must grant a node enrollment or an operator role")
-        if self.role is not None and self.role not in INVITABLE_ROLES:
-            raise ValueError("the admin role cannot be granted by invite")
 
     def encode(self) -> str:
         parts = (["node"] if self.node else []) + ([self.role.value] if self.role else [])

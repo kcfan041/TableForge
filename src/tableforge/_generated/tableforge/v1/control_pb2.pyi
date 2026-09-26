@@ -20,6 +20,78 @@ else:
 DESCRIPTOR: _descriptor.FileDescriptor
 
 @_typing.final
+class QueryRequest(_message.Message):
+    """A read of the cluster state. `resource` is one of: overview, nodes, presets,
+    experiments, experiment, matrix, checkpoints, events, diagnostics, invites, operators.
+    `argument` is the experiment id for experiment/matrix and the limit for events.
+    """
+
+    DESCRIPTOR: _descriptor.Descriptor
+
+    RESOURCE_FIELD_NUMBER: _builtins.int
+    ARGUMENT_FIELD_NUMBER: _builtins.int
+    resource: _builtins.str
+    argument: _builtins.str
+    def __init__(
+        self,
+        *,
+        resource: _builtins.str = ...,
+        argument: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["argument", b"argument", "resource", b"resource"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___QueryRequest: _TypeAlias = QueryRequest  # noqa: Y015
+
+@_typing.final
+class QueryResponse(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    JSON_FIELD_NUMBER: _builtins.int
+    json: _builtins.str
+    def __init__(
+        self,
+        *,
+        json: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["json", b"json"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___QueryResponse: _TypeAlias = QueryResponse  # noqa: Y015
+
+@_typing.final
+class CommandRequest(_message.Message):
+    """A change. `action` is one of: create_experiment, start_experiment, stop_experiment,
+    create_invite, revoke_invite, revoke_operator, revoke_node. `json` holds the arguments.
+    """
+
+    DESCRIPTOR: _descriptor.Descriptor
+
+    ACTION_FIELD_NUMBER: _builtins.int
+    JSON_FIELD_NUMBER: _builtins.int
+    action: _builtins.str
+    json: _builtins.str
+    def __init__(
+        self,
+        *,
+        action: _builtins.str = ...,
+        json: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["action", b"action", "json", b"json"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___CommandRequest: _TypeAlias = CommandRequest  # noqa: Y015
+
+@_typing.final
 class WhoAmIRequest(_message.Message):
     DESCRIPTOR: _descriptor.Descriptor
 

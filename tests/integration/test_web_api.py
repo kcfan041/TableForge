@@ -218,9 +218,19 @@ def test_admin_manages_invites_and_credentials(web: Web) -> None:
         json={"address": "127.0.0.1:7443", "node": True, "role": "operator", "label": "bob"},
         headers=headers,
     )
+    unconfirmed_admin = web.client.post(
+        "/api/admin/invites",
+        json={"address": "127.0.0.1:7443", "role": "admin", "ttl_hours": 1},
+        headers=headers,
+    )
+    long_admin = web.client.post(
+        "/api/admin/invites",
+        json={"role": "admin", "ttl_hours": 2, "confirm_admin": True},
+        headers=headers,
+    )
     admin_invite = web.client.post(
         "/api/admin/invites",
-        json={"address": "127.0.0.1:7443", "role": "admin"},
+        json={"role": "admin", "ttl_hours": 1, "confirm_admin": True, "label": "deputy"},
         headers=headers,
     )
     uncovered = web.client.post(
@@ -230,13 +240,17 @@ def test_admin_manages_invites_and_credentials(web: Web) -> None:
     assert created.status_code == 200
     code = InviteCode.decode(created.json()["invite"])
     assert code.scope == InviteScope(node=True, role=OperatorRole.OPERATOR)
-    assert admin_invite.status_code == 400
+    assert unconfirmed_admin.status_code == 400 and "confirm" in unconfirmed_admin.json()["detail"]
+    assert long_admin.status_code == 400 and "1 hour" in long_admin.json()["detail"]
+    assert admin_invite.status_code == 200
+    assert InviteCode.decode(admin_invite.json()["invite"]).address == "127.0.0.1:7443"
     assert uncovered.status_code == 400 and "does not cover" in uncovered.json()["detail"]
     listed = web.client.get("/api/admin/invites").json()
-    assert [item["state"] for item in listed] == ["open"]
-    invite_id = listed[0]["invite_id"]
+    assert sorted(item["state"] for item in listed) == ["open", "open"]
+    invite_id = next(item["invite_id"] for item in listed if item["label"] == "bob")
     assert web.client.delete(f"/api/admin/invites/{invite_id}", headers=headers).status_code == 200
-    assert web.client.get("/api/admin/invites").json()[0]["state"] == "revoked"
+    states = {item["label"]: item["state"] for item in web.client.get("/api/admin/invites").json()}
+    assert states == {"bob": "revoked", "deputy": "open"}
 
     viewer = web.credential(OperatorRole.VIEWER)
     operators = web.client.get("/api/admin/operators").json()

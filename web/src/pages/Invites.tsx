@@ -12,24 +12,33 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
   const [role, setRole] = useState<Role | "">("operator");
   const [ttl, setTtl] = useState(24);
   const [label, setLabel] = useState("");
+  const [confirmAdmin, setConfirmAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedInvite | null>(null);
+  const isAdmin = role === "admin";
 
   useEffect(() => {
     void api.diagnostics().then((data) => {
-      const hosts = (data.certificate.hosts ?? []).filter(
-        (host) => host !== "localhost" && host !== "127.0.0.1",
-      );
-      const port = data.grpc_listen.split(":").pop() ?? "7443";
-      setAddress((current) => current || `${hosts[0] ?? "127.0.0.1"}:${port}`);
+      if (data.advertised_address) {
+        setAddress((current) => current || data.advertised_address || "");
+      }
     });
   }, []);
+
+  useEffect(() => {
+    if (isAdmin && ttl > 1) setTtl(1);
+    if (!isAdmin) setConfirmAdmin(false);
+  }, [isAdmin, ttl]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!node && !role) {
       setError(t("invites.needScope"));
+      return;
+    }
+    if (isAdmin && !confirmAdmin) {
+      setError(t("invites.adminConfirmNeeded"));
       return;
     }
     setBusy(true);
@@ -43,6 +52,7 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
           role: role || null,
           ttl_hours: ttl,
           label: label.trim(),
+          confirm_admin: confirmAdmin,
         }),
       );
       onCreated();
@@ -56,14 +66,12 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
   return (
     <Card title={t("invites.create")}>
       <form className="stack" onSubmit={(event) => void submit(event)}>
-        <label>
-          {t("invites.address")}
-          <input value={address} onChange={(event) => setAddress(event.target.value)} required />
-          <span className="muted small">{t("invites.addressHelp")}</span>
-        </label>
         <label className="checkbox">
           <input type="checkbox" checked={node} onChange={(event) => setNode(event.target.checked)} />
-          {t("invites.node")}
+          <span>
+            {t("invites.node")}
+            <div className="muted small">{t("invites.nodeHelp")}</div>
+          </span>
         </label>
         <label>
           {t("invites.role")}
@@ -71,15 +79,27 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
             <option value="">{t("invites.roleNone")}</option>
             <option value="viewer">{t("role.viewer")}</option>
             <option value="operator">{t("role.operator")}</option>
+            <option value="admin">{t("role.admin")}</option>
           </select>
+          <span className="muted small">{t(`invites.roleHelp.${role || "none"}` as MessageKey)}</span>
         </label>
+        {isAdmin ? (
+          <label className="checkbox warning-box">
+            <input
+              type="checkbox"
+              checked={confirmAdmin}
+              onChange={(event) => setConfirmAdmin(event.target.checked)}
+            />
+            <span>{t("invites.adminConfirm")}</span>
+          </label>
+        ) : null}
         <div className="row">
           <label>
             {t("invites.ttl")}
             <input
               type="number"
               min={1}
-              max={720}
+              max={isAdmin ? 1 : 720}
               value={ttl}
               onChange={(event) => setTtl(Number(event.target.value))}
             />
@@ -89,8 +109,16 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
             <input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={200} />
           </label>
         </div>
+        <details>
+          <summary className="small muted">{t("invites.advanced")}</summary>
+          <label>
+            {t("invites.address")}
+            <input value={address} onChange={(event) => setAddress(event.target.value)} />
+            <span className="muted small">{t("invites.addressHelp")}</span>
+          </label>
+        </details>
         <div>
-          <button type="submit" className="primary" disabled={busy}>
+          <button type="submit" className="primary" disabled={busy || (isAdmin && !confirmAdmin)}>
             {t("invites.submit")}
           </button>
         </div>

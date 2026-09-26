@@ -34,6 +34,7 @@ from tableforge.infrastructure.sql.database import (
     parse_timestamp,
     require_aware,
 )
+from tableforge.infrastructure.sql.events import record_event
 
 ENROLLMENT_TOKEN_PREFIX = "tfe_"
 
@@ -303,6 +304,21 @@ class SqlAuthRepository:
                 "UPDATE invites SET redeemed_at = ?, redeemed_by = ? WHERE invite_id = ?",
                 (self._db.timestamp(now), redeemed_by, str(invite.invite_id)),
             )
+            if operator is not None and operator.role is OperatorRole.ADMIN:
+                record_event(
+                    self._db,
+                    connection,
+                    "ADMIN_INVITE_REDEEMED",
+                    "invite",
+                    str(invite.invite_id),
+                    1,
+                    {
+                        "label": invite.label,
+                        "node_id": str(node_id or ""),
+                        "operator_id": str(operator.operator_id),
+                    },
+                    now,
+                )
         redeemed = Invite(
             invite.invite_id,
             invite.scope,

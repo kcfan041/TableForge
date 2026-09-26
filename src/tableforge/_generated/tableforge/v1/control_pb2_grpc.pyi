@@ -28,8 +28,8 @@ GRPC_VERSION: str
 
 class ControlServiceStub:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read) and operator (read + create/start/stop).
-    Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+    (operator + invites and revocation). GC, migrations and certificates stay host-only.
     """
 
     @_typing.overload
@@ -46,12 +46,17 @@ class ControlServiceStub:
     ListCheckpoints: _grpc.UnaryUnaryMultiCallable[_control_pb2.ListCheckpointsRequest, _control_pb2.ListCheckpointsResponse]
     GetLeagueMatrix: _grpc.UnaryUnaryMultiCallable[_control_pb2.ExperimentRequest, _control_pb2.LeagueMatrixView]
     ListNodes: _grpc.UnaryUnaryMultiCallable[_control_pb2.ListNodesRequest, _control_pb2.ListNodesResponse]
+    Query: _grpc.UnaryUnaryMultiCallable[_control_pb2.QueryRequest, _control_pb2.QueryResponse]
+    """Everything below returns a JSON document with the same shape as the coordinator's
+    HTTP API, so one web UI can be served either by the coordinator or by `tableforge ui`.
+    """
+    Command: _grpc.UnaryUnaryMultiCallable[_control_pb2.CommandRequest, _control_pb2.QueryResponse]
 
 @_typing.type_check_only
 class ControlServiceAsyncStub(ControlServiceStub):
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read) and operator (read + create/start/stop).
-    Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+    (operator + invites and revocation). GC, migrations and certificates stay host-only.
     """
 
     def __init__(self, channel: _aio.Channel) -> None: ...
@@ -65,11 +70,16 @@ class ControlServiceAsyncStub(ControlServiceStub):
     ListCheckpoints: _aio.UnaryUnaryMultiCallable[_control_pb2.ListCheckpointsRequest, _control_pb2.ListCheckpointsResponse]  # type: ignore[assignment]
     GetLeagueMatrix: _aio.UnaryUnaryMultiCallable[_control_pb2.ExperimentRequest, _control_pb2.LeagueMatrixView]  # type: ignore[assignment]
     ListNodes: _aio.UnaryUnaryMultiCallable[_control_pb2.ListNodesRequest, _control_pb2.ListNodesResponse]  # type: ignore[assignment]
+    Query: _aio.UnaryUnaryMultiCallable[_control_pb2.QueryRequest, _control_pb2.QueryResponse]  # type: ignore[assignment]
+    """Everything below returns a JSON document with the same shape as the coordinator's
+    HTTP API, so one web UI can be served either by the coordinator or by `tableforge ui`.
+    """
+    Command: _aio.UnaryUnaryMultiCallable[_control_pb2.CommandRequest, _control_pb2.QueryResponse]  # type: ignore[assignment]
 
 class ControlServiceServicer(metaclass=_abc_1.ABCMeta):
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read) and operator (read + create/start/stop).
-    Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
+    (operator + invites and revocation). GC, migrations and certificates stay host-only.
     """
 
     @_abc_1.abstractmethod
@@ -141,5 +151,22 @@ class ControlServiceServicer(metaclass=_abc_1.ABCMeta):
         request: _control_pb2.ListNodesRequest,
         context: _ServicerContext,
     ) -> _typing.Union[_control_pb2.ListNodesResponse, _abc.Awaitable[_control_pb2.ListNodesResponse]]: ...
+
+    @_abc_1.abstractmethod
+    def Query(
+        self,
+        request: _control_pb2.QueryRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_control_pb2.QueryResponse, _abc.Awaitable[_control_pb2.QueryResponse]]:
+        """Everything below returns a JSON document with the same shape as the coordinator's
+        HTTP API, so one web UI can be served either by the coordinator or by `tableforge ui`.
+        """
+
+    @_abc_1.abstractmethod
+    def Command(
+        self,
+        request: _control_pb2.CommandRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_control_pb2.QueryResponse, _abc.Awaitable[_control_pb2.QueryResponse]]: ...
 
 def add_ControlServiceServicer_to_server(servicer: ControlServiceServicer, server: _typing.Union[_grpc.Server, _aio.Server]) -> None: ...

@@ -7,9 +7,11 @@ import pytest
 
 from tableforge.composition import Repositories
 from tableforge.domain.auth import (
+    AdminInviteError,
     AuthenticationError,
     InviteScope,
     OperatorRole,
+    check_invite_request,
 )
 from tableforge.domain.ids import NodeId
 
@@ -160,13 +162,47 @@ def test_invite_scope_round_trip() -> None:
         InviteScope(node=True, role=None),
         InviteScope(node=False, role=OperatorRole.VIEWER),
         InviteScope(node=True, role=OperatorRole.OPERATOR),
+        InviteScope(node=False, role=OperatorRole.ADMIN),
     ):
         assert InviteScope.decode(scope.encode()) == scope
     with pytest.raises(ValueError):
         InviteScope(node=False, role=None)
     with pytest.raises(ValueError):
-        InviteScope.decode("node,admin")
+        InviteScope.decode("node,owner")
     with pytest.raises(ValueError):
         InviteScope.decode("viewer,operator")
     assert OperatorRole.OPERATOR.allows(OperatorRole.VIEWER)
     assert not OperatorRole.VIEWER.allows(OperatorRole.OPERATOR)
+
+
+def test_admin_invites_need_confirmation_and_a_short_lifetime() -> None:
+    admin = InviteScope(node=False, role=OperatorRole.ADMIN)
+
+    with pytest.raises(AdminInviteError):
+        check_invite_request(admin, timedelta(minutes=30), confirm_admin=False)
+    with pytest.raises(AdminInviteError):
+        check_invite_request(admin, timedelta(hours=2), confirm_admin=True)
+    check_invite_request(admin, timedelta(hours=1), confirm_admin=True)
+    check_invite_request(
+        InviteScope(node=True, role=OperatorRole.OPERATOR), timedelta(days=7), confirm_admin=False
+    )
+
+
+def test_redeeming_an_admin_invite_is_recorded(repositories: Repositories) -> None:
+    auth = repositories.auth
+    invite, secret = auth.create_invite(
+        InviteScope(node=False, role=OperatorRole.ADMIN), NOW, timedelta(hours=1), "deputy"
+    )
+
+    redemption = auth.redeem_invite(secret, None, NOW, DAY, DAY)
+
+    assert redemption.operator is not None and redemption.operator.role is OperatorRole.ADMIN
+    events = [
+        event
+        for event in repositories.events.list_events(limit=1000)
+        if event.event_type == "ADMIN_INVITE_REDEEMED"
+    ]
+    assert len(events) == 1
+    assert events[0].aggregate_id == str(invite.invite_id)
+    assert events[0].payload["operator_id"] == str(redemption.operator.operator_id)
+    assert events[0].payload["label"] == "deputy"

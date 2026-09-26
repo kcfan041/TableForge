@@ -2,6 +2,7 @@ import type { Messages } from "./zh-Hant";
 
 // English scaffold. Missing keys fall back to Traditional Chinese.
 export const en: Partial<Messages> = {
+  "nav.machine": "This computer",
   "nav.overview": "Overview",
   "nav.nodes": "Nodes",
   "nav.experiments": "Experiments",

@@ -135,6 +135,11 @@ def main() -> None:
         help="also grant a remote control credential with this role",
     )
     invite_create.add_argument("--ttl-hours", type=float, default=24.0)
+    invite_create.add_argument(
+        "--confirm-admin",
+        action="store_true",
+        help="required with --role admin; admin invites are valid for 1 hour at most",
+    )
     invite_create.add_argument("--label", default="")
     invite_subparsers.add_parser("list")
     invite_revoke = invite_subparsers.add_parser("revoke")
@@ -690,6 +695,7 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
         from tableforge.infrastructure.s3_artifacts import parse_endpoints
         from tableforge.transport.control import ControlServicer
         from tableforge.transport.server import ServerConfig
+        from tableforge.web.views import ClusterViews
 
         endpoints: list[tuple[str, str]] = []
         if settings.artifacts.backend == "s3" and settings.artifacts.direct_transfer:
@@ -713,7 +719,7 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             ),
             control=ControlServicer(
                 services.experiments, services.repositories.checkpoints, auth, clock
-            ),
+            ).with_views(ClusterViews(services, clock)),
         )
         logger = JsonLineLogger().bind(component="coordinator")
         logger.emit(
@@ -823,7 +829,14 @@ def _invite_command(args: argparse.Namespace, services: Services) -> None:
         raise SystemExit("choose --node, --role, or both") from error
     try:
         issued = issue_invite(
-            auth, settings, args.address, scope, timedelta(hours=args.ttl_hours), args.label, now
+            auth,
+            settings,
+            args.address,
+            scope,
+            timedelta(hours=args.ttl_hours),
+            args.label,
+            now,
+            confirm_admin=args.confirm_admin,
         )
     except InviteIssueError as error:
         raise SystemExit(str(error)) from error

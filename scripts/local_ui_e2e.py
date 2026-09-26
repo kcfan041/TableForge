@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -51,9 +52,40 @@ def ok(detail: str = "") -> None:
     print(f"[ OK ] {STEP}{': ' + detail if detail else ''}", flush=True)
 
 
+class CheckFailed(Exception):
+    """A check failed; raised so ``finally`` blocks can stop the processes we started."""
+
+
+CLEANUPS: list[Callable[[], None]] = []
+
+
 def fail(detail: str) -> None:
     print(f"[FAIL] {STEP}: {detail}", flush=True)
-    os._exit(1)
+    raise CheckFailed(detail)
+
+
+def watchdog(seconds: float) -> None:
+    """Abort after ``seconds``; runs registered cleanups first so nothing is left running."""
+
+    def fire() -> None:
+        print(f"[FAIL] timed out after {seconds:.0f}s during: {STEP}", flush=True)
+        for cleanup in reversed(CLEANUPS):
+            try:
+                cleanup()
+            except Exception as error:  # noqa: BLE001
+                print(f"cleanup failed: {error}", flush=True)
+        os._exit(2)
+
+    timer = threading.Timer(seconds, fire)
+    timer.daemon = True
+    timer.start()
+
+
+def run(main: Callable[[], int]) -> int:
+    try:
+        return main()
+    except CheckFailed:
+        return 1
 
 
 def expect(condition: bool, detail: str) -> None:
@@ -95,11 +127,7 @@ class Panel:
 
 def main() -> int:
     timeout = float(sys.argv[sys.argv.index("--timeout") + 1]) if "--timeout" in sys.argv else 240
-    timer = threading.Timer(
-        timeout, lambda: (print(f"[FAIL] timed out during: {STEP}", flush=True), os._exit(2))
-    )
-    timer.daemon = True
-    timer.start()
+    watchdog(timeout)
     started = time.monotonic()
     ui: subprocess.Popen[str] | None = None
 
@@ -174,6 +202,8 @@ def main() -> int:
                 env=environment,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
             )
+            started_ui = ui
+            CLEANUPS.append(lambda: started_ui.kill() if started_ui.poll() is None else None)
             panel = Panel(ui_port)
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
@@ -286,4 +316,4 @@ def _alive(pid: int) -> bool:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run(main))
