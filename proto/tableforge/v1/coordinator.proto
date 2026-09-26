@@ -11,6 +11,12 @@ import "tableforge/v1/jobs.proto";
 service CoordinatorService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   rpc RotateSession(RotateSessionRequest) returns (EnrollResponse);
+  // Unauthenticated: identifies the cluster before a node trusts it.
+  rpc GetClusterInfo(GetClusterInfoRequest) returns (ClusterInfo);
+  // Exchanges a single-use invite secret for a node session and/or operator credential.
+  rpc RedeemInvite(RedeemInviteRequest) returns (RedeemInviteResponse);
+  // Node session only: registers one worker process (slot) of this node.
+  rpc StartWorker(StartWorkerRequest) returns (StartWorkerResponse);
   rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ClaimJob(ClaimJobRequest) returns (ClaimJobResponse);
@@ -58,6 +64,58 @@ message ClaimJobRequest {
   string node_id = 1;
   NodeCapability capability = 2;
   google.protobuf.Duration lease_duration = 3;
+  // Worker slot obtained from StartWorker; empty for legacy single-slot workers.
+  string worker_id = 4;
+}
+
+message GetClusterInfoRequest {}
+
+message ClusterInfo {
+  string cluster_id = 1;
+  string coordinator_version = 2;
+}
+
+message RedeemInviteRequest {
+  string invite_secret = 1;
+  // Required when the invite enrolls a node.
+  string node_id = 2;
+}
+
+message StorageEndpoint {
+  // Empty name is the coordinator's default endpoint.
+  string name = 1;
+  string url = 2;
+  uint32 priority = 3;
+}
+
+message NodeSettings {
+  repeated StorageEndpoint storage_endpoints = 1;
+  google.protobuf.Duration lease_duration = 2;
+  google.protobuf.Duration idle_interval = 3;
+  bool direct_transfer = 4;
+}
+
+message RedeemInviteResponse {
+  string cluster_id = 1;
+  string scope = 2;
+  string session_token = 3;
+  google.protobuf.Timestamp session_expires_at = 4;
+  string operator_id = 5;
+  string operator_token = 6;
+  string operator_role = 7;
+  google.protobuf.Timestamp operator_expires_at = 8;
+  NodeSettings node_settings = 9;
+}
+
+message StartWorkerRequest {
+  string node_id = 1;
+  string label = 2;
+}
+
+message StartWorkerResponse {
+  string worker_id = 1;
+  string cluster_id = 2;
+  NodeSettings node_settings = 3;
 }
 
 message ClaimJobResponse {

@@ -137,6 +137,7 @@ class SqlJobRepository:
         capability_revision: int = 0,
         workload_identity: Callable[[Job], tuple[str, str]] | None = None,
         execution_plan: Callable[[Job], str] | None = None,
+        worker_id: str = "",
     ) -> JobLease | None:
         _validate_lease_time(now, duration)
         with self._db.transaction() as connection:
@@ -168,6 +169,7 @@ class SqlJobRepository:
                         capability_revision,
                         workload_identity(job) if workload_identity else ("", ""),
                         execution_plan(job) if execution_plan else "{}",
+                        worker_id,
                     )
                 last = rows[-1]
                 after = (int(last["priority"]), last["created_at"], last["job_id"])
@@ -208,6 +210,7 @@ class SqlJobRepository:
         capability_revision: int,
         workload: tuple[str, str],
         plan_json: str,
+        worker_id: str = "",
     ) -> JobLease:
         job_id = str(job.spec.job_id)
         attempt_number = (
@@ -226,8 +229,8 @@ class SqlJobRepository:
             INSERT INTO job_attempts (
                 attempt_id, job_id, node_id, token_hash, attempt_number,
                 leased_at, expires_at, capability_revision, workload_key,
-                workload_version, execution_plan_json, active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                workload_version, execution_plan_json, worker_id, active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
                 str(attempt_id),
@@ -241,6 +244,7 @@ class SqlJobRepository:
                 workload[0],
                 workload[1],
                 plan_json,
+                worker_id,
             ),
         )
         updated = self._set_status(connection, JobStatus.LEASED, job_id, now)
@@ -253,6 +257,7 @@ class SqlJobRepository:
             leased_at=now,
             expires_at=expires_at,
             execution_plan_json=plan_json,
+            worker_id=worker_id,
         )
 
     def renew(self, job_id: JobId, token: str, now: datetime, duration: timedelta) -> JobLease:
@@ -276,6 +281,7 @@ class SqlJobRepository:
                 leased_at=parse_timestamp(attempt["leased_at"]),
                 expires_at=expires_at,
                 execution_plan_json=attempt["execution_plan_json"],
+                worker_id=attempt["worker_id"],
             )
 
     def complete(
@@ -450,6 +456,7 @@ class SqlJobRepository:
                 workload_key=row["workload_key"],
                 workload_version=row["workload_version"],
                 execution_plan_json=row["execution_plan_json"],
+                worker_id=row["worker_id"],
             )
             for row in rows
         )

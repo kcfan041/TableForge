@@ -6,11 +6,27 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
-from tableforge.domain.auth import IssuedSession
+from tableforge.domain.auth import (
+    Invite,
+    InviteScope,
+    IssuedSession,
+    OperatorIdentity,
+    Redemption,
+)
 from tableforge.domain.capabilities import NodeCapability
 from tableforge.domain.checkpoints import Checkpoint
 from tableforge.domain.experiments import Experiment, ExperimentConfig, ExperimentStatus
-from tableforge.domain.ids import AgentId, CheckpointId, ExperimentId, JobId, NodeId
+from tableforge.domain.ids import (
+    AgentId,
+    CheckpointId,
+    ClusterId,
+    ExperimentId,
+    InviteId,
+    JobId,
+    NodeId,
+    OperatorId,
+    WorkerId,
+)
 from tableforge.domain.jobs import (
     Job,
     JobAttemptError,
@@ -90,6 +106,7 @@ class JobRepository(Protocol):
         capability_revision: int = 0,
         workload_identity: Callable[[Job], tuple[str, str]] | None = None,
         execution_plan: Callable[[Job], str] | None = None,
+        worker_id: str = "",
     ) -> JobLease | None: ...
 
     def renew(
@@ -201,6 +218,37 @@ class AuthRepository(Protocol):
     def rotate_session(
         self, session_token: str, now: datetime, session_ttl: timedelta
     ) -> IssuedSession: ...
+
+    def cluster_id(self, now: datetime) -> ClusterId: ...
+
+    def create_invite(
+        self, scope: InviteScope, now: datetime, ttl: timedelta, label: str = ""
+    ) -> tuple[Invite, str]: ...
+
+    def redeem_invite(
+        self,
+        secret: str,
+        node_id: NodeId | None,
+        now: datetime,
+        session_ttl: timedelta,
+        operator_ttl: timedelta,
+    ) -> Redemption: ...
+
+    def list_invites(self) -> tuple[Invite, ...]: ...
+
+    def revoke_invite(self, invite_id: InviteId) -> bool: ...
+
+    def authenticate_operator(self, token: str, now: datetime) -> OperatorIdentity: ...
+
+    def list_operators(self) -> tuple[OperatorIdentity, ...]: ...
+
+    def revoke_operator(self, operator_id: OperatorId) -> bool: ...
+
+    def start_worker(self, node_id: NodeId, label: str, now: datetime) -> WorkerId: ...
+
+    def worker_node(self, worker_id: WorkerId) -> NodeId | None: ...
+
+    def touch_worker(self, worker_id: WorkerId, now: datetime) -> None: ...
 
 
 class ArtifactStore(Protocol):

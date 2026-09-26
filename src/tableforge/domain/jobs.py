@@ -103,6 +103,7 @@ class JobAttemptProvenance:
     workload_key: str
     workload_version: str
     execution_plan_json: str
+    worker_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +143,7 @@ class JobLease:
     leased_at: datetime
     expires_at: datetime
     execution_plan_json: str = "{}"
+    worker_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.token:

@@ -162,7 +162,10 @@ class ClaimJobRequest(_message.Message):
     NODE_ID_FIELD_NUMBER: _builtins.int
     CAPABILITY_FIELD_NUMBER: _builtins.int
     LEASE_DURATION_FIELD_NUMBER: _builtins.int
+    WORKER_ID_FIELD_NUMBER: _builtins.int
     node_id: _builtins.str
+    worker_id: _builtins.str
+    """Worker slot obtained from StartWorker; empty for legacy single-slot workers."""
     @_builtins.property
     def capability(self) -> _capabilities_pb2.NodeCapability: ...
     @_builtins.property
@@ -173,14 +176,226 @@ class ClaimJobRequest(_message.Message):
         node_id: _builtins.str = ...,
         capability: _capabilities_pb2.NodeCapability | None = ...,
         lease_duration: _duration_pb2.Duration | None = ...,
+        worker_id: _builtins.str = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _typing.Literal["capability", b"capability", "lease_duration", b"lease_duration"]  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["capability", b"capability", "lease_duration", b"lease_duration", "node_id", b"node_id"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["capability", b"capability", "lease_duration", b"lease_duration", "node_id", b"node_id", "worker_id", b"worker_id"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
 Global___ClaimJobRequest: _TypeAlias = ClaimJobRequest  # noqa: Y015
+
+@_typing.final
+class GetClusterInfoRequest(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___GetClusterInfoRequest: _TypeAlias = GetClusterInfoRequest  # noqa: Y015
+
+@_typing.final
+class ClusterInfo(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    CLUSTER_ID_FIELD_NUMBER: _builtins.int
+    COORDINATOR_VERSION_FIELD_NUMBER: _builtins.int
+    cluster_id: _builtins.str
+    coordinator_version: _builtins.str
+    def __init__(
+        self,
+        *,
+        cluster_id: _builtins.str = ...,
+        coordinator_version: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "coordinator_version", b"coordinator_version"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___ClusterInfo: _TypeAlias = ClusterInfo  # noqa: Y015
+
+@_typing.final
+class RedeemInviteRequest(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    INVITE_SECRET_FIELD_NUMBER: _builtins.int
+    NODE_ID_FIELD_NUMBER: _builtins.int
+    invite_secret: _builtins.str
+    node_id: _builtins.str
+    """Required when the invite enrolls a node."""
+    def __init__(
+        self,
+        *,
+        invite_secret: _builtins.str = ...,
+        node_id: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["invite_secret", b"invite_secret", "node_id", b"node_id"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___RedeemInviteRequest: _TypeAlias = RedeemInviteRequest  # noqa: Y015
+
+@_typing.final
+class StorageEndpoint(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    NAME_FIELD_NUMBER: _builtins.int
+    URL_FIELD_NUMBER: _builtins.int
+    PRIORITY_FIELD_NUMBER: _builtins.int
+    name: _builtins.str
+    """Empty name is the coordinator's default endpoint."""
+    url: _builtins.str
+    priority: _builtins.int
+    def __init__(
+        self,
+        *,
+        name: _builtins.str = ...,
+        url: _builtins.str = ...,
+        priority: _builtins.int = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["name", b"name", "priority", b"priority", "url", b"url"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___StorageEndpoint: _TypeAlias = StorageEndpoint  # noqa: Y015
+
+@_typing.final
+class NodeSettings(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    STORAGE_ENDPOINTS_FIELD_NUMBER: _builtins.int
+    LEASE_DURATION_FIELD_NUMBER: _builtins.int
+    IDLE_INTERVAL_FIELD_NUMBER: _builtins.int
+    DIRECT_TRANSFER_FIELD_NUMBER: _builtins.int
+    direct_transfer: _builtins.bool
+    @_builtins.property
+    def storage_endpoints(self) -> _containers.RepeatedCompositeFieldContainer[Global___StorageEndpoint]: ...
+    @_builtins.property
+    def lease_duration(self) -> _duration_pb2.Duration: ...
+    @_builtins.property
+    def idle_interval(self) -> _duration_pb2.Duration: ...
+    def __init__(
+        self,
+        *,
+        storage_endpoints: _abc.Iterable[Global___StorageEndpoint] | None = ...,
+        lease_duration: _duration_pb2.Duration | None = ...,
+        idle_interval: _duration_pb2.Duration | None = ...,
+        direct_transfer: _builtins.bool = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["idle_interval", b"idle_interval", "lease_duration", b"lease_duration"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["direct_transfer", b"direct_transfer", "idle_interval", b"idle_interval", "lease_duration", b"lease_duration", "storage_endpoints", b"storage_endpoints"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___NodeSettings: _TypeAlias = NodeSettings  # noqa: Y015
+
+@_typing.final
+class RedeemInviteResponse(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    CLUSTER_ID_FIELD_NUMBER: _builtins.int
+    SCOPE_FIELD_NUMBER: _builtins.int
+    SESSION_TOKEN_FIELD_NUMBER: _builtins.int
+    SESSION_EXPIRES_AT_FIELD_NUMBER: _builtins.int
+    OPERATOR_ID_FIELD_NUMBER: _builtins.int
+    OPERATOR_TOKEN_FIELD_NUMBER: _builtins.int
+    OPERATOR_ROLE_FIELD_NUMBER: _builtins.int
+    OPERATOR_EXPIRES_AT_FIELD_NUMBER: _builtins.int
+    NODE_SETTINGS_FIELD_NUMBER: _builtins.int
+    cluster_id: _builtins.str
+    scope: _builtins.str
+    session_token: _builtins.str
+    operator_id: _builtins.str
+    operator_token: _builtins.str
+    operator_role: _builtins.str
+    @_builtins.property
+    def session_expires_at(self) -> _timestamp_pb2.Timestamp: ...
+    @_builtins.property
+    def operator_expires_at(self) -> _timestamp_pb2.Timestamp: ...
+    @_builtins.property
+    def node_settings(self) -> Global___NodeSettings: ...
+    def __init__(
+        self,
+        *,
+        cluster_id: _builtins.str = ...,
+        scope: _builtins.str = ...,
+        session_token: _builtins.str = ...,
+        session_expires_at: _timestamp_pb2.Timestamp | None = ...,
+        operator_id: _builtins.str = ...,
+        operator_token: _builtins.str = ...,
+        operator_role: _builtins.str = ...,
+        operator_expires_at: _timestamp_pb2.Timestamp | None = ...,
+        node_settings: Global___NodeSettings | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["node_settings", b"node_settings", "operator_expires_at", b"operator_expires_at", "session_expires_at", b"session_expires_at"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "node_settings", b"node_settings", "operator_expires_at", b"operator_expires_at", "operator_id", b"operator_id", "operator_role", b"operator_role", "operator_token", b"operator_token", "scope", b"scope", "session_expires_at", b"session_expires_at", "session_token", b"session_token"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___RedeemInviteResponse: _TypeAlias = RedeemInviteResponse  # noqa: Y015
+
+@_typing.final
+class StartWorkerRequest(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    NODE_ID_FIELD_NUMBER: _builtins.int
+    LABEL_FIELD_NUMBER: _builtins.int
+    node_id: _builtins.str
+    label: _builtins.str
+    def __init__(
+        self,
+        *,
+        node_id: _builtins.str = ...,
+        label: _builtins.str = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["label", b"label", "node_id", b"node_id"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___StartWorkerRequest: _TypeAlias = StartWorkerRequest  # noqa: Y015
+
+@_typing.final
+class StartWorkerResponse(_message.Message):
+    DESCRIPTOR: _descriptor.Descriptor
+
+    WORKER_ID_FIELD_NUMBER: _builtins.int
+    CLUSTER_ID_FIELD_NUMBER: _builtins.int
+    NODE_SETTINGS_FIELD_NUMBER: _builtins.int
+    worker_id: _builtins.str
+    cluster_id: _builtins.str
+    @_builtins.property
+    def node_settings(self) -> Global___NodeSettings: ...
+    def __init__(
+        self,
+        *,
+        worker_id: _builtins.str = ...,
+        cluster_id: _builtins.str = ...,
+        node_settings: Global___NodeSettings | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["node_settings", b"node_settings"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "node_settings", b"node_settings", "worker_id", b"worker_id"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___StartWorkerResponse: _TypeAlias = StartWorkerResponse  # noqa: Y015
 
 @_typing.final
 class ClaimJobResponse(_message.Message):

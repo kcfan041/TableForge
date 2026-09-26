@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package tableforge.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Remote control plane for operators. Authenticated with an operator credential, never a
+// node session. Roles: viewer (read) and operator (read + create/start/stop).
+// Administrative actions (invites, revocation, GC, migrations) are not exposed here.
+service ControlService {
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc ListPresets(ListPresetsRequest) returns (ListPresetsResponse);
+  rpc ListExperiments(ListExperimentsRequest) returns (ListExperimentsResponse);
+  rpc GetExperiment(GetExperimentRequest) returns (ExperimentView);
+  rpc CreateExperiment(CreateExperimentRequest) returns (ExperimentView);
+  rpc StartExperiment(ExperimentRequest) returns (ExperimentView);
+  rpc StopExperiment(ExperimentRequest) returns (ExperimentView);
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+  rpc GetLeagueMatrix(ExperimentRequest) returns (LeagueMatrixView);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  string cluster_id = 1;
+  string operator_id = 2;
+  string role = 3;
+  string label = 4;
+}
+
+message ListPresetsRequest {}
+
+message ListPresetsResponse {
+  repeated string presets = 1;
+}
+
+message ListExperimentsRequest {}
+
+message ListExperimentsResponse {
+  repeated ExperimentView experiments = 1;
+}
+
+message GetExperimentRequest {
+  string experiment_id = 1;
+}
+
+message CreateExperimentRequest {
+  string preset = 1;
+}
+
+message ExperimentRequest {
+  string experiment_id = 1;
+}
+
+message ExperimentView {
+  string experiment_id = 1;
+  string preset = 2;
+  string status = 3;
+  uint64 revision = 4;
+  map<string, uint64> job_counts = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  // JSON evaluation summary for pipeline experiments; empty when not available.
+  string evaluation_json = 8;
+}
+
+message ListCheckpointsRequest {
+  string agent_id = 1;
+}
+
+message CheckpointView {
+  string checkpoint_id = 1;
+  string agent_id = 2;
+  string experiment_id = 3;
+  uint64 round_index = 4;
+  string status = 5;
+  string decision_reason = 6;
+  string sha256 = 7;
+  string parent_id = 8;
+}
+
+message ListCheckpointsResponse {
+  repeated CheckpointView checkpoints = 1;
+}
+
+message LeagueMatrixView {
+  // JSON object: row -> column -> {bb_per_100, confidence_low, confidence_high, hands}.
+  string matrix_json = 1;
+  bool available = 2;
+}
+
+message ListNodesRequest {}
+
+message NodeView {
+  string node_id = 1;
+  uint64 capability_revision = 2;
+  google.protobuf.Timestamp last_heartbeat_at = 3;
+  string operating_system = 4;
+  uint32 logical_cpu_cores = 5;
+  repeated string gpus = 6;
+}
+
+message ListNodesResponse {
+  repeated NodeView nodes = 1;
+}

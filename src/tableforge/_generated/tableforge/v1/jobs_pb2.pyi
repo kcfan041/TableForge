@@ -170,11 +170,14 @@ class JobLease(_message.Message):
     LEASED_AT_FIELD_NUMBER: _builtins.int
     EXPIRES_AT_FIELD_NUMBER: _builtins.int
     EXECUTION_PLAN_JSON_FIELD_NUMBER: _builtins.int
+    WORKER_ID_FIELD_NUMBER: _builtins.int
     attempt_id: _builtins.str
     node_id: _builtins.str
     token: _builtins.str
     attempt_number: _builtins.int
     execution_plan_json: _builtins.str
+    worker_id: _builtins.str
+    """Worker slot on the node that holds this lease; empty for single-slot legacy workers."""
     @_builtins.property
     def job(self) -> Global___Job: ...
     @_builtins.property
@@ -192,10 +195,11 @@ class JobLease(_message.Message):
         leased_at: _timestamp_pb2.Timestamp | None = ...,
         expires_at: _timestamp_pb2.Timestamp | None = ...,
         execution_plan_json: _builtins.str = ...,
+        worker_id: _builtins.str = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _typing.Literal["expires_at", b"expires_at", "job", b"job", "leased_at", b"leased_at"]  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["attempt_id", b"attempt_id", "attempt_number", b"attempt_number", "execution_plan_json", b"execution_plan_json", "expires_at", b"expires_at", "job", b"job", "leased_at", b"leased_at", "node_id", b"node_id", "token", b"token"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["attempt_id", b"attempt_id", "attempt_number", b"attempt_number", "execution_plan_json", b"execution_plan_json", "expires_at", b"expires_at", "job", b"job", "leased_at", b"leased_at", "node_id", b"node_id", "token", b"token", "worker_id", b"worker_id"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 

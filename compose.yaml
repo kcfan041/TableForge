@@ -4,8 +4,9 @@
 #   docker compose up -d --build
 #   docker compose up -d --scale worker=4
 #
-# Host-side (e.g. GPU) workers join through 127.0.0.1:7443 and the "host" storage endpoint;
-# see README "Docker".
+# Host-side (e.g. GPU) workers join through 127.0.0.1:7443 and the "host" storage endpoint.
+# Remote nodes (e.g. over Tailscale) need BIND_ADDRESS, EXTRA_TLS_HOSTS and
+# EXTRA_STORAGE_ENDPOINTS in .env; see docs/tester-guide.md.
 name: tableforge
 
 x-logging: &logging
@@ -42,7 +43,7 @@ services:
     volumes:
       - storage-data:/data
     ports:
-      - "127.0.0.1:${STORAGE_HOST_PORT:-59000}:9000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${STORAGE_HOST_PORT:-59000}:9000"
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "9000"]
       interval: 5s
@@ -71,16 +72,16 @@ services:
       TABLEFORGE_ARTIFACTS__ENDPOINT_URL: http://storage:9000
       TABLEFORGE_ARTIFACTS__ACCESS_KEY: ${S3_ACCESS_KEY:?}
       TABLEFORGE_ARTIFACTS__SECRET_KEY: ${S3_SECRET_KEY:?}
-      TABLEFORGE_ARTIFACTS__ENDPOINTS: host=http://127.0.0.1:${STORAGE_HOST_PORT:-59000}
+      TABLEFORGE_ARTIFACTS__ENDPOINTS: host=http://127.0.0.1:${STORAGE_HOST_PORT:-59000}${EXTRA_STORAGE_ENDPOINTS:+,}${EXTRA_STORAGE_ENDPOINTS:-}
       TABLEFORGE_COORDINATOR__METRICS_LISTEN: 0.0.0.0:9464
-      TABLEFORGE_TLS_HOSTS: coordinator,localhost,127.0.0.1
+      TABLEFORGE_TLS_HOSTS: coordinator,localhost,127.0.0.1${EXTRA_TLS_HOSTS:+,}${EXTRA_TLS_HOSTS:-}
       TABLEFORGE_ENROLLMENT_MAX_USES: ${ENROLLMENT_MAX_USES:-16}
       TABLEFORGE_ENROLLMENT_TTL_MINUTES: ${ENROLLMENT_TTL_MINUTES:-1440}
     volumes:
       - coordinator-data:/data
       - shared:/shared
     ports:
-      - "127.0.0.1:${COORDINATOR_HOST_PORT:-7443}:7443"
+      - "${BIND_ADDRESS:-127.0.0.1}:${COORDINATOR_HOST_PORT:-7443}:7443"
       - "127.0.0.1:${METRICS_HOST_PORT:-9464}:9464"
     mem_limit: 1g
     cpus: 2

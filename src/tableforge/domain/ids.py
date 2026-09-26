@@ -13,6 +13,10 @@ CheckpointId = NewType("CheckpointId", str)
 ArtifactId = NewType("ArtifactId", str)
 MatchId = NewType("MatchId", str)
 EventId = NewType("EventId", str)
+ClusterId = NewType("ClusterId", str)
+WorkerId = NewType("WorkerId", str)
+InviteId = NewType("InviteId", str)
+OperatorId = NewType("OperatorId", str)
 
 _Id = TypeVar("_Id", bound=str)
 
@@ -68,3 +72,19 @@ def new_match_id() -> MatchId:
 
 def new_event_id() -> EventId:
     return EventId(uuid7())
+
+
+def new_cluster_id() -> ClusterId:
+    return ClusterId(uuid7())
+
+
+def new_worker_id() -> WorkerId:
+    return WorkerId(uuid7())
+
+
+def new_invite_id() -> InviteId:
+    return InviteId(uuid7())
+
+
+def new_operator_id() -> OperatorId:
+    return OperatorId(uuid7())

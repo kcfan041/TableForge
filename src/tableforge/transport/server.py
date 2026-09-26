@@ -12,6 +12,7 @@ from typing import Any, NoReturn, Protocol
 import grpc
 
 from tableforge._generated.tableforge.v1 import (
+    control_pb2_grpc,
     coordinator_pb2,
     coordinator_pb2_grpc,
 )
@@ -22,10 +23,11 @@ from tableforge.application.ports import (
 )
 from tableforge.coordinator.service import CoordinatorService, DirectTransferUnavailableError
 from tableforge.domain.auth import AuthenticationError
-from tableforge.domain.ids import JobId, NodeId
+from tableforge.domain.ids import JobId, NodeId, WorkerId
 from tableforge.infrastructure.s3_artifacts import UnknownEndpointError
 from tableforge.observability import COUNTERS
 from tableforge.transport import convert
+from tableforge.transport.control import ControlServicer
 from tableforge.transport.errors import ERROR_CODES, ERROR_METADATA_KEY
 from tableforge.transport.tls import TlsMaterial
 
@@ -42,6 +44,42 @@ class Clock(Protocol):
 @dataclass(frozen=True, slots=True)
 class ServerConfig:
     session_ttl: timedelta = timedelta(days=7)
+    operator_ttl: timedelta = timedelta(days=30)
+    storage_endpoints: tuple[tuple[str, str], ...] = ()
+    lease_duration: timedelta = timedelta(minutes=5)
+    idle_interval: timedelta = timedelta(seconds=1)
+    direct_transfer: bool = True
+
+    def node_settings(self, peer: str = "") -> coordinator_pb2.NodeSettings:
+        """Storage candidates for a node, most likely reachable first.
+
+        The coordinator cannot know which address a node can reach, so it only orders the
+        candidates; the node probes them and keeps the first that answers. An endpoint
+        whose host matches the address the node connected from is tried first.
+        """
+        peer_host = _peer_host(peer)
+        ranked = sorted(
+            enumerate(self.storage_endpoints),
+            key=lambda item: (0 if peer_host and peer_host in item[1][1] else 1, item[0]),
+        )
+        return coordinator_pb2.NodeSettings(
+            storage_endpoints=[
+                coordinator_pb2.StorageEndpoint(name=name, url=url, priority=rank)
+                for rank, (_, (name, url)) in enumerate(ranked)
+            ],
+            lease_duration=convert.duration_to_proto(self.lease_duration),
+            idle_interval=convert.duration_to_proto(self.idle_interval),
+            direct_transfer=self.direct_transfer,
+        )
+
+
+def _peer_host(peer: str) -> str:
+    if peer.startswith(("ipv4:", "ipv6:")):
+        address = peer.split(":", 1)[1]
+        if address.startswith("["):
+            return address[1 : address.find("]")]
+        return address.rsplit(":", 1)[0]
+    return ""
 
 
 def _authenticate(auth: AuthRepository, context: grpc.ServicerContext, now: datetime) -> NodeId:
@@ -53,6 +91,15 @@ def _authenticate(auth: AuthRepository, context: grpc.ServicerContext, now: date
         return auth.authenticate(header.removeprefix("Bearer "), now)
     except AuthenticationError as error:
         _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", str(error))
+
+
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("tableforge")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def _abort(
@@ -150,6 +197,61 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
             expires_at=convert.timestamp_to_proto(session.expires_at),
         )
 
+    def GetClusterInfo(
+        self, request: coordinator_pb2.GetClusterInfoRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.ClusterInfo:
+        del request, context
+        return coordinator_pb2.ClusterInfo(
+            cluster_id=str(self._auth.cluster_id(self._clock.now())),
+            coordinator_version=_version(),
+        )
+
+    def RedeemInvite(
+        self, request: coordinator_pb2.RedeemInviteRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.RedeemInviteResponse:
+        now = self._clock.now()
+        try:
+            redemption = self._auth.redeem_invite(
+                request.invite_secret,
+                NodeId(request.node_id) if request.node_id else None,
+                now,
+                self._config.session_ttl,
+                self._config.operator_ttl,
+            )
+        except AuthenticationError as error:
+            _abort(context, grpc.StatusCode.UNAUTHENTICATED, "INVITE_REJECTED", str(error))
+        response = coordinator_pb2.RedeemInviteResponse(
+            cluster_id=str(self._auth.cluster_id(now)),
+            scope=redemption.invite.scope.encode(),
+        )
+        if redemption.session is not None:
+            response.session_token = redemption.session.token
+            response.session_expires_at.CopyFrom(
+                convert.timestamp_to_proto(redemption.session.expires_at)
+            )
+            response.node_settings.CopyFrom(self._config.node_settings(context.peer()))
+        if redemption.operator is not None:
+            response.operator_id = str(redemption.operator.operator_id)
+            response.operator_token = redemption.operator.token
+            response.operator_role = redemption.operator.role.value
+            response.operator_expires_at.CopyFrom(
+                convert.timestamp_to_proto(redemption.operator.expires_at)
+            )
+        return response
+
+    def StartWorker(
+        self, request: coordinator_pb2.StartWorkerRequest, context: grpc.ServicerContext
+    ) -> coordinator_pb2.StartWorkerResponse:
+        now = self._clock.now()
+        caller = _authenticate(self._auth, context, now)
+        _require_same_node(context, caller, request.node_id)
+        worker_id = self._auth.start_worker(caller, request.label[:64], now)
+        return coordinator_pb2.StartWorkerResponse(
+            worker_id=str(worker_id),
+            cluster_id=str(self._auth.cluster_id(now)),
+            node_settings=self._config.node_settings(context.peer()),
+        )
+
     def RegisterNode(
         self, request: coordinator_pb2.RegisterNodeRequest, context: grpc.ServicerContext
     ) -> coordinator_pb2.RegisterNodeResponse:
@@ -183,9 +285,19 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
         _require_same_node(context, caller, request.capability.node_id)
         duration = _lease_duration(context, convert.duration_from_proto(request.lease_duration))
         capability = _guarded(context, lambda: convert.capability_from_proto(request.capability))
+        if request.worker_id:
+            owner = self._auth.worker_node(WorkerId(request.worker_id))
+            if owner != caller:
+                _abort(
+                    context,
+                    grpc.StatusCode.PERMISSION_DENIED,
+                    "WORKER_MISMATCH",
+                    "worker slot does not belong to this node",
+                )
+            self._auth.touch_worker(WorkerId(request.worker_id), now)
         lease = _guarded(
             context,
-            lambda: self._service.claim_job(caller, capability, now, duration),
+            lambda: self._service.claim_job(caller, capability, now, duration, request.worker_id),
         )
         response = coordinator_pb2.ClaimJobResponse()
         if lease is not None:
@@ -464,6 +576,7 @@ def start_server(
     tls: TlsMaterial | None,
     config: ServerConfig | None = None,
     max_workers: int = 16,
+    control: ControlServicer | None = None,
 ) -> RunningServer:
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=max_workers),
@@ -479,6 +592,8 @@ def start_server(
     coordinator_pb2_grpc.add_ArtifactServiceServicer_to_server(
         ArtifactServicer(service, auth, clock), server
     )
+    if control is not None:
+        control_pb2_grpc.add_ControlServiceServicer_to_server(control, server)
     if tls is None:
         port = server.add_insecure_port(address)
     else:

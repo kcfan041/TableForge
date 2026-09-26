@@ -3,10 +3,35 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import datetime, timedelta
+from typing import Any
 
-from tableforge.domain.auth import AuthenticationError, IssuedSession
-from tableforge.domain.ids import NodeId
-from tableforge.infrastructure.sql.database import Database, parse_timestamp, require_aware
+from tableforge.domain.auth import (
+    AuthenticationError,
+    Invite,
+    InviteScope,
+    IssuedOperator,
+    IssuedSession,
+    OperatorIdentity,
+    OperatorRole,
+    Redemption,
+)
+from tableforge.domain.ids import (
+    ClusterId,
+    InviteId,
+    NodeId,
+    OperatorId,
+    WorkerId,
+    new_cluster_id,
+    new_invite_id,
+    new_operator_id,
+    new_worker_id,
+)
+from tableforge.infrastructure.sql.database import (
+    Database,
+    optional_timestamp,
+    parse_timestamp,
+    require_aware,
+)
 
 ENROLLMENT_TOKEN_PREFIX = "tfe_"
 
@@ -99,6 +124,8 @@ class SqlAuthRepository:
 
     def authenticate(self, session_token: str, now: datetime) -> NodeId:
         require_aware(now)
+        if session_token.startswith(OPERATOR_TOKEN_PREFIX):
+            raise AuthenticationError("operator credentials cannot act as a node")
         with self._db.read() as connection:
             row = connection.execute(
                 "SELECT * FROM node_sessions WHERE token_hash = ?", (_hash(session_token),)
@@ -145,6 +172,245 @@ class SqlAuthRepository:
                 ),
             )
         return IssuedSession(replacement, NodeId(row["node_id"]), expires_at)
+
+    def cluster_id(self, now: datetime) -> ClusterId:
+        """Return this cluster's permanent identity, creating it on first use."""
+        with self._db.transaction() as connection:
+            row = connection.execute(
+                f"SELECT cluster_id FROM cluster_identity WHERE singleton = 1"
+                f"{self._db.lock_for_update}"
+            ).fetchone()
+            if row is not None:
+                return ClusterId(row["cluster_id"])
+            cluster = new_cluster_id()
+            connection.execute(
+                "INSERT INTO cluster_identity (singleton, cluster_id, created_at) VALUES (1, ?, ?)",
+                (str(cluster), self._db.timestamp(now)),
+            )
+            return cluster
+
+    def create_invite(
+        self, scope: InviteScope, now: datetime, ttl: timedelta, label: str = ""
+    ) -> tuple[Invite, str]:
+        """Create a single-use invite and return it with its secret (shown only once)."""
+        require_aware(now)
+        if ttl <= timedelta(0):
+            raise ValueError("invite ttl must be positive")
+        secret = secrets.token_urlsafe(32)
+        invite = Invite(
+            invite_id=new_invite_id(),
+            scope=scope,
+            label=label,
+            created_at=now,
+            expires_at=now + ttl,
+            redeemed_at=None,
+            redeemed_by=None,
+            revoked=False,
+        )
+        with self._db.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO invites (
+                    invite_id, secret_hash, scope, label, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(invite.invite_id),
+                    _hash(secret),
+                    scope.encode(),
+                    label,
+                    self._db.timestamp(now),
+                    self._db.timestamp(invite.expires_at),
+                ),
+            )
+        return invite, secret
+
+    def redeem_invite(
+        self,
+        secret: str,
+        node_id: NodeId | None,
+        now: datetime,
+        session_ttl: timedelta,
+        operator_ttl: timedelta,
+    ) -> Redemption:
+        """Exchange an invite secret for long-lived credentials, exactly once.
+
+        A node-scoped invite requires ``node_id`` and yields a node session. A role-scoped
+        invite yields an operator credential. The secret itself never authenticates anything
+        afterwards.
+        """
+        require_aware(now)
+        with self._db.transaction() as connection:
+            row = connection.execute(
+                f"SELECT * FROM invites WHERE secret_hash = ?{self._db.lock_for_update}",
+                (_hash(secret),),
+            ).fetchone()
+            if row is None:
+                raise AuthenticationError("invalid invite")
+            invite = _invite(row)
+            if invite.revoked:
+                raise AuthenticationError("invite was revoked")
+            if invite.redeemed_at is not None:
+                raise AuthenticationError("invite was already used")
+            if now >= invite.expires_at:
+                raise AuthenticationError("invite expired")
+            if invite.scope.node and not node_id:
+                raise AuthenticationError("this invite enrolls a node; node id is required")
+            session: IssuedSession | None = None
+            if invite.scope.node and node_id:
+                token = secrets.token_urlsafe(32)
+                session = IssuedSession(token, node_id, now + session_ttl)
+                connection.execute(
+                    """
+                    INSERT INTO node_sessions (
+                        token_hash, node_id, created_at, expires_at, invite_id
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _hash(token),
+                        str(node_id),
+                        self._db.timestamp(now),
+                        self._db.timestamp(session.expires_at),
+                        str(invite.invite_id),
+                    ),
+                )
+            operator: IssuedOperator | None = None
+            if invite.scope.role is not None:
+                token = f"{OPERATOR_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+                operator = IssuedOperator(
+                    new_operator_id(), token, invite.scope.role, now + operator_ttl
+                )
+                connection.execute(
+                    """
+                    INSERT INTO operators (
+                        operator_id, token_hash, role, label, invite_id, created_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(operator.operator_id),
+                        _hash(token),
+                        operator.role.value,
+                        invite.label,
+                        str(invite.invite_id),
+                        self._db.timestamp(now),
+                        self._db.timestamp(operator.expires_at),
+                    ),
+                )
+            redeemed_by = str(node_id) if node_id else str(operator.operator_id if operator else "")
+            connection.execute(
+                "UPDATE invites SET redeemed_at = ?, redeemed_by = ? WHERE invite_id = ?",
+                (self._db.timestamp(now), redeemed_by, str(invite.invite_id)),
+            )
+        redeemed = Invite(
+            invite.invite_id,
+            invite.scope,
+            invite.label,
+            invite.created_at,
+            invite.expires_at,
+            now,
+            redeemed_by,
+            False,
+        )
+        return Redemption(redeemed, session, operator)
+
+    def list_invites(self) -> tuple[Invite, ...]:
+        with self._db.read() as connection:
+            rows = connection.execute("SELECT * FROM invites ORDER BY created_at").fetchall()
+        return tuple(_invite(row) for row in rows)
+
+    def revoke_invite(self, invite_id: InviteId) -> bool:
+        with self._db.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE invites SET revoked = 1
+                WHERE invite_id = ? AND revoked = 0 AND redeemed_at IS NULL
+                """,
+                (str(invite_id),),
+            )
+            return cursor.rowcount == 1
+
+    def authenticate_operator(self, token: str, now: datetime) -> OperatorIdentity:
+        require_aware(now)
+        if not token.startswith(OPERATOR_TOKEN_PREFIX):
+            raise AuthenticationError("invalid operator credential")
+        with self._db.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM operators WHERE token_hash = ?", (_hash(token),)
+            ).fetchone()
+        if row is None or row["revoked"] or parse_timestamp(row["expires_at"]) <= now:
+            raise AuthenticationError("invalid or expired operator credential")
+        return OperatorIdentity(
+            OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
+        )
+
+    def list_operators(self) -> tuple[OperatorIdentity, ...]:
+        with self._db.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM operators WHERE revoked = 0 ORDER BY created_at"
+            ).fetchall()
+        return tuple(
+            OperatorIdentity(
+                OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
+            )
+            for row in rows
+        )
+
+    def revoke_operator(self, operator_id: OperatorId) -> bool:
+        with self._db.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE operators SET revoked = 1 WHERE operator_id = ? AND revoked = 0",
+                (str(operator_id),),
+            )
+            return cursor.rowcount == 1
+
+    def start_worker(self, node_id: NodeId, label: str, now: datetime) -> WorkerId:
+        require_aware(now)
+        worker_id = new_worker_id()
+        with self._db.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_slots (worker_id, node_id, label, started_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(worker_id),
+                    str(node_id),
+                    label,
+                    self._db.timestamp(now),
+                    self._db.timestamp(now),
+                ),
+            )
+        return worker_id
+
+    def worker_node(self, worker_id: WorkerId) -> NodeId | None:
+        with self._db.read() as connection:
+            row = connection.execute(
+                "SELECT node_id FROM worker_slots WHERE worker_id = ?", (str(worker_id),)
+            ).fetchone()
+        return NodeId(row["node_id"]) if row is not None else None
+
+    def touch_worker(self, worker_id: WorkerId, now: datetime) -> None:
+        with self._db.transaction() as connection:
+            connection.execute(
+                "UPDATE worker_slots SET last_seen_at = ? WHERE worker_id = ?",
+                (self._db.timestamp(now), str(worker_id)),
+            )
+
+
+OPERATOR_TOKEN_PREFIX = "tfo_"
+
+
+def _invite(row: Any) -> Invite:
+    return Invite(
+        invite_id=InviteId(row["invite_id"]),
+        scope=InviteScope.decode(row["scope"]),
+        label=row["label"],
+        created_at=parse_timestamp(row["created_at"]),
+        expires_at=parse_timestamp(row["expires_at"]),
+        redeemed_at=optional_timestamp(row["redeemed_at"]),
+        redeemed_by=row["redeemed_by"],
+        revoked=bool(row["revoked"]),
+    )
 
 
 def _hash(token: str) -> str:

@@ -16,8 +16,13 @@ TABLES: tuple[str, ...] = (
     "node_capability_snapshots",
     "checkpoints",
     "enrollment_tokens",
+    "enrollment_token_uses",
     "node_sessions",
     "events",
+    "cluster_identity",
+    "invites",
+    "operators",
+    "worker_slots",
 )
 
 TIMESTAMP_COLUMNS: dict[str, frozenset[str]] = {
@@ -30,8 +35,13 @@ TIMESTAMP_COLUMNS: dict[str, frozenset[str]] = {
     "node_capability_snapshots": frozenset({"captured_at"}),
     "checkpoints": frozenset({"created_at", "updated_at"}),
     "enrollment_tokens": frozenset({"created_at", "expires_at", "used_at"}),
+    "enrollment_token_uses": frozenset({"used_at"}),
     "node_sessions": frozenset({"created_at", "expires_at"}),
     "events": frozenset({"occurred_at", "published_at"}),
+    "cluster_identity": frozenset({"created_at"}),
+    "invites": frozenset({"created_at", "expires_at", "redeemed_at"}),
+    "operators": frozenset({"created_at", "expires_at"}),
+    "worker_slots": frozenset({"started_at", "last_seen_at"}),
 }
 
 ORDER_BY: dict[str, str] = {
@@ -44,8 +54,13 @@ ORDER_BY: dict[str, str] = {
     "node_capability_snapshots": "node_id, revision",
     "checkpoints": "checkpoint_id",
     "enrollment_tokens": "token_hash",
+    "enrollment_token_uses": "token_hash, node_id",
     "node_sessions": "token_hash",
     "events": "sequence",
+    "cluster_identity": "singleton",
+    "invites": "invite_id",
+    "operators": "operator_id",
+    "worker_slots": "worker_id",
 }
 
 BATCH = 500

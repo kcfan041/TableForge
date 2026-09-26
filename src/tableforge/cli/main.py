@@ -17,13 +17,16 @@ from tableforge.capability.evaluator import assess_compatibility
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.composition import Services, build_services
 from tableforge.coordinator.service import CoordinatorService
+from tableforge.domain.auth import OperatorRole
 from tableforge.domain.capabilities import CompatibilityStatus, NodeCapability
 from tableforge.domain.ids import (
     AgentId,
     CheckpointId,
     ExperimentId,
+    InviteId,
     JobId,
     NodeId,
+    OperatorId,
     new_experiment_id,
     new_job_id,
 )
@@ -37,7 +40,7 @@ from tableforge.settings import Settings, SettingsError, load_settings
 from tableforge.transport.client import enroll
 from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.server import start_server
-from tableforge.transport.tls import TlsMaterial, generate_self_signed
+from tableforge.transport.tls import CertificateHostsError, TlsMaterial, generate_self_signed
 from tableforge.worker.client import CoordinatorClient
 from tableforge.worker.loop import JsonLineLogger, WorkerLoop
 from tableforge.worker.runtime import RegisteredExecutor, WorkerRuntime
@@ -73,16 +76,22 @@ def main() -> None:
     worker_start.add_argument("--idle-seconds", type=float)
     worker_start.add_argument("--remote", action="store_true")
     worker_start.add_argument("--lease-seconds", type=float)
-    worker_start.add_argument(
-        "--no-gpu", action="store_false", dest="use_gpu", default=None
-    )
+    worker_start.add_argument("--no-gpu", action="store_false", dest="use_gpu", default=None)
 
     coordinator = subparsers.add_parser("coordinator")
-    coordinator_subparsers = coordinator.add_subparsers(
-        dest="coordinator_command", required=True
-    )
+    coordinator_subparsers = coordinator.add_subparsers(dest="coordinator_command", required=True)
     coordinator_init = coordinator_subparsers.add_parser("init")
-    coordinator_init.add_argument("--host", action="append", default=[])
+    coordinator_init.add_argument(
+        "--host",
+        action="append",
+        default=[],
+        help="extra DNS name or IP the certificate must cover (repeatable), e.g. a Tailscale IP",
+    )
+    coordinator_init.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="replace the certificate; enrolled nodes then need a new invite",
+    )
     coordinator_serve = coordinator_subparsers.add_parser("serve")
     coordinator_serve.add_argument("--listen")
     coordinator_serve.add_argument("--insecure", action="store_true")
@@ -92,11 +101,67 @@ def main() -> None:
     enrollment.add_argument("--ttl-minutes", type=int, default=60)
     enrollment.add_argument("--max-uses", type=int, default=1)
     enrollment.add_argument("--output", type=Path)
+    invite = coordinator_subparsers.add_parser(
+        "invite", help="create, list or revoke single-use invites (coordinator host only)"
+    )
+    invite_subparsers = invite.add_subparsers(dest="invite_command", required=True)
+    invite_create = invite_subparsers.add_parser("create")
+    invite_create.add_argument(
+        "--address",
+        required=True,
+        help="host:port the new machine uses to reach this coordinator, e.g. 100.64.0.1:7443",
+    )
+    invite_create.add_argument(
+        "--node", action="store_true", help="enroll the joining machine as a worker node"
+    )
+    invite_create.add_argument(
+        "--role",
+        choices=[role.value for role in OperatorRole],
+        help="also grant a remote control credential with this role",
+    )
+    invite_create.add_argument("--ttl-hours", type=float, default=24.0)
+    invite_create.add_argument("--label", default="")
+    invite_subparsers.add_parser("list")
+    invite_revoke = invite_subparsers.add_parser("revoke")
+    invite_revoke.add_argument("invite_id")
+    operator = coordinator_subparsers.add_parser(
+        "operator", help="list or revoke remote control credentials (coordinator host only)"
+    )
+    operator_subparsers = operator.add_subparsers(dest="operator_command", required=True)
+    operator_subparsers.add_parser("list")
+    operator_revoke = operator_subparsers.add_parser("revoke")
+    operator_revoke.add_argument("operator_id")
+
+    join_parser = subparsers.add_parser(
+        "join", help="join a TableForge cluster with an invite code"
+    )
+    join_parser.add_argument("invite")
+
+    remote = subparsers.add_parser(
+        "remote", help="control a cluster remotely with the credential from `join`"
+    )
+    remote.add_argument("--cluster", help="cluster id when this machine joined several")
+    remote_subparsers = remote.add_subparsers(dest="remote_command", required=True)
+    remote_subparsers.add_parser("whoami")
+    remote_subparsers.add_parser("presets")
+    remote_subparsers.add_parser("nodes")
+    remote_experiment = remote_subparsers.add_parser("experiment")
+    remote_experiment_subparsers = remote_experiment.add_subparsers(
+        dest="remote_experiment_command", required=True
+    )
+    remote_experiment_subparsers.add_parser("list")
+    remote_create = remote_experiment_subparsers.add_parser("create")
+    remote_create.add_argument("--preset", required=True)
+    for name in ("start", "stop", "status"):
+        remote_experiment_subparsers.add_parser(name).add_argument("experiment_id")
+    remote_checkpoint = remote_subparsers.add_parser("checkpoints")
+    remote_checkpoint.add_argument("--agent", default="")
+    remote_matrix = remote_subparsers.add_parser("matrix")
+    remote_matrix.add_argument("experiment_id")
+    remote_matrix.add_argument("--json", action="store_true", dest="as_json")
 
     experiment = subparsers.add_parser("experiment")
-    experiment_subparsers = experiment.add_subparsers(
-        dest="experiment_command", required=True
-    )
+    experiment_subparsers = experiment.add_subparsers(dest="experiment_command", required=True)
     experiment_create = experiment_subparsers.add_parser("create")
     experiment_create.add_argument("--preset", required=True)
     experiment_start = experiment_subparsers.add_parser("start")
@@ -146,9 +211,7 @@ def main() -> None:
     metadata_copy.add_argument("source", type=Path)
 
     checkpoint = subparsers.add_parser("checkpoint")
-    checkpoint_subparsers = checkpoint.add_subparsers(
-        dest="checkpoint_command", required=True
-    )
+    checkpoint_subparsers = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
     checkpoint_list = checkpoint_subparsers.add_parser("list")
     checkpoint_list.add_argument("--agent")
     checkpoint_show = checkpoint_subparsers.add_parser("show")
@@ -182,6 +245,12 @@ def main() -> None:
     if args.command == "doctor":
         exit_code = run_doctor(args.data_path, args.as_json)
         raise SystemExit(exit_code)
+    if args.command == "join":
+        _join(args, settings)
+        return
+    if args.command == "remote":
+        _remote(args)
+        return
     if args.command == "node" and args.node_command == "enroll":
         _enroll_node(args)
         return
@@ -189,19 +258,22 @@ def main() -> None:
         path = settings.data_dir / "coordinator.json"
         credentials = RemoteCredentials.load(path)
         session, expires_at = credentials.client().rotate_session()
-        RemoteCredentials(credentials.target, session, credentials.ca_certificate).save(path)
+        credentials.with_session(session).save(path)
         print(f"rotated\texpires={expires_at.isoformat()}")
         return
     if args.command == "worker" and args.worker_command == "start" and args.remote:
-        _run_worker(
-            RemoteCredentials.load(settings.data_dir / "coordinator.json").client(
-                settings.data_dir / "artifact-cache",
-                settings.worker.cache_max_bytes,
-                settings.artifacts.endpoint,
-            ),
-            settings,
-            args.max_jobs,
+        credentials_path = settings.data_dir / "coordinator.json"
+        if not credentials_path.is_file():
+            raise SystemExit(
+                f"this machine has not joined a cluster ({credentials_path} not found); "
+                "run `tableforge join <invite>` first"
+            )
+        client = RemoteCredentials.load(credentials_path).client(
+            settings.data_dir / "artifact-cache",
+            settings.worker.cache_max_bytes,
+            settings.artifacts.endpoint or None,
         )
+        _run_worker(client, settings, args.max_jobs, start_slot=True)
         return
     if args.command == "metadata":
         _metadata_command(args, settings)
@@ -293,9 +365,7 @@ def main() -> None:
             for current in experiments.list_experiments():
                 print(f"{current.experiment_id}\t{current.status.value}")
     elif args.command == "league":
-        matrix = services.experiments.league_matrix(
-            ExperimentId(args.experiment_id)
-        )
+        matrix = services.experiments.league_matrix(ExperimentId(args.experiment_id))
         if matrix is None:
             raise SystemExit("matchup matrix is not available yet")
         if args.as_json:
@@ -414,9 +484,7 @@ def submit_simulation(
 def _learning_available() -> bool:
     import importlib.util
 
-    return all(
-        importlib.util.find_spec(name) is not None for name in ("torch", "safetensors")
-    )
+    return all(importlib.util.find_spec(name) is not None for name in ("torch", "safetensors"))
 
 
 def _worker_roles() -> tuple[str, ...]:
@@ -464,6 +532,7 @@ def _run_worker(
     settings: Settings,
     max_jobs: int | None,
     on_idle: Callable[[], bool] | None = None,
+    start_slot: bool = False,
 ) -> None:
     stop = _stop_event()
 
@@ -471,9 +540,20 @@ def _run_worker(
         stop.wait(seconds)
 
     runtime = _local_worker(coordinator, settings)
+    context: dict[str, object] = {"component": "worker", "node_id": str(runtime.node_id)}
+    if start_slot:
+        from tableforge.transport.client import GrpcCoordinatorClient
+
+        assert isinstance(coordinator, GrpcCoordinatorClient)
+        import platform
+
+        started = coordinator.start_worker(runtime.node_id, platform.node()[:64])
+        context["worker_id"] = started.worker_id
+        context["cluster_id"] = started.cluster_id
+        context["storage_endpoint"] = coordinator.storage_endpoint or "default"
     WorkerLoop(
         runtime=runtime,
-        logger=JsonLineLogger().bind(component="worker", node_id=str(runtime.node_id)),
+        logger=JsonLineLogger().bind(**context),
         idle_seconds=settings.worker.idle_seconds,
         sleep=interruptible_sleep,
         on_idle=on_idle,
@@ -486,8 +566,32 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
     auth = services.repositories.auth
     service = services.coordinator
     if args.coordinator_command == "init":
-        material = generate_self_signed(data_dir / "tls", tuple(args.host))
-        print(material.certificate_path)
+        try:
+            material = generate_self_signed(
+                data_dir / "tls", tuple(args.host), regenerate=args.regenerate
+            )
+        except CertificateHostsError as error:
+            raise SystemExit(str(error)) from error
+        print(
+            json.dumps(
+                {
+                    "certificate": str(material.certificate_path),
+                    "fingerprint": material.fingerprint(),
+                    "hosts": list(material.hosts()),
+                },
+                sort_keys=True,
+            )
+        )
+    elif args.coordinator_command == "invite":
+        _invite_command(args, services)
+    elif args.coordinator_command == "operator":
+        if args.operator_command == "list":
+            for identity in auth.list_operators():
+                print(f"{identity.operator_id}\t{identity.role.value}\t{identity.label}")
+        elif not auth.revoke_operator(OperatorId(args.operator_id)):
+            raise SystemExit(f"no active operator credential {args.operator_id}")
+        else:
+            print(f"{args.operator_id}\trevoked")
     elif args.coordinator_command == "enrollment-token":
         if args.ttl_minutes < 1 or args.max_uses < 1:
             raise SystemExit("--ttl-minutes and --max-uses must be at least 1")
@@ -506,7 +610,34 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             if not material.certificate_path.exists():
                 raise SystemExit("run 'tableforge coordinator init' first or pass --insecure")
             tls = material
-        running = start_server(service, auth, SystemClock(), settings.coordinator.listen, tls)
+        from tableforge.infrastructure.s3_artifacts import parse_endpoints
+        from tableforge.transport.control import ControlServicer
+        from tableforge.transport.server import ServerConfig
+
+        endpoints: list[tuple[str, str]] = []
+        if settings.artifacts.backend == "s3" and settings.artifacts.direct_transfer:
+            default_url = settings.artifacts.public_endpoint_url or settings.artifacts.endpoint_url
+            if default_url:
+                endpoints.append(("", default_url))
+            endpoints.extend(parse_endpoints(settings.artifacts.endpoints).items())
+        clock = SystemClock()
+        auth.cluster_id(clock.now())
+        running = start_server(
+            service,
+            auth,
+            clock,
+            settings.coordinator.listen,
+            tls,
+            config=ServerConfig(
+                storage_endpoints=tuple(endpoints),
+                lease_duration=timedelta(seconds=settings.worker.lease_seconds),
+                idle_interval=timedelta(seconds=settings.worker.idle_seconds),
+                direct_transfer=settings.artifacts.direct_transfer,
+            ),
+            control=ControlServicer(
+                services.experiments, services.repositories.checkpoints, auth, clock
+            ),
+        )
         logger = JsonLineLogger().bind(component="coordinator")
         logger.emit(
             "coordinator_started",
@@ -539,6 +670,188 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             metrics.stop()
         running.stop(5.0)
         logger.emit("coordinator_stopped")
+
+
+def _invite_command(args: argparse.Namespace, services: Services) -> None:
+    from tableforge.domain.auth import InviteScope
+    from tableforge.infrastructure.s3_artifacts import parse_endpoints
+    from tableforge.transport.invite import InviteCode
+    from tableforge.transport.tls import covers
+
+    auth = services.repositories.auth
+    settings = services.settings
+    now = datetime.now(UTC)
+    if args.invite_command == "list":
+        for item in auth.list_invites():
+            state = (
+                "revoked"
+                if item.revoked
+                else "used"
+                if item.redeemed_at
+                else "expired"
+                if not item.usable(now)
+                else "open"
+            )
+            print(
+                f"{item.invite_id}\t{item.scope.encode()}\t{state}"
+                f"\texpires={item.expires_at.isoformat()}\t{item.label}"
+            )
+        return
+    if args.invite_command == "revoke":
+        if not auth.revoke_invite(InviteId(args.invite_id)):
+            raise SystemExit(f"no open invite {args.invite_id}")
+        print(f"{args.invite_id}\trevoked")
+        return
+    try:
+        scope = InviteScope(node=args.node, role=OperatorRole(args.role) if args.role else None)
+    except ValueError as error:
+        raise SystemExit("choose --node, --role, or both") from error
+    if args.ttl_hours <= 0:
+        raise SystemExit("--ttl-hours must be positive")
+    material = TlsMaterial(
+        settings.data_dir / "tls" / "server.crt", settings.data_dir / "tls" / "server.key"
+    )
+    if not material.certificate_path.is_file():
+        raise SystemExit("no coordinator certificate; run `tableforge coordinator init` first")
+    host = args.address.rsplit(":", 1)[0].strip("[]")
+    if ":" not in args.address or not covers(material.hosts(), host):
+        raise SystemExit(
+            f"the coordinator certificate does not cover {host!r} "
+            f"(covers {', '.join(material.hosts())}). Run "
+            f"`tableforge coordinator init --host {host} --regenerate`, restart the "
+            "coordinator, and invite again."
+        )
+    if scope.node and settings.artifacts.backend == "s3" and settings.artifacts.direct_transfer:
+        offered = parse_endpoints(settings.artifacts.endpoints)
+        if not offered and not settings.artifacts.public_endpoint_url:
+            print(
+                "warning: only the internal storage address is offered to nodes; remote "
+                "machines usually need artifacts.endpoints (EXTRA_STORAGE_ENDPOINTS)",
+                file=sys.stderr,
+            )
+    invite, secret = auth.create_invite(scope, now, timedelta(hours=args.ttl_hours), args.label)
+    code = InviteCode(
+        cluster_id=str(auth.cluster_id(now)),
+        address=args.address,
+        fingerprint=material.fingerprint(),
+        secret=secret,
+        scope=scope,
+    ).encode()
+    print(
+        json.dumps(
+            {
+                "expires_at": invite.expires_at.isoformat(),
+                "invite": code,
+                "invite_id": str(invite.invite_id),
+                "scope": scope.encode(),
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def _join(args: argparse.Namespace, settings: Settings) -> None:
+    from tableforge.transport.invite import InviteCode, InviteFormatError
+    from tableforge.transport.join import JoinError, default_operator_dir, join
+
+    try:
+        code = InviteCode.decode(args.invite)
+    except InviteFormatError as error:
+        raise SystemExit(str(error)) from error
+    node_id = None
+    if code.scope.node:
+        existing = settings.data_dir / "coordinator.json"
+        if existing.is_file():
+            raise SystemExit(
+                f"{settings.data_dir} already belongs to a cluster; use another --data-dir "
+                "to join a second cluster from this machine"
+            )
+        node_id = str(NodeIdentityStore(settings.data_dir / "node-id").load_or_create())
+    try:
+        result = join(code, node_id, settings.data_dir, default_operator_dir())
+    except JoinError as error:
+        raise SystemExit(f"join failed: {error}") from error
+    report: dict[str, object] = {"cluster_id": result.cluster_id, "scope": result.scope}
+    if result.node_id:
+        report["node_id"] = result.node_id
+        report["storage_endpoint"] = result.storage_endpoint or "default"
+        report["storage_probe"] = result.storage_report
+        report["next"] = f"tableforge --data-dir {settings.data_dir} worker start --remote"
+    if result.operator_role:
+        report["operator_role"] = result.operator_role
+        report["operator_credential"] = str(result.operator_file)
+    print(json.dumps(report, sort_keys=True, indent=2))
+
+
+def _remote(args: argparse.Namespace) -> None:
+    from tableforge.transport.control_client import ControlError, RemoteControl, experiment_json
+    from tableforge.transport.join import JoinError, OperatorCredentials, default_operator_dir
+
+    try:
+        control = RemoteControl(OperatorCredentials.load(default_operator_dir(), args.cluster))
+    except JoinError as error:
+        raise SystemExit(str(error)) from error
+    try:
+        if args.remote_command == "whoami":
+            me = control.whoami()
+            print(
+                json.dumps(
+                    {
+                        "cluster_id": me.cluster_id,
+                        "label": me.label,
+                        "operator_id": me.operator_id,
+                        "role": me.role,
+                    },
+                    sort_keys=True,
+                )
+            )
+        elif args.remote_command == "presets":
+            print("\n".join(control.presets()))
+        elif args.remote_command == "nodes":
+            for node_view in control.nodes():
+                heartbeat = node_view.last_heartbeat_at.ToDatetime().isoformat()
+                print(
+                    f"{node_view.node_id}\t{node_view.operating_system}"
+                    f"\tcpu={node_view.logical_cpu_cores}"
+                    f"\tgpus={','.join(node_view.gpus) or '-'}\theartbeat={heartbeat}"
+                )
+        elif args.remote_command == "checkpoints":
+            for item in control.checkpoints(args.agent):
+                print(
+                    f"{item.checkpoint_id}\t{item.agent_id}\tround={item.round_index}\t{item.status}"
+                )
+        elif args.remote_command == "matrix":
+            matrix = control.matrix(args.experiment_id)
+            if matrix is None:
+                raise SystemExit("matchup matrix is not available yet")
+            if args.as_json:
+                print(json.dumps(matrix, sort_keys=True))
+            else:
+                print(
+                    _format_matrix(
+                        {
+                            row: {column: MatrixCell(**cell) for column, cell in cells.items()}
+                            for row, cells in matrix.items()
+                        }
+                    )
+                )
+        else:
+            command = args.remote_experiment_command
+            if command == "list":
+                for view in control.list_experiments():
+                    print(f"{view.experiment_id}\t{view.preset}\t{view.status}")
+            elif command == "create":
+                print(control.create(args.preset).experiment_id)
+            elif command == "start":
+                view = control.start(args.experiment_id)
+                print(f"{view.experiment_id}\t{view.status}")
+            elif command == "stop":
+                view = control.stop(args.experiment_id)
+                print(f"{view.experiment_id}\t{view.status}")
+            else:
+                print(json.dumps(experiment_json(control.get(args.experiment_id)), sort_keys=True))
+    except ControlError as error:
+        raise SystemExit(f"{error.code}: {error}") from error
 
 
 def _metadata_command(args: argparse.Namespace, settings: Settings) -> None:
@@ -685,9 +998,10 @@ def run_doctor(data_path: Path, as_json: bool) -> int:
 def _format_matrix(matrix: dict[str, dict[str, MatrixCell]]) -> str:
     names = list(matrix)
     width = max(len(name) for name in names) + 2
-    lines = ["row vs column, bb/100 (* = 95% CI excludes 0)", " " * width + "".join(
-        f"{name:>{width}}" for name in names
-    )]
+    lines = [
+        "row vs column, bb/100 (* = 95% CI excludes 0)",
+        " " * width + "".join(f"{name:>{width}}" for name in names),
+    ]
     for row in names:
         cells = []
         for column in names:

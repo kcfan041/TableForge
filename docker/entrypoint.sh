@@ -26,7 +26,10 @@ serve() {
     for host in $(printf '%s' "${hosts}" | tr ',' ' '); do
         set -- "$@" --host "${host}"
     done
-    tf coordinator init "$@" >/dev/null
+    if ! tf coordinator init "$@" >/dev/null 2>&1; then
+        log certificate_regenerated "TABLEFORGE_TLS_HOSTS changed; enrolled nodes need a new invite"
+        tf coordinator init --regenerate "$@" >/dev/null
+    fi
     tf metadata migrate-schema >/dev/null
     if [ -d "${SHARED_DIR}" ] && [ -w "${SHARED_DIR}" ]; then
         cp "${DATA_DIR}/tls/server.crt" "${CA_FILE}.tmp"

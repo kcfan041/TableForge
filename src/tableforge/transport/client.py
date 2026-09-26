@@ -92,6 +92,7 @@ class GrpcCoordinatorClient:
         self._cache_max_bytes = cache_max_bytes
         self._direct: bool | None = None
         self._storage_endpoint = storage_endpoint
+        self._worker_id = ""
         self._stub = coordinator_pb2_grpc.CoordinatorServiceStub(channel)
         self._artifacts = coordinator_pb2_grpc.ArtifactServiceStub(channel)
         self._metadata = (("authorization", f"Bearer {session_token}"),)
@@ -146,6 +147,36 @@ class GrpcCoordinatorClient:
             )
         )
 
+    def start_worker(self, node_id: NodeId, label: str = "") -> coordinator_pb2.StartWorkerResponse:
+        """Register this process as one worker slot of the node.
+
+        Also refreshes the storage endpoint choice: if the configured endpoint is no longer
+        offered or reachable, the first reachable candidate is used instead.
+        """
+        response, _ = self._call(
+            lambda: self._stub.StartWorker(
+                coordinator_pb2.StartWorkerRequest(node_id=str(node_id), label=label),
+                metadata=self._metadata,
+                timeout=self._retry.timeout,
+            )
+        )
+        self._worker_id = response.worker_id
+        offered = {item.name for item in response.node_settings.storage_endpoints}
+        if offered and (not self._storage_endpoint or self._storage_endpoint not in offered):
+            from tableforge.transport.join import choose_storage_endpoint
+
+            chosen, _ = choose_storage_endpoint(response.node_settings)
+            self._storage_endpoint = chosen or ""
+        return response
+
+    @property
+    def worker_id(self) -> str:
+        return self._worker_id
+
+    @property
+    def storage_endpoint(self) -> str:
+        return self._storage_endpoint
+
     def claim_job(
         self,
         node_id: NodeId,
@@ -158,6 +189,7 @@ class GrpcCoordinatorClient:
             node_id=str(node_id),
             capability=convert.capability_to_proto(capability),
             lease_duration=convert.duration_to_proto(duration),
+            worker_id=self._worker_id,
         )
         response, _ = self._call(
             lambda: self._stub.ClaimJob(

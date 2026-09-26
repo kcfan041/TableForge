@@ -72,6 +72,7 @@ class CoordinatorService:
         capability: NodeCapability,
         now: datetime,
         duration: timedelta,
+        worker_id: str = "",
     ) -> JobLease | None:
         effective = capability
         if self.nodes is not None:
@@ -111,6 +112,7 @@ class CoordinatorService:
             capability_revision=capability.revision,
             workload_identity=workload_identity,
             execution_plan=execution_plan,
+            worker_id=worker_id,
         )
 
     def renew_job(

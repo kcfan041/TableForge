@@ -44,6 +44,21 @@ class CoordinatorServiceStub:
                 request_serializer=tableforge_dot_v1_dot_coordinator__pb2.RotateSessionRequest.SerializeToString,
                 response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.FromString,
                 _registered_method=True)
+        self.GetClusterInfo = channel.unary_unary(
+                '/tableforge.v1.CoordinatorService/GetClusterInfo',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.GetClusterInfoRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.ClusterInfo.FromString,
+                _registered_method=True)
+        self.RedeemInvite = channel.unary_unary(
+                '/tableforge.v1.CoordinatorService/RedeemInvite',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.RedeemInviteRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RedeemInviteResponse.FromString,
+                _registered_method=True)
+        self.StartWorker = channel.unary_unary(
+                '/tableforge.v1.CoordinatorService/StartWorker',
+                request_serializer=tableforge_dot_v1_dot_coordinator__pb2.StartWorkerRequest.SerializeToString,
+                response_deserializer=tableforge_dot_v1_dot_coordinator__pb2.StartWorkerResponse.FromString,
+                _registered_method=True)
         self.RegisterNode = channel.unary_unary(
                 '/tableforge.v1.CoordinatorService/RegisterNode',
                 request_serializer=tableforge_dot_v1_dot_coordinator__pb2.RegisterNodeRequest.SerializeToString,
@@ -97,6 +112,27 @@ class CoordinatorServiceServicer:
 
     def RotateSession(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetClusterInfo(self, request, context):
+        """Unauthenticated: identifies the cluster before a node trusts it.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RedeemInvite(self, request, context):
+        """Exchanges a single-use invite secret for a node session and/or operator credential.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StartWorker(self, request, context):
+        """Node session only: registers one worker process (slot) of this node.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -161,6 +197,21 @@ def add_CoordinatorServiceServicer_to_server(servicer, server):
                     servicer.RotateSession,
                     request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RotateSessionRequest.FromString,
                     response_serializer=tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.SerializeToString,
+            ),
+            'GetClusterInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetClusterInfo,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.GetClusterInfoRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.ClusterInfo.SerializeToString,
+            ),
+            'RedeemInvite': grpc.unary_unary_rpc_method_handler(
+                    servicer.RedeemInvite,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.RedeemInviteRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.RedeemInviteResponse.SerializeToString,
+            ),
+            'StartWorker': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartWorker,
+                    request_deserializer=tableforge_dot_v1_dot_coordinator__pb2.StartWorkerRequest.FromString,
+                    response_serializer=tableforge_dot_v1_dot_coordinator__pb2.StartWorkerResponse.SerializeToString,
             ),
             'RegisterNode': grpc.unary_unary_rpc_method_handler(
                     servicer.RegisterNode,
@@ -257,6 +308,87 @@ class CoordinatorService:
             '/tableforge.v1.CoordinatorService/RotateSession',
             tableforge_dot_v1_dot_coordinator__pb2.RotateSessionRequest.SerializeToString,
             tableforge_dot_v1_dot_coordinator__pb2.EnrollResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetClusterInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.CoordinatorService/GetClusterInfo',
+            tableforge_dot_v1_dot_coordinator__pb2.GetClusterInfoRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.ClusterInfo.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RedeemInvite(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.CoordinatorService/RedeemInvite',
+            tableforge_dot_v1_dot_coordinator__pb2.RedeemInviteRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.RedeemInviteResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartWorker(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tableforge.v1.CoordinatorService/StartWorker',
+            tableforge_dot_v1_dot_coordinator__pb2.StartWorkerRequest.SerializeToString,
+            tableforge_dot_v1_dot_coordinator__pb2.StartWorkerResponse.FromString,
             options,
             channel_credentials,
             insecure,

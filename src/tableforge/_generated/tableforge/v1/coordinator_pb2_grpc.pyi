@@ -33,6 +33,12 @@ class CoordinatorServiceStub:
     def __new__(cls, channel: _aio.Channel) -> CoordinatorServiceAsyncStub: ...
     Enroll: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.EnrollRequest, _coordinator_pb2.EnrollResponse]
     RotateSession: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.RotateSessionRequest, _coordinator_pb2.EnrollResponse]
+    GetClusterInfo: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.GetClusterInfoRequest, _coordinator_pb2.ClusterInfo]
+    """Unauthenticated: identifies the cluster before a node trusts it."""
+    RedeemInvite: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.RedeemInviteRequest, _coordinator_pb2.RedeemInviteResponse]
+    """Exchanges a single-use invite secret for a node session and/or operator credential."""
+    StartWorker: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.StartWorkerRequest, _coordinator_pb2.StartWorkerResponse]
+    """Node session only: registers one worker process (slot) of this node."""
     RegisterNode: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.RegisterNodeRequest, _coordinator_pb2.RegisterNodeResponse]
     Heartbeat: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.HeartbeatRequest, _coordinator_pb2.HeartbeatResponse]
     ClaimJob: _grpc.UnaryUnaryMultiCallable[_coordinator_pb2.ClaimJobRequest, _coordinator_pb2.ClaimJobResponse]
@@ -47,6 +53,12 @@ class CoordinatorServiceAsyncStub(CoordinatorServiceStub):
     def __init__(self, channel: _aio.Channel) -> None: ...
     Enroll: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.EnrollRequest, _coordinator_pb2.EnrollResponse]  # type: ignore[assignment]
     RotateSession: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.RotateSessionRequest, _coordinator_pb2.EnrollResponse]  # type: ignore[assignment]
+    GetClusterInfo: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.GetClusterInfoRequest, _coordinator_pb2.ClusterInfo]  # type: ignore[assignment]
+    """Unauthenticated: identifies the cluster before a node trusts it."""
+    RedeemInvite: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.RedeemInviteRequest, _coordinator_pb2.RedeemInviteResponse]  # type: ignore[assignment]
+    """Exchanges a single-use invite secret for a node session and/or operator credential."""
+    StartWorker: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.StartWorkerRequest, _coordinator_pb2.StartWorkerResponse]  # type: ignore[assignment]
+    """Node session only: registers one worker process (slot) of this node."""
     RegisterNode: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.RegisterNodeRequest, _coordinator_pb2.RegisterNodeResponse]  # type: ignore[assignment]
     Heartbeat: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.HeartbeatRequest, _coordinator_pb2.HeartbeatResponse]  # type: ignore[assignment]
     ClaimJob: _aio.UnaryUnaryMultiCallable[_coordinator_pb2.ClaimJobRequest, _coordinator_pb2.ClaimJobResponse]  # type: ignore[assignment]
@@ -70,6 +82,30 @@ class CoordinatorServiceServicer(metaclass=_abc_1.ABCMeta):
         request: _coordinator_pb2.RotateSessionRequest,
         context: _ServicerContext,
     ) -> _typing.Union[_coordinator_pb2.EnrollResponse, _abc.Awaitable[_coordinator_pb2.EnrollResponse]]: ...
+
+    @_abc_1.abstractmethod
+    def GetClusterInfo(
+        self,
+        request: _coordinator_pb2.GetClusterInfoRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.ClusterInfo, _abc.Awaitable[_coordinator_pb2.ClusterInfo]]:
+        """Unauthenticated: identifies the cluster before a node trusts it."""
+
+    @_abc_1.abstractmethod
+    def RedeemInvite(
+        self,
+        request: _coordinator_pb2.RedeemInviteRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.RedeemInviteResponse, _abc.Awaitable[_coordinator_pb2.RedeemInviteResponse]]:
+        """Exchanges a single-use invite secret for a node session and/or operator credential."""
+
+    @_abc_1.abstractmethod
+    def StartWorker(
+        self,
+        request: _coordinator_pb2.StartWorkerRequest,
+        context: _ServicerContext,
+    ) -> _typing.Union[_coordinator_pb2.StartWorkerResponse, _abc.Awaitable[_coordinator_pb2.StartWorkerResponse]]:
+        """Node session only: registers one worker process (slot) of this node."""
 
     @_abc_1.abstractmethod
     def RegisterNode(

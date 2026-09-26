@@ -56,4 +56,6 @@ message JobLease {
   google.protobuf.Timestamp leased_at = 6;
   google.protobuf.Timestamp expires_at = 7;
   string execution_plan_json = 8;
+  // Worker slot on the node that holds this lease; empty for single-slot legacy workers.
+  string worker_id = 9;
 }

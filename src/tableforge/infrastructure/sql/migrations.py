@@ -303,6 +303,48 @@ INSERT INTO enrollment_token_uses (token_hash, node_id, used_at)
 SELECT token_hash, used_by_node, used_at FROM enrollment_tokens WHERE used_by_node IS NOT NULL
 """
 
+_V4_COMMON = """
+CREATE TABLE cluster_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    cluster_id TEXT NOT NULL,
+    created_at {ts} NOT NULL
+);
+CREATE TABLE invites (
+    invite_id TEXT PRIMARY KEY,
+    secret_hash TEXT NOT NULL UNIQUE,
+    scope TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at {ts} NOT NULL,
+    expires_at {ts} NOT NULL,
+    redeemed_at {ts},
+    redeemed_by TEXT,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE operators (
+    operator_id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,
+    label TEXT NOT NULL,
+    invite_id TEXT,
+    created_at {ts} NOT NULL,
+    expires_at {ts} NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE worker_slots (
+    worker_id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    started_at {ts} NOT NULL,
+    last_seen_at {ts} NOT NULL
+);
+CREATE INDEX worker_slots_node ON worker_slots(node_id);
+ALTER TABLE job_attempts ADD COLUMN worker_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE node_sessions ADD COLUMN invite_id TEXT
+"""
+
+SQLITE_V4 = _V4_COMMON.format(ts="TEXT")
+POSTGRES_V4 = _V4_COMMON.format(ts="TIMESTAMPTZ")
+
 _LEGACY_ATTEMPT_COLUMNS = {
     "error_code": "TEXT",
     "error_summary": "TEXT",
@@ -352,11 +394,13 @@ MIGRATIONS: dict[str, tuple[Migration, ...]] = {
         Migration(1, "initial schema", _sqlite_v1),
         Migration(2, "query indexes", _script(SQLITE_V2)),
         Migration(3, "multi-use enrollment tokens", _script(SQLITE_V3)),
+        Migration(4, "cluster identity, invites, operators, worker slots", _script(SQLITE_V4)),
     ),
     "postgres": (
         Migration(1, "initial schema", _script(POSTGRES_V1)),
         Migration(2, "query indexes", _script(POSTGRES_V2)),
         Migration(3, "multi-use enrollment tokens", _script(POSTGRES_V3)),
+        Migration(4, "cluster identity, invites, operators, worker slots", _script(POSTGRES_V4)),
     ),
 }
 
