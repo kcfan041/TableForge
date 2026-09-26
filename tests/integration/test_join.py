@@ -286,3 +286,51 @@ def test_peer_address_ranks_matching_endpoint_first() -> None:
     assert [item.name for item in ranked] == ["tailnet", ""]
     assert [item.name for item in config.node_settings("").storage_endpoints] == ["", "tailnet"]
     _ = grpc
+
+
+def test_doctor_walks_every_layer(cluster: Cluster) -> None:
+    from tableforge.transport.diagnostics import check_connection
+
+    join(
+        cluster.invite(InviteScope(node=True, role=None)),
+        "node-a",
+        cluster.tmp / "node",
+        cluster.tmp / "operators",
+    )
+
+    report = check_connection(cluster.tmp / "node", "node-a")
+
+    assert report.ok, report.as_dict()
+    assert [check.name for check in report.checks] == [
+        "dns",
+        "tcp",
+        "tls",
+        "cluster",
+        "session",
+        "storage",
+    ]
+
+
+def test_doctor_stops_at_first_failure_with_a_hint(cluster: Cluster) -> None:
+    from tableforge.transport.diagnostics import check_connection
+
+    join(
+        cluster.invite(InviteScope(node=True, role=None)),
+        "node-a",
+        cluster.tmp / "node",
+        cluster.tmp / "operators",
+    )
+    credentials = RemoteCredentials.load(cluster.tmp / "node" / "coordinator.json")
+    cluster.repositories.auth.revoke_node(NodeId("node-a"))
+
+    revoked = check_connection(cluster.tmp / "node", "node-a")
+    RemoteCredentials("127.0.0.1:9", credentials.session_token, credentials.ca_certificate).save(
+        cluster.tmp / "moved" / "coordinator.json"
+    )
+    unreachable = check_connection(cluster.tmp / "moved", "node-a")
+    missing = check_connection(cluster.tmp / "never-joined", "node-a")
+
+    assert revoked.checks[-1].name == "session" and not revoked.checks[-1].ok
+    assert "new invite" in revoked.checks[-1].hint
+    assert unreachable.checks[-1].name == "tcp" and "Tailscale" in unreachable.checks[-1].hint
+    assert missing.checks[0].name == "credentials" and "join" in missing.checks[0].hint

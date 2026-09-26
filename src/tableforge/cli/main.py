@@ -55,6 +55,11 @@ def main() -> None:
     doctor = subparsers.add_parser("doctor")
     doctor.add_argument("--json", action="store_true", dest="as_json")
     doctor.add_argument("--data-path", type=Path, default=Path.cwd())
+    doctor.add_argument(
+        "--coordinator",
+        action="store_true",
+        help="also test this node's connection to its cluster (DNS, TLS, session, storage)",
+    )
 
     job = subparsers.add_parser("job")
     job_subparsers = job.add_subparsers(dest="job_command", required=True)
@@ -244,6 +249,8 @@ def main() -> None:
         hide_accelerators()
     if args.command == "doctor":
         exit_code = run_doctor(args.data_path, args.as_json)
+        if args.coordinator:
+            exit_code = max(exit_code, _doctor_coordinator(settings, args.as_json))
         raise SystemExit(exit_code)
     if args.command == "join":
         _join(args, settings)
@@ -670,6 +677,23 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             metrics.stop()
         running.stop(5.0)
         logger.emit("coordinator_stopped")
+
+
+def _doctor_coordinator(settings: Settings, as_json: bool) -> int:
+    from tableforge.transport.diagnostics import check_connection
+
+    node_id = str(NodeIdentityStore(settings.data_dir / "node-id").load_or_create())
+    report = check_connection(settings.data_dir, node_id)
+    if as_json:
+        print(json.dumps(report.as_dict(), sort_keys=True))
+    else:
+        print(f"Coordinator: {report.target or 'not joined'}")
+        for check in report.checks:
+            mark = "OK  " if check.ok else "FAIL"
+            print(f"  [{mark}] {check.name:<8} {check.detail}")
+            if check.hint:
+                print(f"         -> {check.hint}")
+    return 0 if report.ok else 1
 
 
 def _invite_command(args: argparse.Namespace, services: Services) -> None:

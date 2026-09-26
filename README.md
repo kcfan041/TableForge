@@ -5,6 +5,7 @@
 - 開發進度：[docs/status.md](docs/status.md)
 - 架構規格：[docs/architecture/README.md](docs/architecture/README.md)
 - 長期願景：[docs/vision.md](docs/vision.md)
+- **要加入別人的叢集或邀請別人加入：[docs/tester-guide.md](docs/tester-guide.md)**
 
 ## 安裝
 
@@ -165,29 +166,35 @@ docker run -d --name tableforge-s3-test --memory 512m -p 127.0.0.1:59000:9000 -e
 
 其他位置可用 `TABLEFORGE_TEST_S3_ENDPOINT` 指定；設定 `TABLEFORGE_DISABLE_S3_TESTS=1` 則略過。
 
-## 兩台電腦
+## 兩台以上的電腦
+
+建議用邀請碼加入，完整步驟（包含 Tailscale 設定）見 [docs/tester-guide.md](docs/tester-guide.md)。簡要流程：
 
 在 Coordinator 電腦上：
 
 ```
-uv run tableforge coordinator init --host <這台電腦的 IP 或主機名稱>
-uv run tableforge coordinator serve --listen 0.0.0.0:7443
+uv run tableforge coordinator init --host <其他電腦用來連線的 IP 或名稱>
+uv run tableforge coordinator serve --listen <該 IP>:7443
+uv run tableforge coordinator invite create --address <該 IP>:7443 --node --role operator --label <名稱>
 ```
 
-在另一個終端機產生一次性註冊碼，預設 60 分鐘內有效：
+把輸出中的 `tfinv1_...` 邀請碼私下傳給對方。在對方電腦上：
 
 ```
-uv run tableforge coordinator enrollment-token
+uv run tableforge --data-dir .tableforge-node join tfinv1_...
+uv run tableforge --data-dir .tableforge-node doctor --coordinator
+uv run tableforge --data-dir .tableforge-node worker start --remote
+uv run tableforge remote experiment create --preset hu-rule-smoke
 ```
 
-把 `.tableforge/tls/server.crt` 複製到 Worker 電腦，然後在 Worker 電腦上：
+- 邀請碼只能使用一次（一台電腦），預設 24 小時內有效；包含叢集 ID 與憑證指紋，加入時會確認沒有連錯 Coordinator，不需要另外傳憑證檔。
+- `--node` 讓對方成為 Worker；`--role viewer` 可遠端查看；`--role operator` 另外可以建立、啟動、停止實驗。節點憑證與操作憑證分開存放，互相不能代用。
+- 產生邀請碼、撤銷節點與操作憑證只能在 Coordinator 電腦上執行。
+- 同一台電腦可以用同一個 `--data-dir` 開多個 Worker，各自有 Worker 編號。
 
-```
-uv run tableforge node enroll --coordinator <IP>:7443 --token <註冊碼> --ca-file server.crt
-uv run tableforge worker start --remote
-```
+`coordinator serve` 會在背景自動推進實驗，多台 Worker 可平行執行同一輪的 Actor Job。Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。Worker 只需要能連到 Coordinator 與 storage；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
 
-`coordinator serve` 會在背景自動推進實驗，多台 Worker 可平行執行同一輪的 Actor Job。Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。兩台電腦必須能互相連線；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
+舊的方式（`coordinator enrollment-token` 與 `node enroll --token ... --ca-file ...`）仍可使用。
 
 ## Docker
 
@@ -202,7 +209,7 @@ docker compose up -d --build --wait
 
 - 預設啟動 2 個 CPU Worker，可在 `.env` 調整 `CPU_WORKERS`，或執行 `docker compose up -d --scale worker=4`。
 - Worker 啟動時會自動向 Coordinator 註冊，不需要手動操作。
-- 服務只對本機開放：Coordinator `127.0.0.1:7443`、metrics `127.0.0.1:9464`、storage `127.0.0.1:59000`。
+- 服務預設只對本機開放：Coordinator `127.0.0.1:7443`、metrics `127.0.0.1:9464`、storage `127.0.0.1:59000`。要讓其他電腦加入時，在 `.env` 設定 `BIND_ADDRESS`、`EXTRA_TLS_HOSTS`、`EXTRA_STORAGE_ENDPOINTS`，見 [docs/tester-guide.md](docs/tester-guide.md)。
 
 操作實驗時在 Coordinator 容器裡執行指令：
 
@@ -250,7 +257,12 @@ uv run tableforge --data-dir .tableforge-host\gpu worker start --remote
 
 | 指令 | 說明 |
 |---|---|
-| `doctor [--json]` | 偵測硬體並列出可執行的 workload |
+| `doctor [--json] [--coordinator]` | 偵測硬體並列出可執行的 workload；`--coordinator` 另外逐層檢查到叢集的連線 |
+| `join <邀請碼>` | 用邀請碼加入叢集 |
+| `remote whoami/presets/nodes/checkpoints/matrix` | 用操作憑證遠端查看叢集 |
+| `remote experiment list/create/start/stop/status` | 遠端管理實驗（建立、啟動、停止需要 operator 權限） |
+| `coordinator invite create/list/revoke` | 產生、列出、作廢邀請碼（只能在 Coordinator 電腦上執行） |
+| `coordinator operator list/revoke` | 列出、撤銷遠端操作憑證（只能在 Coordinator 電腦上執行） |
 | `experiment create/start/status/stop/list` | 管理實驗 |
 | `worker start [--remote] [--max-jobs N] [--no-gpu]` | 持續領取並執行 Job，`Ctrl+C` 停止 |
 | `worker run-once` | 只執行一個 Job |
@@ -264,7 +276,7 @@ uv run tableforge --data-dir .tableforge-host\gpu worker start --remote
 | `metadata migrate-schema` | 建立或升級資料表，顯示 schema 版本 |
 | `metadata copy-from-sqlite <db>` | 把 SQLite 資料搬到 PostgreSQL |
 | `artifact gc [--dry-run] [--grace-hours H]` | 刪除沒有被引用的舊 artifact |
-| `coordinator init/serve/enrollment-token` | 遠端 Coordinator；`serve --metrics-listen` 啟用 metrics；`enrollment-token --max-uses N --output <檔案>` 產生可多次使用的註冊碼 |
+| `coordinator init/serve/enrollment-token` | 遠端 Coordinator；`init --host <名稱> [--regenerate]` 讓憑證包含其他位址；`serve --metrics-listen` 啟用 metrics；`enrollment-token --max-uses N --output <檔案>` 產生可多次使用的註冊碼 |
 
 ## 開發
 

@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：M3b Docker 部署階段（第一版收尾完成）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：S0 測試者加入階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -23,18 +23,19 @@
 | C5 | UI 呈現能力資訊 | 未開始 | 平台化階段 |
 | M3a | gRPC 傳輸、enrollment/session、TLS、artifact 傳輸 | 已完成 | `61cf545`、`b5c4c51` |
 | M3a 第 2 階段 | Mac 實機驗證、跨平台結果一致性 | 延後 | 需在 Mac 上執行 |
-| M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要 Tailscale |
+| M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要測試者與 Tailscale；程式與流程已以本機區域網路 IP 模擬驗證（見 S0） |
 | 營運 | 設定分層、outbox、metrics、artifact GC、session 輪換/撤銷 | 已完成 | `5e76237`、`e845d0c` |
 | M3b-1 | PostgreSQL metadata、schema migration、SQLite 資料搬移 | 已完成 | `817e9f7` |
 | M3b-2 | S3 相容 artifact store、Worker 直連 storage | 已完成 | `5f7e613` |
-| M3b-3 | Docker 映像與 Compose 部署、主機 GPU Worker | 已完成 | 本階段 |
+| M3b-3 | Docker 映像與 Compose 部署、主機 GPU Worker | 已完成 | `ce713b0` |
+| S0 | 測試者加入：邀請碼、`join`、叢集 ID、Worker 編號、遠端操作（viewer／operator）、連線診斷、測試者指南 | 已完成 | `7df7cb7` 及本階段；實體兩台電腦驗收延後 |
 | M3b-3 CUDA 容器 | GPU Worker 在容器內執行 | 延後 | 需要 Docker Desktop 的 WSL2 後端 |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：314 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：369 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -190,6 +191,42 @@
   - Bucket 中 71 個物件全部被引用；結束時沒有殘留的 lease。
   - `compose.minimal.yaml` 跑完 `hu-rule-smoke`。
 
+### S0 測試者加入
+讓不同網路的測試者（Windows + NVIDIA GPU）加入叢集，提供 GPU 並遠端操作實驗。對應 `architecture/07-multi-party-and-trust.md` 的 S0，加上 S1 中「節點與操作權限分開」的部分；使用者、專案與隔離留到完整版。操作說明見 [tester-guide.md](tester-guide.md)。
+
+- **叢集 ID**：每個叢集第一次啟動時產生固定的 `cluster_id`（schema v4 的 `cluster_identity` 表），不因換憑證而改變。
+- **邀請碼**（`tfinv1_...`，約 290 字元）：包含 cluster_id、Coordinator 位址、CA 憑證的 SHA-256 指紋、一次性交換密碼，以及權限範圍（`node`、`viewer`、`operator` 的組合）。不包含任何長期憑證，也不包含 storage 位址名稱。預設 24 小時內有效，只能使用一次，一次代表一台電腦（節點）。資料庫只存 hash；可列出與作廢。
+- **`join`**：
+  1. 先取得 Coordinator 出示的憑證，比對指紋，不符就停止，不會送出密碼。
+  2. 以 TLS 連線確認 cluster_id。
+  3. 交換取得長期憑證：節點 session（預設 7 天）和／或操作憑證（預設 30 天）。
+  4. 逐一測試 Coordinator 提供的 storage 候選位址，選用第一個連得到的。
+- **Storage 候選清單**：Coordinator 回傳所有位址與優先順序；如果某個位址的主機和節點連進來的來源位址相同，就排在前面。節點實際測試後自行選擇。Worker 每次啟動都重新取得清單，Coordinator 改了位址也不必重新加入。
+- **節點與操作憑證完全分開**：
+  - 節點 session 只能呼叫 Worker 相關的 RPC。
+  - 操作憑證（前綴 `tfo_`）只能呼叫新的 `ControlService`。
+  - 兩者互相代用都會被拒絕。
+  - 存放位置不同：節點憑證在 `--data-dir`，操作憑證在 `%APPDATA%\TableForge\clusters\<cluster_id>\`。
+- **權限**：
+  - `viewer`：查看實驗、checkpoint、matchup matrix、節點。
+  - `operator`：另外可以建立、啟動、停止實驗。
+  - 管理動作（產生與作廢邀請碼、撤銷節點與操作憑證、GC、資料搬移）只能在 Coordinator 電腦上執行，不開放遠端。
+- **Worker 編號**：Worker 啟動時用節點憑證取得 `worker_id`，並記錄在 lease 與 attempt 上；Coordinator 會檢查 worker_id 屬於呼叫的節點。一台電腦可以用同一份節點憑證開多個 Worker。尚未做「每個 Worker 綁定一張 GPU」。
+- **連線診斷** `doctor --coordinator`：依序檢查 dns、tcp、tls（憑證是否改變）、cluster、session、storage（實際上傳下載一個小檔案），停在第一個失敗的項目並提示原因。
+- **Tailscale 設定**：
+  - `coordinator init --host <名稱> [--regenerate]`：憑證已存在但不包含要求的名稱時會拒絕，必須明確加上 `--regenerate`，因為換憑證會讓已加入的節點失效。
+  - Compose 以 `.env` 的 `BIND_ADDRESS`、`EXTRA_TLS_HOSTS`、`EXTRA_STORAGE_ENDPOINTS` 設定；預設仍只開放本機。
+  - `invite create` 會檢查 `--address` 是否包含在憑證內。
+- **測試**：新增 contract tests（SQLite 與 PostgreSQL）：邀請碼只能兌換一次（含 12 個執行緒同時兌換）、過期與作廢、兩種憑證不能互相代用、操作憑證過期與撤銷、cluster_id 在並行下唯一。整合測試涵蓋完整的 `join` 流程、指紋錯誤時不送出密碼、叢集 ID 不符、重複使用邀請碼、viewer 不能修改、Worker 編號不能跨節點使用，以及 doctor 在各種失敗時停在正確的項目。
+- 驗收（以本機區域網路 IP `192.168.18.1` 模擬另一台電腦；Compose 只開放在這個 IP）：
+  - 管理者為這個 IP 產生邀請碼；為憑證沒有包含的位址產生邀請碼時被拒絕。
+  - 測試者在新的資料目錄 `join`：候選位址 `storage:9000`、`127.0.0.1:59000` 都連不到，自動選用 `tailnet` 位址；同一個邀請碼第二次使用被拒絕。
+  - `doctor --coordinator` 6 項全部 OK，storage 直連上傳下載。
+  - 測試者用 `remote` 指令遠端建立並啟動 `hu-nfsp-gpu-iterative` 與 `hu-nfsp-cpu-league`，由自己電腦的 5070 Ti Worker 和 Compose 內的 3 個 CPU Worker 一起執行：13 個與 47 個 Job 全部成功。3 個 CUDA learner 都在測試者的節點上執行，並記錄了 worker_id。檔案全部直連 storage（上傳 50 MB、下載 197 MB）。
+  - viewer 可以列出實驗，停止實驗被拒絕（`ROLE_REQUIRED`），也沒有取得節點憑證。
+  - 撤銷測試者的節點與操作憑證後，`doctor` 在 session 項目失敗，`remote` 回傳 `UNAUTHENTICATED`。
+- **尚未完成**：與測試者透過 Tailscale 的兩台實體電腦驗收（需要測試者配合）；每個 Worker 綁定一張 GPU；使用者、專案與隔離（完整版）。
+
 ## 暫停中：P1 模型強度
 
 為了讓測試者先使用平台，這項工作暫停在「已找到主要瓶頸、尚未修正」的狀態。回來時從「下一步」接續。
@@ -274,8 +311,8 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **讓測試者使用平台（進行中）**：測試者使用 Windows 與 NVIDIA GPU，在不同網路。先完成跨網路加入、簡化加入流程、測試者文件與連線診斷，即 `architecture/07-multi-party-and-trust.md` 的 S0 加上易用性改善。測試者之間是否需要隔離（S1–S2）待討論。
-2. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。後續的新演算法與 6-Max 都以此為前提。
+1. **與測試者實機驗收**：S0 的程式、流程與指南已完成。等測試者可以配合時，依 [tester-guide.md](tester-guide.md) 透過 Tailscale 連線，用他的 GPU 跑完 `hu-nfsp-gpu-iterative`。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+2. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。後續的新演算法與 6-Max 都以此為前提。等待測試者期間可以繼續這項工作。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。需要第 1 項已證明 NFSP 會變強，作為比較基準。
 5. **6-Max**：撲克引擎支援最多 6 人，並以同樣嚴格的 property test 與 soak test 驗證；多演算法可真正同坐一桌。
