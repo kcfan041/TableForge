@@ -31,6 +31,17 @@
 
 **目前狀態**：2–6 人撲克引擎（side pot、多人 showdown）、多人 Rule Bot simulation 與座位輪替評估已完成，並通過 property test 與 2–6 人各 100 萬手 soak。NFSP 與 League 仍只支援 Heads-Up。
 
+### 1.2.1 錦標賽與 PKO
+
+最終想訓練的是偏 Natural8 賞金獵人／PKO 錦標賽的策略，而不是每手重置的現金桌策略：
+
+- 一場完整的錦標賽是一個 episode；籌碼跨手保留、玩家淘汰、盲注上升，並有名次獎金與 bounty。
+- 獎勵以整場的金額結果為主（名次獎金 + bounty − buy-in），而不是每手的 BB 盈虧。
+- 評估分兩層：HU bb/100 測基本牌技；tournament benchmark 測 ROI、平均名次、ITM%、Prize EV、Bounty EV 與 Total EV。
+- 演進順序：單桌 6 人錦標賽 → 名次獎金與短籌碼 → PKO bounty → 錦標賽上的學習 → 多桌、併桌、late registration 等完整 MTT 規則。
+
+**目前狀態**：設計已定案（`architecture/08-tournament.md`），尚未實作；排在 v2 輸入（P1-a）之後。
+
 ### 1.3 網頁介面
 
 在 CLI 之外提供網頁介面，呈現與 CLI 完全相同的判定結果：
@@ -125,6 +136,7 @@ Agent 不只根據當前這一手牌決策，還能根據同一對手過去多�
 - 如何信任別人的訓練結果：只接受附重算資訊的評估結果，或引入信譽權重。
 - 跨節點排名的方法：Elo、TrueSkill，或以 matchup matrix 為基礎的方法。
 - 6-Max 與多演算法同桌時的評估方法與所需手數。
+- 錦標賽 benchmark 所需的場數，以及錦標賽上的學習要使用的演算法與獎勵設計（是否使用 ICM／bounty 權益做 shaping）。
 
 ## 6. 文件維護
 
