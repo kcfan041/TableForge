@@ -25,3 +25,21 @@ class RemoteCoordinatorError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
+
+    @property
+    def transient(self) -> bool:
+        """The coordinator or network is temporarily unavailable; retrying may succeed."""
+        return self.code in TRANSIENT_CODES
+
+    @property
+    def fatal(self) -> bool:
+        """This node can no longer work with the coordinator until a person intervenes."""
+        return self.code in FATAL_CODES
+
+
+TRANSIENT_CODES = frozenset(
+    {"UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED", "ABORTED", "INTERNAL", "UNKNOWN"}
+)
+FATAL_CODES = frozenset(
+    {"UNAUTHENTICATED", "NODE_MISMATCH", "WORKER_MISMATCH", "INCOMPATIBLE_VERSION"}
+)

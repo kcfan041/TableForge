@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.8.5"
+  PYTHON_VERSION: "3.12"
+  # GitHub-hosted runners have no GPU; GPU tests skip themselves, this makes it explicit.
+  TABLEFORGE_DISABLE_GPU_TESTS: "1"
+
+jobs:
+  lint:
+    name: Lint and types
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Install (CPU torch)
+        run: >-
+          uv sync --frozen --extra learning --extra postgres --extra s3 --no-install-package torch --no-install-package triton --no-install-package nvidia-cublas --no-install-package nvidia-cuda-cupti --no-install-package nvidia-cuda-nvrtc --no-install-package nvidia-cuda-runtime --no-install-package nvidia-cudnn-cu13 --no-install-package nvidia-cufft --no-install-package nvidia-cufile --no-install-package nvidia-curand --no-install-package nvidia-cusolver --no-install-package nvidia-cusparse --no-install-package nvidia-cusparselt-cu13 --no-install-package nvidia-nccl-cu13 --no-install-package nvidia-nvjitlink --no-install-package nvidia-nvshmem-cu13 --no-install-package nvidia-nvtx &&
+          uv pip install --index-url https://download.pytorch.org/whl/cpu
+          --no-deps "torch==$(uv export --frozen --no-hashes --extra learning | sed -n 's/^torch==\([0-9.]*\)+cu[0-9]* ;.*sys_platform == .linux.*/\1/p')+cpu"
+      - name: Generated protobuf code is up to date
+        run: |
+          uv run --no-sync python scripts/generate_protos.py
+          git diff --exit-code -- src/tableforge/_generated
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync mypy
+
+  test-linux:
+    name: Tests (Linux, PostgreSQL + S3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: tableforge
+          POSTGRES_PASSWORD: tableforge
+          POSTGRES_DB: tableforge
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tableforge"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      storage:
+        image: rustfs/rustfs:latest
+        env:
+          RUSTFS_ACCESS_KEY: tableforge
+          RUSTFS_SECRET_KEY: tableforge-secret
+        ports: ["59000:9000"]
+    env:
+      TABLEFORGE_TEST_POSTGRES_URL: postgresql://tableforge:tableforge@127.0.0.1:55432/tableforge
+      TABLEFORGE_TEST_S3_ENDPOINT: http://127.0.0.1:59000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Install (CPU torch)
+        run: >-
+          uv sync --frozen --extra learning --extra postgres --extra s3 --no-install-package torch --no-install-package triton --no-install-package nvidia-cublas --no-install-package nvidia-cuda-cupti --no-install-package nvidia-cuda-nvrtc --no-install-package nvidia-cuda-runtime --no-install-package nvidia-cudnn-cu13 --no-install-package nvidia-cufft --no-install-package nvidia-cufile --no-install-package nvidia-curand --no-install-package nvidia-cusolver --no-install-package nvidia-cusparse --no-install-package nvidia-cusparselt-cu13 --no-install-package nvidia-nccl-cu13 --no-install-package nvidia-nvjitlink --no-install-package nvidia-nvshmem-cu13 --no-install-package nvidia-nvtx &&
+          uv pip install --index-url https://download.pytorch.org/whl/cpu
+          --no-deps "torch==$(uv export --frozen --no-hashes --extra learning | sed -n 's/^torch==\([0-9.]*\)+cu[0-9]* ;.*sys_platform == .linux.*/\1/p')+cpu"
+      - name: Wait for object storage
+        run: |
+          for attempt in $(seq 1 60); do
+            curl -s -o /dev/null http://127.0.0.1:59000 && exit 0
+            sleep 2
+          done
+          echo "storage did not start" && exit 1
+      - run: uv run --no-sync pytest -q -rs --durations=15
+
+  test-windows:
+    name: Tests (Windows, CPU)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      TABLEFORGE_DISABLE_POSTGRES_TESTS: "1"
+      TABLEFORGE_DISABLE_S3_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Install (CPU torch)
+        shell: pwsh
+        run: |
+          uv sync --frozen --extra learning --extra postgres --extra s3 --no-install-package torch
+          $line = uv export --frozen --no-hashes --extra learning | Select-String "^torch==[0-9.]+\+cu[0-9]+ ;.*win32"
+          $version = ($line.Line -replace '^torch==([0-9.]+)\+.*', '$1')
+          uv pip install --index-url https://download.pytorch.org/whl/cpu --no-deps "torch==$version+cpu"
+      - run: uv run --no-sync pytest -q -rs --durations=15
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build coordinator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: coordinator
+          tags: tableforge/coordinator:ci
+          load: true
+          cache-from: type=gha,scope=coordinator
+          cache-to: type=gha,mode=max,scope=coordinator
+      - name: Build CPU worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker-cpu
+          tags: tableforge/worker-cpu:ci
+          load: true
+          cache-from: type=gha,scope=worker-cpu
+          cache-to: type=gha,mode=max,scope=worker-cpu
+      - name: Smoke-test images
+        run: |
+          docker run --rm tableforge/coordinator:ci doctor --json > /dev/null || test $? -eq 2
+          docker run --rm --entrypoint python tableforge/worker-cpu:ci -c \
+            "import torch, tableforge.learning.registry; assert not torch.cuda.is_available()"

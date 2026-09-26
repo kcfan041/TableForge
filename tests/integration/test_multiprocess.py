@@ -231,3 +231,153 @@ def test_background_reconciler_drives_iterative_nfsp_with_two_workers(
     assert sum(line.endswith("\tactive") for line in checkpoints) == 1
     nodes = cli(coordinator_dir, "node", "status").splitlines()
     assert len(nodes) == 2
+
+
+def start_coordinator(data: Path, port: int) -> subprocess.Popen[str]:
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tableforge.cli.main",
+            "--data-dir",
+            str(data),
+            "coordinator",
+            "serve",
+            "--listen",
+            f"127.0.0.1:{port}",
+            "--reconcile-seconds",
+            "0.5",
+        ],
+        env=CPU_ONLY_ENV,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with socket.socket() as sock:
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                return process
+        time.sleep(0.1)
+    process.kill()
+    raise RuntimeError("coordinator did not start")
+
+
+def stop(process: subprocess.Popen[str]) -> None:
+    process.kill()
+    process.wait(timeout=30)
+
+
+def test_worker_survives_coordinator_restart_and_outage(tmp_path: Path) -> None:
+    """A running worker keeps going through a coordinator restart and a 30 s outage."""
+    data = tmp_path / "coordinator"
+    cli(data, "coordinator", "init")
+    port = free_port()
+    target = f"localhost:{port}"
+    server = start_coordinator(data, port)
+    worker_dir = tmp_path / "worker"
+    log = tmp_path / "worker.log"
+    worker: subprocess.Popen[str] | None = None
+    try:
+        enroll_worker(data, target, worker_dir)
+        job_ids = [
+            cli(
+                data,
+                "job",
+                "submit-simulation",
+                "--hands",
+                "8000",
+                "--seed-start",
+                str(index * 8000),
+                "--idempotency-key",
+                f"outage-{index}",
+            )
+            for index in range(12)
+        ]
+        with log.open("w", encoding="utf-8") as sink:
+            worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "tableforge.cli.main",
+                    "--data-dir",
+                    str(worker_dir),
+                    "worker",
+                    "start",
+                    "--remote",
+                    "--idle-seconds",
+                    "0.2",
+                    "--lease-seconds",
+                    "10",
+                ],
+                env=CPU_ONLY_ENV,
+                stdout=sink,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        time.sleep(4)
+        stop(server)
+        time.sleep(1)
+        server = start_coordinator(data, port)
+        time.sleep(4)
+        stop(server)
+        time.sleep(30)
+        assert worker.poll() is None, log.read_text(encoding="utf-8")[-3000:]
+        server = start_coordinator(data, port)
+
+        deadline = time.monotonic() + 300
+        statuses: list[str] = []
+        while time.monotonic() < deadline:
+            statuses = [
+                json.loads(cli(data, "job", "status", job_id))["status"] for job_id in job_ids
+            ]
+            if all(status == "succeeded" for status in statuses):
+                break
+            time.sleep(2)
+
+        output = log.read_text(encoding="utf-8")
+        assert statuses == ["succeeded"] * len(job_ids), (statuses, output[-3000:])
+        assert worker.poll() is None
+        assert output.count('"event": "coordinator_unreachable"') >= 1
+        assert output.count('"event": "coordinator_reconnected"') >= 1
+        assert "Traceback" not in output
+    finally:
+        if worker is not None:
+            worker.kill()
+            worker.wait(timeout=30)
+        stop(server)
+
+
+def test_revoked_worker_exits_with_instructions(tmp_path: Path) -> None:
+    data = tmp_path / "coordinator"
+    cli(data, "coordinator", "init")
+    port = free_port()
+    server = start_coordinator(data, port)
+    worker_dir = tmp_path / "worker"
+    try:
+        enroll_worker(data, f"localhost:{port}", worker_dir)
+        node_id = (worker_dir / "node-id").read_text(encoding="utf-8").strip()
+        cli(data, "node", "revoke", node_id)
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "tableforge.cli.main",
+                "--data-dir",
+                str(worker_dir),
+                "worker",
+                "start",
+                "--remote",
+            ],
+            env=CPU_ONLY_ENV,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "new invite" in result.stderr
+        assert "Traceback" not in result.stderr
+    finally:
+        stop(server)

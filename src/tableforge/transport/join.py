@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import grpc
@@ -19,6 +19,7 @@ from tableforge.transport import convert
 from tableforge.transport.client import create_channel
 from tableforge.transport.invite import InviteCode
 from tableforge.transport.tls import certificate_fingerprint
+from tableforge.version import check_compatibility
 
 CLUSTER_FILE = "cluster.json"
 
@@ -100,6 +101,7 @@ class JoinResult:
     operator_role: str | None
     operator_file: Path | None
     session_expires_at: datetime | None
+    version_warning: str = ""
 
 
 def join(
@@ -122,6 +124,11 @@ def join(
             f"this coordinator belongs to cluster {info.cluster_id}, but the invite is for "
             f"{invite.cluster_id}; ask for an invite for this cluster"
         )
+    compatibility = check_compatibility(
+        info.coordinator_version, info.protocol_version, info.min_protocol_version
+    )
+    if not compatibility.compatible:
+        raise JoinError(compatibility.error)
     try:
         response = stub.RedeemInvite(
             coordinator_pb2.RedeemInviteRequest(
@@ -140,14 +147,16 @@ def join(
         storage_name, storage_report = choose_storage_endpoint(response.node_settings)
         from tableforge.transport.credentials import RemoteCredentials
 
+        session_expiry = convert.timestamp_from_proto(response.session_expires_at)
         RemoteCredentials(
             invite.address,
             response.session_token,
             ca,
             cluster_id=response.cluster_id,
             storage_endpoint=storage_name or "",
+            expires_at=session_expiry,
+            issued_at=datetime.now(UTC),
         ).save(node_dir / "coordinator.json")
-        session_expiry = convert.timestamp_from_proto(response.session_expires_at)
 
     operator_file: Path | None = None
     if response.operator_token:
@@ -161,6 +170,7 @@ def join(
         ).save(operator_dir)
 
     return JoinResult(
+        version_warning=compatibility.warning,
         cluster_id=response.cluster_id,
         scope=response.scope,
         node_id=node_id if response.session_token else None,

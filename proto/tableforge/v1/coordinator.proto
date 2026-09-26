@@ -73,6 +73,9 @@ message GetClusterInfoRequest {}
 message ClusterInfo {
   string cluster_id = 1;
   string coordinator_version = 2;
+  // Wire protocol spoken by the coordinator, and the oldest client protocol it accepts.
+  uint32 protocol_version = 3;
+  uint32 min_protocol_version = 4;
 }
 
 message RedeemInviteRequest {

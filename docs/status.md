@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：S0 測試者加入階段。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：測試者使用前的穩定性（版本檢查、斷線恢復、憑證續期、CI）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -35,7 +35,7 @@
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：369 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：381 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -227,6 +227,28 @@
   - 撤銷測試者的節點與操作憑證後，`doctor` 在 session 項目失敗，`remote` 回傳 `UNAUTHENTICATED`。
 - **尚未完成**：與測試者透過 Tailscale 的兩台實體電腦驗收（需要測試者配合）；每個 Worker 綁定一張 GPU；使用者、專案與隔離（完整版）。
 
+### 測試者使用前的穩定性
+- **版本相容檢查**：`src/tableforge/version.py` 定義協定版本（目前 1）與可接受的最低版本。`GetClusterInfo` 回傳 Coordinator 的程式版本與協定版本；`join`、Worker 啟動與每次重新連線、`doctor --coordinator`（新增 `version` 項目）都會檢查。不相容時停止並提示更新哪一邊；只是程式版本不同則顯示警告。
+- **斷線自動恢復**：
+  - 錯誤分成三類：
+    - 暫時性（`UNAVAILABLE`、`DEADLINE_EXCEEDED` 等）：Worker 不結束，以 1、2、4……最多 60 秒的間隔重試，只記錄斷線與恢復兩次 log。
+    - lease 已失效：斷線期間工作被交給別人，記錄 `lease_lost` 後繼續。
+    - 必須由人處理（憑證被撤銷、版本不相容）：停止並說明怎麼做，不顯示 traceback。
+  - Worker 在 Coordinator 還沒啟動前就可以先開，會等到連得上為止。
+- **節點憑證自動續期**：`coordinator.json` 記錄憑證的核發與到期時間。剩不到 1/4 有效期時，Worker 自動換新並寫回。同一台電腦多個 Worker 共用同一個檔案時，以跨程序檔案鎖確保只換一次，其他 Worker 讀到新憑證後直接沿用。舊格式（沒有到期時間）的憑證會在第一次檢查時換新。
+- **CI**：`.github/workflows/ci.yml`，四個工作：
+  - Lint 與型別檢查，並確認產生的 gRPC 程式碼與 proto 一致。
+  - Linux 完整測試：PostgreSQL 17 與 RustFS 服務容器。
+  - Windows CPU 測試。
+  - 建置 Coordinator 與 CPU Worker 映像並做簡單檢查。
+
+  CI 裝 CPU 版 PyTorch，並跳過 lock 檔中的 CUDA 套件，節省時間。README 加上 CI 狀態徽章。
+- **文件整理**：根目錄的 `test.md`、`test2.md`、`test3.md` 搬到 `docs/concepts/`，改為有意義的檔名並加上說明。
+- 驗收：
+  - 單元測試：退避間隔與上限、只記錄狀態轉換、lease 失效後繼續、憑證撤銷時停止、未預期錯誤照常拋出、版本相容規則、只在最後 1/4 有效期續期、第二個 Worker 沿用第一個換好的憑證。
+  - 多程序測試：Worker 執行 12 個 simulation Job 期間，強制關閉並重啟 Coordinator，再關閉 30 秒後重啟。Worker 全程沒有結束，12 個 Job 全部成功，log 有斷線與恢復的紀錄，沒有 traceback。
+  - 被撤銷的節點啟動 Worker 時，提示「請要新的邀請碼」並結束。
+
 ## 暫停中：P1 模型強度
 
 為了讓測試者先使用平台，這項工作暫停在「已找到主要瓶頸、尚未修正」的狀態。回來時從「下一步」接續。
@@ -311,13 +333,18 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **與測試者實機驗收**：S0 的程式、流程與指南已完成。等測試者可以配合時，依 [tester-guide.md](tester-guide.md) 透過 Tailscale 連線，用他的 GPU 跑完 `hu-nfsp-gpu-iterative`。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-2. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。後續的新演算法與 6-Max 都以此為前提。等待測試者期間可以繼續這項工作。
-3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。需要第 1 項已證明 NFSP 會變強，作為比較基準。
-5. **6-Max**：撲克引擎支援最多 6 人，並以同樣嚴格的 property test 與 soak test 驗證；多演算法可真正同坐一桌。
-6. **網頁介面**：呈現節點與硬體能力、實驗、checkpoint 與 matchup matrix；只呈現 Application 層的判定結果，不阻塞 CLI。多人共用的權限管理完成後再加入管理功能。
-7. **CUDA Worker 容器**（需要 WSL2 後端）。
-8. **O0–O7 對手建模**。
+1. **6-Max（下一個）**：新增 2–6 人的撲克引擎，現有 Heads-Up 引擎不變；2 人設定必須與 Heads-Up 逐手一致。擴充 Rule Bots、simulation、評估（座位輪替與信賴區間），property test 擴充到 N 人，2–6 人各 100 萬手 soak。NFSP 與 League 維持兩人，等模型強度解決後再擴充。
+2. **網頁介面**：Coordinator 內建 HTTP API（FastAPI，與 gRPC `ControlService` 共用程式與權限）與 React + TypeScript 前端（建置結果 commit 進 repo，使用者不需要 Node.js）。目標是日常操作都能在網頁完成，指令模式保留。
+   - 新增 admin 角色（只能在 Coordinator 電腦上核發），可在網頁上產生邀請碼、撤銷節點與憑證。
+   - 測試者端另有本機網頁 `tableforge ui`（只開在 127.0.0.1）：貼邀請碼加入、連線檢查、啟動與停止 Worker、查看 log。
+   - HTTPS 使用 `tailscale serve`；以邀請碼登入，換成 HttpOnly cookie session。
+   - 介面以繁體中文為主，預留多語言。
+3. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。多演算法同桌對戰與 NFSP 多人化都以此為前提。
+4. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+5. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+6. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+7. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+8. **CUDA Worker 容器**（需要 WSL2 後端）。
+9. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

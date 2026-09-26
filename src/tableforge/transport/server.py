@@ -30,6 +30,7 @@ from tableforge.transport import convert
 from tableforge.transport.control import ControlServicer
 from tableforge.transport.errors import ERROR_CODES, ERROR_METADATA_KEY
 from tableforge.transport.tls import TlsMaterial
+from tableforge.version import MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, package_version
 
 CHUNK_SIZE = 1024 * 1024
 MAX_ARTIFACT_BYTES = 1024 * 1024 * 1024
@@ -91,15 +92,6 @@ def _authenticate(auth: AuthRepository, context: grpc.ServicerContext, now: date
         return auth.authenticate(header.removeprefix("Bearer "), now)
     except AuthenticationError as error:
         _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", str(error))
-
-
-def _version() -> str:
-    from importlib.metadata import PackageNotFoundError, version
-
-    try:
-        return version("tableforge")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _abort(
@@ -203,7 +195,9 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServiceServicer):
         del request, context
         return coordinator_pb2.ClusterInfo(
             cluster_id=str(self._auth.cluster_id(self._clock.now())),
-            coordinator_version=_version(),
+            coordinator_version=package_version(),
+            protocol_version=PROTOCOL_VERSION,
+            min_protocol_version=MIN_PROTOCOL_VERSION,
         )
 
     def RedeemInvite(

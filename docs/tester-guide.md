@@ -124,6 +124,15 @@ uv sync --extra learning --extra gpu --extra s3
 
 更新後重新啟動 Worker 即可，不需要重新加入。
 
+更新前可以先到 GitHub 的 Actions 頁面，確認最新一次的 CI 是綠勾。你和管理者的版本不相容時，Worker 和 `doctor --coordinator` 會直接提示需要更新哪一邊；只是版本不同但相容時，只會顯示警告。
+
+### 8. Worker 會自己處理的事
+
+- **斷線**：管理者的電腦重開機、Coordinator 重啟、Tailscale 暫時中斷時，Worker 不會結束，會每隔 1、2、4……最多 60 秒重試，恢復後自動繼續。log 只會各出現一次 `coordinator_unreachable` 和 `coordinator_reconnected`。Worker 也可以在 Coordinator 還沒啟動前先開，它會等到連得上為止。
+- **斷線期間手上的工作**：如果斷線太久，這個工作會被交給別的 Worker，恢復後 log 會出現 `lease_lost`，Worker 直接繼續領下一個，不影響結果。
+- **憑證續期**：節點憑證預設 7 天有效，剩下不到 1/4 時 Worker 會自動換新（log 出現 `session_renewed`），不需要重新加入。同一台電腦開多個 Worker 時只會換一次。
+- **會停止的情況**：節點被管理者撤銷、或版本不相容時，Worker 會停止並說明要怎麼做，不會一直重試。
+
 ### 常見問題
 
 | 狀況 | 原因與處理 |
@@ -133,7 +142,8 @@ uv sync --extra learning --extra gpu --extra s3
 | `invite was already used` / `invite expired` | 邀請碼只能用一次、有有效期限。請管理者產生新的邀請碼 |
 | `already belongs to a cluster` | 這個 `--data-dir` 已經加入過叢集。換一個新的目錄名稱，或刪除舊目錄後重新加入 |
 | `none of the coordinator's storage addresses are reachable` | 管理者提供的 storage 位址你連不到。把錯誤訊息傳給管理者 |
-| doctor 的 `session` 失敗 | 節點憑證被撤銷或過期（預設 7 天）。請管理者產生新的邀請碼，用新的 `--data-dir` 重新加入 |
+| doctor 的 `session` 失敗，或 Worker 顯示 `worker stopped: ... new invite` | 節點憑證被撤銷，或 Worker 超過 7 天沒有執行、來不及自動續期。請管理者產生新的邀請碼，用新的 `--data-dir` 重新加入 |
+| doctor 的 `version` 失敗 | 你和 Coordinator 的版本不相容。依提示更新你這邊（`git pull` 後 `uv sync`），或請管理者更新 Coordinator |
 | doctor 的 `storage` 失敗 | 可以連 Coordinator，但連不到 storage。把 doctor 的完整輸出傳給管理者 |
 | `remote` 顯示 `UNAUTHENTICATED` | 操作憑證被撤銷或過期（預設 30 天）。請管理者產生新的邀請碼 |
 | `remote` 顯示 `ROLE_REQUIRED` | 你的權限是 `viewer`，只能查看 |

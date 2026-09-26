@@ -306,6 +306,7 @@ def test_doctor_walks_every_layer(cluster: Cluster) -> None:
         "tcp",
         "tls",
         "cluster",
+        "version",
         "session",
         "storage",
     ]

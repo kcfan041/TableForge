@@ -122,8 +122,19 @@ class GrpcCoordinatorClient:
                 timeout=self._retry.timeout,
             )
         )
-        self._metadata = (("authorization", f"Bearer {response.session_token}"),)
+        self.set_session_token(response.session_token)
         return response.session_token, convert.timestamp_from_proto(response.expires_at)
+
+    def set_session_token(self, token: str) -> None:
+        self._metadata = (("authorization", f"Bearer {token}"),)
+
+    def cluster_info(self) -> coordinator_pb2.ClusterInfo:
+        response, _ = self._call(
+            lambda: self._stub.GetClusterInfo(
+                coordinator_pb2.GetClusterInfoRequest(), timeout=self._retry.timeout
+            )
+        )
+        return response
 
     def register_node(self, capability: NodeCapability, now: datetime) -> None:
         del now

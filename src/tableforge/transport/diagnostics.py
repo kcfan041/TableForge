@@ -15,6 +15,7 @@ from tableforge.domain.artifacts import ArtifactDescriptor, ArtifactKind
 from tableforge.domain.ids import new_artifact_id
 from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.tls import certificate_fingerprint
+from tableforge.version import check_compatibility
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +167,28 @@ def check_connection(data_dir: Path, node_id: str) -> ConnectionReport:
     ok, detail, seconds = _timed(cluster)
     report.checks.append(
         Check("cluster", ok, detail, "" if ok else "the address points at another cluster", seconds)
+    )
+    if not ok:
+        return report
+
+    def compatibility() -> str:
+        info = stub.GetClusterInfo(coordinator_pb2.GetClusterInfoRequest(), timeout=15)
+        result = check_compatibility(
+            info.coordinator_version, info.protocol_version, info.min_protocol_version
+        )
+        if not result.compatible:
+            raise RuntimeError(result.error)
+        return result.warning or f"protocol {info.protocol_version or 1} compatible"
+
+    ok, detail, seconds = _timed(compatibility)
+    report.checks.append(
+        Check(
+            "version",
+            ok,
+            detail,
+            "" if ok else "update TableForge on the side that is too old",
+            seconds,
+        )
     )
     if not ok:
         return report

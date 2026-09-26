@@ -2,7 +2,7 @@
 
 目前實作進度與和規格的差異見 [../status.md](../status.md)；長期願景見 [../vision.md](../vision.md)。
 
-這組文件是 TableForge 第一版的實作規格。若與 `test.md` 或 `test2.md` 的概念描述衝突，以本目錄文件作為第一版工程決策；概念文件保留長期願景。
+這組文件是 TableForge 第一版的實作規格。若與 [../concepts/](../concepts/README.md) 中早期概念文件的描述衝突，以本目錄文件作為工程決策；概念文件只保留初期構想。
 
 ## 文件
 

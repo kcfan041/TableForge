@@ -42,7 +42,7 @@ from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.server import start_server
 from tableforge.transport.tls import CertificateHostsError, TlsMaterial, generate_self_signed
 from tableforge.worker.client import CoordinatorClient
-from tableforge.worker.loop import JsonLineLogger, WorkerLoop
+from tableforge.worker.loop import JsonLineLogger, WorkerLoop, WorkerStoppedError
 from tableforge.worker.runtime import RegisteredExecutor, WorkerRuntime
 from tableforge.worker.simulation import SimulationExecutor
 
@@ -265,7 +265,7 @@ def main() -> None:
         path = settings.data_dir / "coordinator.json"
         credentials = RemoteCredentials.load(path)
         session, expires_at = credentials.client().rotate_session()
-        credentials.with_session(session).save(path)
+        credentials.with_session(session, expires_at).save(path)
         print(f"rotated\texpires={expires_at.isoformat()}")
         return
     if args.command == "worker" and args.worker_command == "start" and args.remote:
@@ -280,7 +280,9 @@ def main() -> None:
             settings.worker.cache_max_bytes,
             settings.artifacts.endpoint or None,
         )
-        _run_worker(client, settings, args.max_jobs, start_slot=True)
+        _run_worker(
+            client, settings, args.max_jobs, start_slot=True, credentials_path=credentials_path
+        )
         return
     if args.command == "metadata":
         _metadata_command(args, settings)
@@ -540,6 +542,7 @@ def _run_worker(
     max_jobs: int | None,
     on_idle: Callable[[], bool] | None = None,
     start_slot: bool = False,
+    credentials_path: Path | None = None,
 ) -> None:
     stop = _stop_event()
 
@@ -548,23 +551,37 @@ def _run_worker(
 
     runtime = _local_worker(coordinator, settings)
     context: dict[str, object] = {"component": "worker", "node_id": str(runtime.node_id)}
+    before_iteration: Callable[[], None] | None = None
     if start_slot:
         from tableforge.transport.client import GrpcCoordinatorClient
+        from tableforge.transport.remote_worker import RemoteWorkerSession
 
         assert isinstance(coordinator, GrpcCoordinatorClient)
-        import platform
-
-        started = coordinator.start_worker(runtime.node_id, platform.node()[:64])
-        context["worker_id"] = started.worker_id
-        context["cluster_id"] = started.cluster_id
-        context["storage_endpoint"] = coordinator.storage_endpoint or "default"
-    WorkerLoop(
-        runtime=runtime,
-        logger=JsonLineLogger().bind(**context),
-        idle_seconds=settings.worker.idle_seconds,
-        sleep=interruptible_sleep,
-        on_idle=on_idle,
-    ).run(should_stop=stop.is_set, max_jobs=max_jobs)
+        assert credentials_path is not None
+        session = RemoteWorkerSession(
+            coordinator,
+            runtime.node_id,
+            credentials_path,
+            JsonLineLogger().bind(**context),
+            sleep=interruptible_sleep,
+            should_stop=stop.is_set,
+        )
+        try:
+            context.update(session.start())
+        except WorkerStoppedError as error:
+            raise SystemExit(f"worker stopped: {error}") from error
+        before_iteration = session.before_iteration
+    try:
+        WorkerLoop(
+            runtime=runtime,
+            logger=JsonLineLogger().bind(**context),
+            idle_seconds=settings.worker.idle_seconds,
+            sleep=interruptible_sleep,
+            on_idle=on_idle,
+            before_iteration=before_iteration,
+        ).run(should_stop=stop.is_set, max_jobs=max_jobs)
+    except WorkerStoppedError as error:
+        raise SystemExit(f"worker stopped: {error}") from error
 
 
 def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
@@ -796,6 +813,8 @@ def _join(args: argparse.Namespace, settings: Settings) -> None:
     except JoinError as error:
         raise SystemExit(f"join failed: {error}") from error
     report: dict[str, object] = {"cluster_id": result.cluster_id, "scope": result.scope}
+    if result.version_warning:
+        report["warning"] = result.version_warning
     if result.node_id:
         report["node_id"] = result.node_id
         report["storage_endpoint"] = result.storage_endpoint or "default"
@@ -938,7 +957,9 @@ def _enroll_node(args: argparse.Namespace) -> None:
     node_id = NodeIdentityStore(data_dir / "node-id").load_or_create()
     credentials = RemoteCredentials(args.coordinator, "", ca)
     session, expires_at = enroll(credentials.channel(), node_id, token)
-    RemoteCredentials(args.coordinator, session, ca).save(data_dir / "coordinator.json")
+    RemoteCredentials(
+        args.coordinator, session, ca, expires_at=expires_at, issued_at=datetime.now(UTC)
+    ).save(data_dir / "coordinator.json")
     print(f"{node_id}\tenrolled\texpires={expires_at.isoformat()}")
 
 

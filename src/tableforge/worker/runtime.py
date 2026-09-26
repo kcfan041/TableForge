@@ -128,9 +128,7 @@ class WorkerRuntime:
                 )
 
         try:
-            output = registered.run(
-                lease.job.spec.payload, lease.execution_plan_json, heartbeat
-            )
+            output = registered.run(lease.job.spec.payload, lease.execution_plan_json, heartbeat)
         except JobCancelledError:
             self.coordinator.acknowledge_cancel(
                 current_lease.job.spec.job_id,

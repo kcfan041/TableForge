@@ -1,5 +1,7 @@
 # TableForge
 
+[![CI](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml/badge.svg)](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml)
+
 分散式多代理德州撲克 AI 訓練與評估框架。目前支援 Heads-Up No-Limit Hold'em、Rule Bots、NFSP（CPU 與 NVIDIA GPU），以及單一 Coordinator 搭配多個 Worker 的遠端執行。
 
 - 開發進度：[docs/status.md](docs/status.md)
@@ -293,6 +295,19 @@ uv run python scripts/generate_protos.py
 ```
 
 產生的程式碼放在 `src/tableforge/_generated/`，已 commit 進 repo。
+
+每次 push 到 `main` 或開 pull request，GitHub Actions 會自動執行（`.github/workflows/ci.yml`）：
+
+- Ruff、mypy，並確認產生的 gRPC 程式碼與 `proto/` 一致
+- Linux：完整測試，搭配 PostgreSQL 17 與 RustFS 服務容器
+- Windows：CPU 測試
+- 建置 Coordinator 與 CPU Worker 的 Docker 映像
+
+CI 沒有 GPU，GPU 測試會自動略過，需要在有 NVIDIA GPU 的電腦上執行 `uv run pytest`。
+
+### 版本相容
+
+Coordinator 和節點之間有「協定版本」（`src/tableforge/version.py`）。只有不相容的協定修改才提高 `PROTOCOL_VERSION`；Coordinator 不再接受舊節點時提高 `MIN_PROTOCOL_VERSION`。只是新增 protobuf 欄位不需要提高。版本不相容時，`join`、`worker start`、`doctor --coordinator` 會停止並提示更新；只是程式版本不同時則顯示警告。
 
 ## 已知限制
 

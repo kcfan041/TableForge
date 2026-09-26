@@ -207,17 +207,24 @@ class ClusterInfo(_message.Message):
 
     CLUSTER_ID_FIELD_NUMBER: _builtins.int
     COORDINATOR_VERSION_FIELD_NUMBER: _builtins.int
+    PROTOCOL_VERSION_FIELD_NUMBER: _builtins.int
+    MIN_PROTOCOL_VERSION_FIELD_NUMBER: _builtins.int
     cluster_id: _builtins.str
     coordinator_version: _builtins.str
+    protocol_version: _builtins.int
+    """Wire protocol spoken by the coordinator, and the oldest client protocol it accepts."""
+    min_protocol_version: _builtins.int
     def __init__(
         self,
         *,
         cluster_id: _builtins.str = ...,
         coordinator_version: _builtins.str = ...,
+        protocol_version: _builtins.int = ...,
+        min_protocol_version: _builtins.int = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "coordinator_version", b"coordinator_version"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "coordinator_version", b"coordinator_version", "min_protocol_version", b"min_protocol_version", "protocol_version", b"protocol_version"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 

@@ -1,6 +1,6 @@
 # TableForge 長期願景
 
-本文件記錄 TableForge 最終希望成為的樣子，**不是目前的工作計畫**。目前進度與下一步見 [status.md](status.md)；各主題的工程規格見 [architecture/](architecture/README.md)。
+本文件記錄 TableForge 最終希望成為的樣子，**不是目前的工作計畫**。目前進度與下一步見 [status.md](status.md)；各主題的工程規格見 [architecture/](architecture/README.md)；初期構想見 [concepts/](concepts/README.md)。
 
 願景分兩部分：
 
