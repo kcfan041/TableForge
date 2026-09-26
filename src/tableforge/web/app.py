@@ -556,7 +556,12 @@ def create_app(context: WebContext) -> FastAPI:
         def static(path: str) -> Response:
             index = root / "index.html"
             candidate = (root / path).resolve()
-            if path and candidate.is_file() and candidate.is_relative_to(root):
+            if (
+                path
+                and path != "local.html"
+                and candidate.is_file()
+                and candidate.is_relative_to(root)
+            ):
                 headers = (
                     {"Cache-Control": "public, max-age=31536000, immutable"}
                     if path.startswith("assets/")

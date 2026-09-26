@@ -152,6 +152,16 @@ def main() -> None:
     )
     join_parser.add_argument("invite")
 
+    ui_parser = subparsers.add_parser(
+        "ui",
+        help="local control panel on 127.0.0.1: join, check the connection, run workers",
+    )
+    ui_parser.add_argument("--port", type=int, default=8765)
+    ui_parser.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    ui_parser.add_argument(
+        "--no-gpu", action="store_false", dest="ui_use_gpu", help="start workers without GPU"
+    )
+
     remote = subparsers.add_parser(
         "remote", help="control a cluster remotely with the credential from `join`"
     )
@@ -265,6 +275,9 @@ def main() -> None:
         raise SystemExit(exit_code)
     if args.command == "join":
         _join(args, settings)
+        return
+    if args.command == "ui":
+        _local_ui(args, settings)
         return
     if args.command == "remote":
         _remote(args)
@@ -544,6 +557,8 @@ def _stop_event() -> threading.Event:
     signal.signal(signal.SIGINT, request_stop)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, request_stop)
+    if sys.platform == "win32":
+        signal.signal(signal.SIGBREAK, request_stop)
     return stop
 
 
@@ -816,38 +831,64 @@ def _invite_command(args: argparse.Namespace, services: Services) -> None:
 
 
 def _join(args: argparse.Namespace, settings: Settings) -> None:
-    from tableforge.transport.invite import InviteCode, InviteFormatError
-    from tableforge.transport.join import JoinError, default_operator_dir, join
+    from tableforge.transport.join import JoinError, default_operator_dir, join_with_code
 
     try:
-        code = InviteCode.decode(args.invite)
-    except InviteFormatError as error:
-        raise SystemExit(str(error)) from error
-    node_id = None
-    if code.scope.node:
-        existing = settings.data_dir / "coordinator.json"
-        if existing.is_file():
-            raise SystemExit(
-                f"{settings.data_dir} already belongs to a cluster; use another --data-dir "
-                "to join a second cluster from this machine"
-            )
-        node_id = str(NodeIdentityStore(settings.data_dir / "node-id").load_or_create())
-    try:
-        result = join(code, node_id, settings.data_dir, default_operator_dir())
+        report = join_with_code(
+            args.invite, settings.data_dir, default_operator_dir(), _node_id_for
+        )
     except JoinError as error:
         raise SystemExit(f"join failed: {error}") from error
-    report: dict[str, object] = {"cluster_id": result.cluster_id, "scope": result.scope}
-    if result.version_warning:
-        report["warning"] = result.version_warning
-    if result.node_id:
-        report["node_id"] = result.node_id
-        report["storage_endpoint"] = result.storage_endpoint or "default"
-        report["storage_probe"] = result.storage_report
-        report["next"] = f"tableforge --data-dir {settings.data_dir} worker start --remote"
-    if result.operator_role:
-        report["operator_role"] = result.operator_role
-        report["operator_credential"] = str(result.operator_file)
     print(json.dumps(report, sort_keys=True, indent=2))
+
+
+def _node_id_for(data_dir: Path) -> str:
+    return str(NodeIdentityStore(data_dir / "node-id").load_or_create())
+
+
+def _local_ui(args: argparse.Namespace, settings: Settings) -> None:
+    import webbrowser
+
+    import uvicorn
+
+    from tableforge.transport.join import default_operator_dir
+    from tableforge.web.local import (
+        LocalUiContext,
+        WorkerManager,
+        create_local_app,
+        default_command_prefix,
+    )
+
+    data_dir = settings.data_dir.resolve()
+    prefix = default_command_prefix()
+    if args.config is not None:
+        prefix = [*prefix, "--config", str(args.config.resolve())]
+    manager = WorkerManager(data_dir, prefix, use_gpu=args.ui_use_gpu)
+    context = LocalUiContext(data_dir, default_operator_dir(), manager, _node_id_for)
+    url = f"http://127.0.0.1:{args.port}/"
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_local_app(context),
+            host="127.0.0.1",
+            port=args.port,
+            log_level="warning",
+            access_log=False,
+        )
+    )
+    print(f"TableForge local panel: {url}  (data dir {data_dir}; Ctrl+C to stop)", flush=True)
+    if not args.no_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    stop = _stop_event()
+    thread = threading.Thread(target=server.run, name="tableforge-ui", daemon=True)
+    thread.start()
+    try:
+        while not stop.wait(0.5) and thread.is_alive():
+            pass
+    finally:
+        server.should_exit = True
+        manager.stop_all()
+        thread.join(10)
+    print("TableForge local panel stopped", flush=True)
 
 
 def _remote(args: argparse.Namespace) -> None:

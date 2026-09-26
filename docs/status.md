@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：W1 Coordinator 網頁介面（HTTP API、admin 角色、網頁登入、即時更新、React 前端）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：W2 測試者端本機控制台（`tableforge ui`）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -33,12 +33,12 @@
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | 6-Max | 2–6 人撲克引擎、side pot、多人 Rule Bot simulation、座位輪替評估 | 已完成 | `d64d844`；NFSP 與 League 維持兩人 |
-| W1 | Coordinator 網頁介面：HTTP API、admin 角色、網頁登入、即時更新、React 前端 | 已完成 | 本階段 |
-| W2 | 測試者端本機網頁 `tableforge ui`（加入、連線檢查、啟停 Worker、log） | 未開始 | 下一個 |
+| W1 | Coordinator 網頁介面：HTTP API、admin 角色、網頁登入、即時更新、React 前端 | 已完成 | `0890e7e` |
+| W2 | 測試者端本機控制台 `tableforge ui`（加入、連線檢查、啟停 Worker、log） | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：436 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：444 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -307,7 +307,26 @@
   - API 測試 19 個：未登入一律 401、cookie 屬性、邀請碼登入只能一次、含節點的邀請碼被拒且不會用掉、登入失敗次數限制、沒有 CSRF token 被拒、Bearer 不需要 CSRF、檢視者不能修改、實驗完整流程、錯誤回應格式、各唯讀頁面、管理者的邀請與憑證管理（含不能用邀請碼授予 admin、不能撤銷自己）、撤銷憑證後網頁 session 立即失效、session 隨憑證到期、登出、事件串流、static 檔案與 `../` 防護、真實伺服器啟動與關閉。
   - `scripts/web_e2e.py`：以真實 HTTP 伺服器與 Worker 走完 13 個步驟（提供前端、拒絕未登入、管理者產生邀請碼、操作者用邀請碼登入且只能一次、CSRF、事件串流、建立並開始 6 人實驗、收到即時事件、Worker 跑完且各座位輸贏加總為 0、各頁資料、撤銷後立即登出、登出），全部通過，約 4 秒。每一步印一行，並有整體時間上限。
   - 以 Edge 無介面模式實際開啟 10 個頁面並截圖檢查：登入、總覽、節點、實驗列表、實驗明細（6 人結果長條圖）、League 熱圖、事件、邀請與憑證、診斷，以及檢視者看到的實驗頁（沒有建立按鈕，顯示權限說明）。
-- **尚未做**：測試者端的本機網頁（W2）、workload 相容性說明（C5 剩餘部分）、訓練曲線、網頁上的即時 log。
+- **尚未做**：workload 相容性說明（C5 剩餘部分）、訓練曲線。
+
+### W2 測試者端本機控制台
+- `tableforge [--data-dir DIR] ui [--port 8765] [--no-browser] [--no-gpu]`：在 `127.0.0.1` 開啟只管理這台電腦的控制台，並自動開啟瀏覽器。測試者不需要記指令就能加入叢集、檢查連線、啟動與停止 Worker、看紀錄。
+- **加入**：與 `tableforge join` 共用同一段程式（`transport/join.py` 的 `join_with_code`），檢查項目與錯誤訊息相同。
+- **連線檢查**：與 `doctor --coordinator` 相同的 7 項（dns、tcp、tls、cluster、version、session、storage），每項顯示結果、耗時與處理提示。
+- **Worker**：每個 Worker 是獨立的 `tableforge worker start --remote` 子程序（`web/local.py` 的 `WorkerManager`），因此 Worker 當掉不會影響控制台，也沿用 W0 的斷線重試與憑證續期。
+  - 控制台讀取 Worker 輸出的 JSON log，整理成狀態（啟動中、執行中、等待工作、重新連線中、停止中、已停止、異常結束）、完成的工作數量與最後的問題；紀錄以中文顯示，每個 Worker 保留最近 500 行。
+  - 停止時送出與 `Ctrl+C` 相同的訊號（Windows 為 CTRL_BREAK，Worker 新增了對應處理），Worker 做完目前的步驟後正常結束；15 秒內沒有結束才強制終止。
+  - 關閉控制台（`Ctrl+C`）時，由它啟動的 Worker 會先全部停止，控制台才結束。最多同時 8 個 Worker。
+- **安全**：只開在 127.0.0.1，而且：
+  - 每次啟動產生一個隨機 token，只寫在控制台提供的網頁裡；所有 API 都要帶這個 token，因此其他網站即使知道網址也無法操作。
+  - 只接受 Host 為 `127.0.0.1` 或 `localhost` 的請求，防止 DNS rebinding。
+  - CSP 只允許同網域，並禁止被嵌入其他網頁。
+- **前端**：與 Coordinator 網頁共用同一個 Vite 專案、樣式與中英文字串，建置出第二個頁面 `local.html`。Coordinator 網頁不提供這個頁面。
+- 驗收：
+  - 單元／整合測試 8 個：token 與 Host 檢查、加入前後的狀態、加入錯誤訊息、未加入時不能啟動 Worker、啟動 Worker 後讀到 JSON 與純文字 log 並統計工作數、停止時 Worker 正常結束（exit 0）、關閉時停止全部 Worker、不存在的 Worker。
+  - `scripts/local_ui_e2e.py`：啟動真實 Coordinator 與真實的 `tableforge ui` 程序，依序完成加入（重複加入被拒）、7 項連線檢查全部通過、啟動 Worker 並跑完 6 人實驗的 4 個 Job、停止 Worker 並確認 exit 0、再開一個 Worker 後對控制台按 `Ctrl+C`，確認控制台 exit 0、沒有 traceback、Worker 程序也已結束。約 9 秒。
+  - 過程中發現並修正：Windows 上對控制台按 `Ctrl+C` 時，uvicorn 會用中斷訊號直接結束程序，由控制台啟動的 Worker 會留在背景繼續執行。改成 uvicorn 在背景執行緒執行、由控制台自己處理 `Ctrl+C`，先停止所有 Worker 再結束。
+  - 以 Edge 截圖確認加入前與 Worker 執行中的畫面。
 
 ## 暫停中：P1 模型強度
 
@@ -393,13 +412,12 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **測試者端本機網頁 W2（下一個）**：`tableforge ui`，只開在 127.0.0.1。貼邀請碼加入、連線檢查（`doctor --coordinator`）、啟動與停止 Worker、查看 log，讓測試者不需要開終端機。
-2. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。多演算法同桌對戰與 NFSP 多人化都以此為前提。
-3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-5. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-6. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-7. **CUDA Worker 容器**（需要 WSL2 後端）。
-8. **O0–O7 對手建模**。
+1. **學習效果驗證（下一個）**：見上方「暫停中：P1 模型強度」，從「下一步（回來時）」接續。多演算法同桌對戰與 NFSP 多人化都以此為前提。
+2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+5. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+6. **CUDA Worker 容器**（需要 WSL2 後端）。
+7. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

@@ -49,6 +49,24 @@ uv run tableforge doctor
 
 應該看到你的 GPU，例如 `cuda:0 NVIDIA GeForce RTX ...`，以及 `hu-nfsp-learner-gpu  SUPPORTED`。
 
+### 本機控制台（建議）
+
+接下來的第 3 到第 5 步（加入、檢查連線、啟動 Worker）都可以在瀏覽器上完成，不必輸入指令：
+
+```powershell
+uv run tableforge --data-dir .tableforge-node ui
+```
+
+會自動開啟 `http://127.0.0.1:8765`（只有這台電腦連得到）：
+
+1. 在「用邀請碼加入」貼上邀請碼，按「加入」。
+2. 按「開始檢查」確認連線，全部是「成功」即可。
+3. 按「啟動 Worker」。下方會顯示 Worker 的狀態、完成的工作數量與紀錄；按「停止」會讓 Worker 做完目前的步驟後結束。
+
+這個 PowerShell 視窗要保持開著；按 `Ctrl+C` 關閉控制台時，由它啟動的 Worker 也會一起停止。沒有 GPU 或不想用 GPU 時，加上 `--no-gpu`。之後每次要提供 GPU，只要再執行同一行指令、按「啟動 Worker」。
+
+下面是指令版本的做法，兩者效果相同。
+
 ### 3. 用邀請碼加入
 
 管理者會傳給你一串 `tfinv1_` 開頭的邀請碼。它**只能使用一次**，預設 24 小時內有效，請不要轉給別人。
@@ -153,13 +171,15 @@ uv sync --extra learning --extra gpu --extra s3
 | doctor 的 `storage` 失敗 | 可以連 Coordinator，但連不到 storage。把 doctor 的完整輸出傳給管理者 |
 | `remote` 顯示 `UNAUTHENTICATED` | 操作憑證被撤銷或過期（預設 30 天）。請管理者產生新的邀請碼 |
 | `remote` 顯示 `ROLE_REQUIRED` | 你的權限是 `viewer`，只能查看 |
+| 本機控制台顯示「無法讀取狀態」或按鈕沒反應 | 控制台已經關閉（PowerShell 視窗被關掉），重新執行 `tableforge ui` 後重新整理頁面 |
+| 本機控制台 Worker 顯示「異常結束」 | 看「最後的問題」與下方紀錄；通常和上面 doctor 的項目對應 |
 | GPU 工作沒有被領取 | 執行 `uv run tableforge doctor`，確認 `hu-nfsp-learner-gpu` 為 `SUPPORTED`，並確認沒有用 `--no-gpu` 啟動 |
 
 ### 回報問題時請附上
 
 1. `uv run tableforge --data-dir .tableforge-node doctor --coordinator --json` 的輸出
 2. `uv run tableforge doctor --json` 的輸出
-3. Worker 視窗中出錯前後的幾行 log
+3. Worker 視窗中出錯前後的幾行 log（使用本機控制台時，截圖控制台畫面即可）
 4. `git rev-parse --short HEAD` 的結果（你使用的版本）
 
 請不要附上 `coordinator.json`、`operator.json` 或邀請碼。

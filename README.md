@@ -74,7 +74,7 @@ uv run tableforge coordinator serve
 - 讓其他電腦的瀏覽器連線：在 tailnet 內用 HTTPS 分享，執行 `tailscale serve --bg --https=443 http://127.0.0.1:8080`，對方用 `https://<這台電腦的 Tailscale 名稱>` 開啟。不建議把 `--http-listen` 改成對外位址，那樣會沒有 HTTPS。
 - `--http-listen <host:port>` 或設定 `coordinator.http_listen` 可以改位址，設成空字串則關閉網頁介面。
 - 網頁的原始碼在 `web/`（React + TypeScript），建置結果已放在 `src/tableforge/web/static/`，使用者不需要安裝 Node.js。修改前端後在 `web/` 執行 `npm ci && npm run build`，並把建置結果一起 commit；CI 會檢查建置結果和原始碼一致。
-- 檢查網頁與 API 的整個流程：`uv run python scripts/web_e2e.py`，約 5 秒，會印出每一步的結果。
+- 檢查網頁與 API 的整個流程：`uv run python scripts/web_e2e.py`，約 5 秒，會印出每一步的結果；本機控制台（`tableforge ui`）則是 `uv run python scripts/local_ui_e2e.py`，約 10 秒。
 
 ## NFSP
 
@@ -215,6 +215,7 @@ uv run tableforge --data-dir .tableforge-node worker start --remote
 uv run tableforge remote experiment create --preset hu-rule-smoke
 ```
 
+- 對方也可以不用指令：執行 `uv run tableforge --data-dir .tableforge-node ui`，會開啟只有本機連得到的控制台（`http://127.0.0.1:8765`），在上面貼邀請碼加入、檢查連線、啟動與停止 Worker、查看紀錄。關閉控制台時，由它啟動的 Worker 會一起停止。
 - 邀請碼只能使用一次（一台電腦），預設 24 小時內有效；包含叢集 ID 與憑證指紋，加入時會確認沒有連錯 Coordinator，不需要另外傳憑證檔。
 - `--node` 讓對方成為 Worker；`--role viewer` 可遠端查看；`--role operator` 另外可以建立、啟動、停止實驗。節點憑證與操作憑證分開存放，互相不能代用。
 - 產生邀請碼、撤銷節點與操作憑證可以在 Coordinator 電腦上用指令執行，或由管理者在網頁的「邀請與憑證」頁操作。

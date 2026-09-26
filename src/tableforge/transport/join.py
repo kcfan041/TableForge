@@ -182,6 +182,46 @@ def join(
     )
 
 
+def join_with_code(
+    invite_text: str,
+    data_dir: Path,
+    operator_dir: Path,
+    node_id_for: Callable[[Path], str],
+) -> dict[str, object]:
+    """Decode an invite, join, and return a report; shared by the CLI and the local UI.
+
+    ``node_id_for`` returns (creating if needed) this data directory's node id; it is only
+    called when the invite enrolls a node.
+    """
+    from tableforge.transport.invite import InviteFormatError
+
+    try:
+        code = InviteCode.decode(invite_text)
+    except InviteFormatError as error:
+        raise JoinError(str(error)) from error
+    node_id = None
+    if code.scope.node:
+        if (data_dir / "coordinator.json").is_file():
+            raise JoinError(
+                f"{data_dir} already belongs to a cluster; use another --data-dir to join a "
+                "second cluster from this machine"
+            )
+        node_id = node_id_for(data_dir)
+    result = join(code, node_id, data_dir, operator_dir)
+    report: dict[str, object] = {"cluster_id": result.cluster_id, "scope": result.scope}
+    if result.version_warning:
+        report["warning"] = result.version_warning
+    if result.node_id:
+        report["node_id"] = result.node_id
+        report["storage_endpoint"] = result.storage_endpoint or "default"
+        report["storage_probe"] = result.storage_report
+        report["next"] = f"tableforge --data-dir {data_dir} worker start --remote"
+    if result.operator_role:
+        report["operator_role"] = result.operator_role
+        report["operator_credential"] = str(result.operator_file)
+    return report
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorCredentials:
     """Credential for the remote control plane, stored per cluster outside node data."""
