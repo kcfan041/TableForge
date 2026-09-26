@@ -54,12 +54,12 @@ uv run tableforge doctor
 接下來的第 3 到第 5 步（加入、檢查連線、啟動 Worker）都可以在瀏覽器上完成，不必輸入指令：
 
 ```powershell
-uv run tableforge --data-dir .tableforge-node ui
+uv run tableforge ui
 ```
 
 會自動開啟 `http://127.0.0.1:8765`（只有這台電腦連得到）：
 
-1. 在「用邀請碼加入」貼上邀請碼，按「加入」。
+1. 選「加入現有叢集」，貼上邀請碼，按「加入」。
 2. 按「開始檢查」確認連線，全部是「成功」即可。
 3. 按「啟動 Worker」。下方會顯示 Worker 的狀態、完成的工作數量與紀錄；按「停止」會讓 Worker 做完目前的步驟後結束。
 

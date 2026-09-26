@@ -161,6 +161,11 @@ def main() -> None:
     ui_parser.add_argument(
         "--no-gpu", action="store_false", dest="ui_use_gpu", help="start workers without GPU"
     )
+    ui_parser.add_argument(
+        "--home",
+        type=Path,
+        help="where TableForge keeps this machine's data (default: per-user app data folder)",
+    )
 
     remote = subparsers.add_parser(
         "remote", help="control a cluster remotely with the credential from `join`"
@@ -742,7 +747,14 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             )
             logger.emit("metrics_started", port=metrics.port)
         stop = _stop_event()
+        from tableforge.web.cluster import STOP_FILE
+
+        stop_file = data_dir / STOP_FILE
+        stop_file.unlink(missing_ok=True)
         while not stop.wait(settings.coordinator.reconcile_seconds):
+            if stop_file.exists():
+                logger.emit("stop_requested", source=str(stop_file))
+                break
             try:
                 advanced = experiments.reconcile_all(datetime.now(UTC))
             except Exception as error:
@@ -846,12 +858,18 @@ def _node_id_for(data_dir: Path) -> str:
     return str(NodeIdentityStore(data_dir / "node-id").load_or_create())
 
 
+def _default_home() -> Path:
+    from tableforge.web.cluster import default_home
+
+    return default_home()
+
+
 def _local_ui(args: argparse.Namespace, settings: Settings) -> None:
     import webbrowser
 
     import uvicorn
 
-    from tableforge.transport.join import default_operator_dir
+    from tableforge.web.cluster import ClusterSetupError, CoordinatorSupervisor, Layout
     from tableforge.web.local import (
         LocalUiContext,
         WorkerManager,
@@ -859,12 +877,22 @@ def _local_ui(args: argparse.Namespace, settings: Settings) -> None:
         default_command_prefix,
     )
 
-    data_dir = settings.data_dir.resolve()
+    layout = Layout(args.home.resolve() if args.home else _default_home())
+    data_dir = layout.node
     prefix = default_command_prefix()
     if args.config is not None:
         prefix = [*prefix, "--config", str(args.config.resolve())]
     manager = WorkerManager(data_dir, prefix, use_gpu=args.ui_use_gpu)
-    context = LocalUiContext(data_dir, default_operator_dir(), manager, _node_id_for)
+    supervisor = CoordinatorSupervisor(layout, prefix)
+    if layout.hosts_cluster:
+        try:
+            supervisor.ensure_running()
+            print("cluster service is running", flush=True)
+        except ClusterSetupError as error:
+            print(f"warning: {error}", file=sys.stderr, flush=True)
+    context = LocalUiContext(
+        data_dir, layout.operators, manager, _node_id_for, supervisor=supervisor
+    )
     url = f"http://127.0.0.1:{args.port}/"
     server = uvicorn.Server(
         uvicorn.Config(
@@ -875,7 +903,7 @@ def _local_ui(args: argparse.Namespace, settings: Settings) -> None:
             access_log=False,
         )
     )
-    print(f"TableForge local panel: {url}  (data dir {data_dir}; Ctrl+C to stop)", flush=True)
+    print(f"TableForge: {url}  (Ctrl+C to close)", flush=True)
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     stop = _stop_event()

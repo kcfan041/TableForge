@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：W2 測試者端本機控制台（`tableforge ui`）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：U1 單一入口 `tableforge ui`：建立或加入叢集、背景叢集服務。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -34,7 +34,10 @@
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
 | 6-Max | 2–6 人撲克引擎、side pot、多人 Rule Bot simulation、座位輪替評估 | 已完成 | `d64d844`；NFSP 與 League 維持兩人 |
 | W1 | Coordinator 網頁介面：HTTP API、admin 角色、網頁登入、即時更新、React 前端 | 已完成 | `0890e7e` |
-| W2 | 測試者端本機控制台 `tableforge ui`（加入、連線檢查、啟停 Worker、log） | 已完成 | 本階段 |
+| W2 | 測試者端本機控制台 `tableforge ui`（加入、連線檢查、啟停 Worker、log） | 已完成 | `30cfc2a` |
+| U1 | 單一入口：第一次開啟選「建立／加入」，建立叢集全自動、背景叢集服務、建立者自動成為 Worker | 已完成 | 本階段 |
+| U2 | `tableforge ui` 內的叢集管理頁面（依權限顯示）、`ControlService` 補齊、admin 邀請碼 | 未開始 | 下一個 |
+| U3 | Coordinator 遠端模式共用同一套 UI 並預設關閉；文件改成只介紹 `tableforge ui` | 未開始 | U2 之後 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
@@ -328,6 +331,34 @@
   - 過程中發現並修正：Windows 上對控制台按 `Ctrl+C` 時，uvicorn 會用中斷訊號直接結束程序，由控制台啟動的 Worker 會留在背景繼續執行。改成 uvicorn 在背景執行緒執行、由控制台自己處理 `Ctrl+C`，先停止所有 Worker 再結束。
   - 以 Edge 截圖確認加入前與 Worker 執行中的畫面。
 
+### U1 單一入口：建立或加入叢集
+目標：一般使用者只需要知道 `tableforge ui`。建立者和加入者都從這裡開始，內部的 Coordinator、Worker 程序與 port 不需要理解。
+- **資料位置**：預設放在每個使用者的應用程式資料夾（Windows `%LOCALAPPDATA%\TableForge`，macOS `~/Library/Application Support/TableForge`，Linux `~/.local/share/tableforge`），可用 `--home` 或 `TABLEFORGE_HOME` 更改。裡面分成 `coordinator\`（只有建立者有）、`node\`（這台電腦的 Worker 節點）、`operator\`（叢集管理憑證）。
+- **第一次開啟**：只顯示「建立新的叢集」與「加入現有叢集」兩個選項。
+- **建立叢集**（`web/cluster.py` 的 `create_cluster`）：
+  - 偵測 Tailscale 位址（`tailscale ip -4`），讓使用者選「Tailscale 上的其他人（建議）」或「只有這台電腦」。沒有 Tailscale 時第一個選項不能選，並說明怎麼安裝。
+  - 自動產生涵蓋該位址的憑證、建立叢集 ID、建立第一個管理者憑證（直接存在 `operator\`，使用者不必複製）、啟動背景叢集服務，再在內部產生一次性邀請碼讓這台電腦以 Worker 身分加入。完成後直接進入管理畫面。
+  - 已經建立過、已經加入別的叢集、或 7443 port 被佔用時會拒絕並說明原因。
+- **背景叢集服務**（`CoordinatorSupervisor`）：
+  - 以獨立的背景程序執行 `coordinator serve`（Windows 上不開視窗），log 寫到 `coordinator\coordinator.log`，啟動資訊記在 `coordinator\service.json`。
+  - 關掉 TableForge 頁面或按 `Ctrl+C` 後服務繼續執行，其他人的 Worker 不受影響；再開 `tableforge ui` 時會找到原本的服務直接接上。服務已停止（例如重開機）時會自動重新啟動。
+  - 頁面上顯示服務狀態與其他人的連線位址，可以停止或啟動。停止時在資料目錄放一個停止檔，`coordinator serve` 看到後正常結束（Windows 背景程序收不到 `Ctrl+C` 訊號，所以改用這個方式），20 秒內沒有結束才強制終止。
+  - 啟動失敗時，錯誤訊息會附上 log 最後幾行。
+- **加入叢集**：沿用 W2（貼邀請碼、連線檢查、啟動 Worker）。
+- 頁面上不再顯示資料目錄、叢集 ID、連線位址等細節，改放在「詳細資訊」裡，需要時再展開。文字也把「Coordinator」「控制台」改成「叢集」「TableForge」。
+- `tableforge ui` 不再使用 `--data-dir`，改用 `--home`。
+- 驗收：`scripts/create_cluster_e2e.py`，以真實的 `tableforge ui` 程序從空目錄開始，9 個步驟全部通過，約 16 秒：
+  1. 第一次開啟時未建立也未加入。
+  2. 建立叢集後服務執行中、這台電腦已加入、取得管理者權限；再建立一次會被拒絕。
+  3. 這台電腦的 Worker 跑完 6 人實驗。
+  4. 關掉 UI 後服務程序仍在，而且接受連線。
+  5. 重開 UI 時接上原本的服務，沒有重新啟動。
+  6. 從 UI 停止服務，log 顯示正常結束。
+  7. 重開 UI 會自動重新啟動已停止的服務。
+  8. 重新啟動後資料都在，連線檢查全部通過。
+  9. 停止服務並關閉 UI，沒有殘留程序。
+  - 以 Edge 截圖確認第一次開啟與建立後的畫面。
+
 ## 暫停中：P1 模型強度
 
 為了讓測試者先使用平台，這項工作暫停在「已找到主要瓶頸、尚未修正」的狀態。回來時從「下一步」接續。
@@ -412,12 +443,13 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **學習效果驗證（下一個）**：見上方「暫停中：P1 模型強度」，從「下一步（回來時）」接續。多演算法同桌對戰與 NFSP 多人化都以此為前提。
-2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-5. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-6. **CUDA Worker 容器**（需要 WSL2 後端）。
-7. **O0–O7 對手建模**。
+1. **U2、U3（下一個）**：見上方總覽。U2 讓 `tableforge ui` 依權限顯示叢集管理頁面（透過 gRPC `ControlService`，加入者與建立者走同一條路），並補齊事件、診斷與管理者功能；admin 邀請碼需要再次確認、最多 1 小時有效、使用時記錄。U3 讓 Coordinator 的遠端模式共用同一套 UI 並預設關閉，文件改成只介紹 `tableforge ui`。
+2. **學習效果驗證**：見上方「暫停中：P1 模型強度」，從「下一步（回來時）」接續。多演算法同桌對戰與 NFSP 多人化都以此為前提。
+3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+5. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+6. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+7. **CUDA Worker 容器**（需要 WSL2 後端）。
+8. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

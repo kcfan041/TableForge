@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Card, StatusBadge } from "../components";
 import { useI18n, type Locale, type MessageKey } from "../i18n";
 import { local, type DoctorReport, type LocalStatus, type LogLine, type WorkerView } from "./api";
+import { Setup } from "./Setup";
 
 function usePolling<T>(load: () => Promise<T>, intervalMs: number): [T | null, string | null, () => void] {
   const [data, setData] = useState<T | null>(null);
@@ -32,20 +33,19 @@ function usePolling<T>(load: () => Promise<T>, intervalMs: number): [T | null, s
   return [data, error, () => setTick((value) => value + 1)];
 }
 
-function Join({ onJoined }: { onJoined: () => void }) {
-  const { t } = useI18n();
-  const [invite, setInvite] = useState("");
+function ClusterService({ status, refresh }: { status: LocalStatus; refresh: () => void }) {
+  const { t, formatDate } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hosting = status.hosting;
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const act = async (action: () => Promise<unknown>, confirmText?: string) => {
+    if (confirmText && !window.confirm(confirmText)) return;
     setBusy(true);
     setError(null);
     try {
-      await local.join(invite.trim());
-      setInvite("");
-      onJoined();
+      await action();
+      refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -53,30 +53,41 @@ function Join({ onJoined }: { onJoined: () => void }) {
     }
   };
 
+  const state = hosting.running ? "service_running" : hosting.starting ? "service_starting" : "service_stopped";
   return (
-    <Card title={t("local.join")}>
-      <form className="stack" onSubmit={(event) => void submit(event)}>
-        <p className="muted small">{t("local.joinHelp")}</p>
-        <textarea
-          aria-label={t("local.join")}
-          value={invite}
-          onChange={(event) => setInvite(event.target.value)}
-          rows={4}
-          placeholder="tfinv1_…"
-          spellCheck={false}
-          required
-        />
-        <div>
-          <button type="submit" className="primary" disabled={busy || !invite.trim()}>
-            {busy ? t("local.joining") : t("local.joinButton")}
+    <Card title={t("service.title")}>
+      <p className="muted small">{t("service.help")}</p>
+      <dl className="facts">
+        <dt>{t("experiments.status")}</dt>
+        <dd>
+          <StatusBadge status={state} />
+          {hosting.running && hosting.started_at ? (
+            <span className="muted small"> {t("service.since", { date: formatDate(hosting.started_at) })}</span>
+          ) : null}
+        </dd>
+        <dt>{t("service.address")}</dt>
+        <dd>
+          <code>{hosting.address}</code>
+          <div className="muted small">{t("service.addressHelp")}</div>
+        </dd>
+      </dl>
+      <div className="row">
+        {hosting.running ? (
+          <button
+            type="button"
+            className="danger"
+            disabled={busy}
+            onClick={() => void act(local.stopService, t("service.stopConfirm"))}
+          >
+            {t("service.stop")}
           </button>
-        </div>
-        {error ? (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        ) : null}
-      </form>
+        ) : (
+          <button type="button" className="primary" disabled={busy} onClick={() => void act(local.startService)}>
+            {busy ? t("service.starting") : t("service.start")}
+          </button>
+        )}
+      </div>
+      {error ? <pre className="error small config">{error}</pre> : null}
     </Card>
   );
 }
@@ -278,47 +289,57 @@ export function LocalApp() {
         <p className="muted">{t("common.loading")}</p>
       ) : (
         <div className="page">
-          <Card title={t("local.thisMachine")}>
-            <dl className="facts">
-              <dt>{t("local.dataDir")}</dt>
-              <dd>
-                <code className="wrap">{status.data_dir}</code>
-              </dd>
-              <dt>{t("local.version")}</dt>
-              <dd>{status.version}</dd>
-              <dt>{t("local.cluster")}</dt>
-              <dd>
-                {status.node ? (
-                  <>
-                    <StatusBadge status="joined" /> <code>{status.node.coordinator}</code>
-                    <div className="muted small">
-                      {status.node.cluster_id} · storage {status.node.storage_endpoint}
-                      {status.node.session_expires_at
-                        ? ` · ${t("local.sessionExpires", { date: formatDate(status.node.session_expires_at) })}`
-                        : ""}
-                    </div>
-                  </>
-                ) : (
-                  <span className="muted">{t("local.notJoined")}</span>
-                )}
-              </dd>
-              <dt>{t("local.webAccess")}</dt>
-              <dd>
-                {status.operator
-                  ? t("local.webAccessRole", {
-                      role: t(`role.${status.operator.role}` as MessageKey),
-                    })
-                  : t("local.webAccessNone")}
-              </dd>
-            </dl>
-          </Card>
+          {status.joined || status.hosting.hosted ? (
+            <Card title={t("local.thisMachine")}>
+              <dl className="facts">
+                <dt>{t("local.cluster")}</dt>
+                <dd>
+                  {status.node ? (
+                    <>
+                      <StatusBadge status="joined" />{" "}
+                      {status.hosting.hosted ? t("local.clusterOwn") : t("local.clusterOther")}
+                      <details className="small muted">
+                        <summary>{t("local.details")}</summary>
+                        <div>
+                          {t("local.detailCluster")}: <code>{status.node.cluster_id}</code>
+                        </div>
+                        <div>
+                          {t("local.detailCoordinator")}: <code>{status.node.coordinator}</code>
+                        </div>
+                        {status.node.session_expires_at ? (
+                          <div>
+                            {t("local.sessionExpires", { date: formatDate(status.node.session_expires_at) })}
+                          </div>
+                        ) : null}
+                        <div>
+                          {t("local.dataDir")}: <code className="wrap">{status.data_dir}</code>
+                        </div>
+                        <div>TableForge {status.version}</div>
+                      </details>
+                    </>
+                  ) : (
+                    <span className="muted">{t("local.notJoined")}</span>
+                  )}
+                </dd>
+                <dt>{t("local.webAccess")}</dt>
+                <dd>
+                  {status.operator
+                    ? t("local.webAccessRole", {
+                        role: t(`role.${status.operator.role}` as MessageKey),
+                      })
+                    : t("local.webAccessNone")}
+                </dd>
+              </dl>
+            </Card>
+          ) : null}
+          {status.hosting.hosted ? <ClusterService status={status} refresh={refresh} /> : null}
           {status.joined ? (
             <>
               <Workers status={status} refresh={refresh} />
               <Doctor />
             </>
-          ) : (
-            <Join onJoined={refresh} />
+          ) : status.hosting.hosted ? null : (
+            <Setup onDone={refresh} />
           )}
         </div>
       )}

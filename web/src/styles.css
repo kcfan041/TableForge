@@ -680,3 +680,45 @@ tr.selected {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
 }
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+button.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  text-align: left;
+  padding: 1.5rem;
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 1.05rem;
+}
+
+button.choice:hover {
+  border-color: var(--accent);
+}
+
+details summary {
+  cursor: pointer;
+  margin-top: 0.25rem;
+}
+
+.badge-joined,
+.badge-service_running {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok);
+}
+
+.badge-service_starting {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
+  color: var(--info);
+}
+
+.badge-service_stopped {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}

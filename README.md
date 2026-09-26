@@ -215,7 +215,7 @@ uv run tableforge --data-dir .tableforge-node worker start --remote
 uv run tableforge remote experiment create --preset hu-rule-smoke
 ```
 
-- 對方也可以不用指令：執行 `uv run tableforge --data-dir .tableforge-node ui`，會開啟只有本機連得到的控制台（`http://127.0.0.1:8765`），在上面貼邀請碼加入、檢查連線、啟動與停止 Worker、查看紀錄。關閉控制台時，由它啟動的 Worker 會一起停止。
+- 更簡單的方式：雙方都執行 `uv run tableforge ui`（開啟只有本機連得到的 `http://127.0.0.1:8765`）。建立者選「建立新的叢集」，TableForge 會自動完成上面的憑證、管理者與背景服務，並讓這台電腦也成為 Worker；加入者選「加入現有叢集」並貼上邀請碼。之後都在同一個頁面檢查連線、啟動與停止 Worker、查看紀錄。資料預設放在使用者的應用程式資料夾（Windows `%LOCALAPPDATA%\TableForge`），可用 `--home` 更改。
 - 邀請碼只能使用一次（一台電腦），預設 24 小時內有效；包含叢集 ID 與憑證指紋，加入時會確認沒有連錯 Coordinator，不需要另外傳憑證檔。
 - `--node` 讓對方成為 Worker；`--role viewer` 可遠端查看；`--role operator` 另外可以建立、啟動、停止實驗。節點憑證與操作憑證分開存放，互相不能代用。
 - 產生邀請碼、撤銷節點與操作憑證可以在 Coordinator 電腦上用指令執行，或由管理者在網頁的「邀請與憑證」頁操作。

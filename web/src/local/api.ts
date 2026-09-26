@@ -35,8 +35,19 @@ export interface LocalStatus {
     session_expires_at: string | null;
   } | null;
   operator: { cluster_id: string; role: string; address: string } | null;
+  hosting: HostingStatus;
   use_gpu: boolean;
   workers: WorkerView[];
+}
+
+export interface HostingStatus {
+  hosted: boolean;
+  running?: boolean;
+  starting?: boolean;
+  address?: string;
+  pid?: number | null;
+  started_at?: string;
+  log_file?: string;
 }
 
 export interface LogLine {
@@ -71,6 +82,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export const local = {
   status: () => call<LocalStatus>("GET", "/api/status"),
+  setup: () => call<{ tailscale_ip: string | null }>("GET", "/api/setup"),
+  createCluster: (network: "tailscale" | "local") =>
+    call<{ cluster_id: string; address: string; status: LocalStatus }>("POST", "/api/cluster", {
+      network,
+    }),
+  startService: () => call<LocalStatus>("POST", "/api/cluster/service/start"),
+  stopService: () => call<LocalStatus>("POST", "/api/cluster/service/stop"),
   join: (invite: string) =>
     call<{ report: Record<string, unknown>; status: LocalStatus }>("POST", "/api/join", { invite }),
   doctor: () => call<DoctorReport>("POST", "/api/doctor"),

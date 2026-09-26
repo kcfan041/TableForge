@@ -33,6 +33,12 @@ from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.diagnostics import check_connection
 from tableforge.transport.join import JoinError, OperatorCredentials, join_with_code
 from tableforge.version import package_version
+from tableforge.web.cluster import (
+    ClusterSetupError,
+    CoordinatorSupervisor,
+    create_cluster,
+    tailscale_ipv4,
+)
 
 TOKEN_HEADER = "x-tableforge-ui"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -225,6 +231,12 @@ class LocalUiContext:
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     static_dir: Path | None = STATIC_DIR
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")
+    supervisor: CoordinatorSupervisor | None = None
+    detect_tailscale: Callable[[], str | None] = tailscale_ipv4
+
+
+class CreateClusterRequest(BaseModel):
+    network: str = Field(pattern="^(tailscale|local)$")
 
 
 def create_local_app(context: LocalUiContext) -> FastAPI:
@@ -287,18 +299,69 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             }
         except (JoinError, OSError, KeyError, ValueError):
             operator = None
+        hosting: dict[str, object] = {"hosted": False}
+        if context.supervisor is not None:
+            hosting = context.supervisor.status()
         return {
             "version": package_version(),
             "data_dir": str(context.data_dir),
             "joined": node is not None,
             "node": node,
             "operator": operator,
+            "hosting": hosting,
             "use_gpu": context.manager.use_gpu,
             "workers": [worker.view() for worker in context.manager.workers()],
         }
 
+    def supervisor() -> CoordinatorSupervisor:
+        if context.supervisor is None:
+            raise HTTPException(409, "this panel cannot host a cluster")
+        return context.supervisor
+
     @app.get("/api/status")
     def get_status() -> dict[str, object]:
+        return status()
+
+    @app.get("/api/setup")
+    def get_setup() -> dict[str, object]:
+        return {"tailscale_ip": context.detect_tailscale()}
+
+    @app.post("/api/cluster")
+    def post_cluster(body: CreateClusterRequest) -> dict[str, object]:
+        hosting = supervisor()
+        host: str | None = None
+        if body.network == "tailscale":
+            host = context.detect_tailscale()
+            if host is None:
+                raise HTTPException(
+                    400,
+                    "Tailscale is not running on this computer; start Tailscale and sign in, "
+                    "or create a cluster only this computer can use",
+                )
+
+        def join_node(invite: str) -> dict[str, object]:
+            return join_with_code(
+                invite, context.data_dir, context.operator_dir, context.node_id_for
+            )
+
+        with lock:
+            try:
+                created = create_cluster(hosting.layout, host, hosting, join_node)
+            except (ClusterSetupError, JoinError) as error:
+                raise HTTPException(400, str(error)) from error
+        return {"cluster_id": created.cluster_id, "address": created.address, "status": status()}
+
+    @app.post("/api/cluster/service/start")
+    def start_service() -> dict[str, object]:
+        try:
+            supervisor().ensure_running()
+        except ClusterSetupError as error:
+            raise HTTPException(400, str(error)) from error
+        return status()
+
+    @app.post("/api/cluster/service/stop")
+    def stop_service() -> dict[str, object]:
+        supervisor().stop()
         return status()
 
     @app.post("/api/join")
