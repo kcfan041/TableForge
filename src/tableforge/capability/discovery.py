@@ -94,7 +94,10 @@ def cap_gpu_memory_by_commit(
     return tuple(capped)
 
 
-def windows_commit_available() -> int | None:
+def _windows_memory_status() -> tuple[int, int, int] | None:
+    """Total physical, available physical and available commit bytes, or None."""
+    if sys.platform != "win32":
+        return None
     try:
         import ctypes
 
@@ -115,9 +118,18 @@ def windows_commit_available() -> int | None:
         status.length = ctypes.sizeof(MemoryStatus)
         if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             return None
-        return int(status.available_page_file)
+        return (
+            int(status.total_physical),
+            int(status.available_physical),
+            int(status.available_page_file),
+        )
     except (AttributeError, OSError):
         return None
+
+
+def windows_commit_available() -> int | None:
+    status = _windows_memory_status()
+    return None if status is None else status[2]
 
 
 def _memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
@@ -132,30 +144,11 @@ def _memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
 
 
 def _windows_memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
-    try:
-        import ctypes
-
-        class MemoryStatus(ctypes.Structure):
-            _fields_ = [
-                ("length", ctypes.c_ulong),
-                ("memory_load", ctypes.c_ulong),
-                ("total_physical", ctypes.c_ulonglong),
-                ("available_physical", ctypes.c_ulonglong),
-                ("total_page_file", ctypes.c_ulonglong),
-                ("available_page_file", ctypes.c_ulonglong),
-                ("total_virtual", ctypes.c_ulonglong),
-                ("available_virtual", ctypes.c_ulonglong),
-                ("available_extended_virtual", ctypes.c_ulonglong),
-            ]
-
-        status = MemoryStatus()
-        status.length = ctypes.sizeof(MemoryStatus)
-        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            raise OSError("GlobalMemoryStatusEx failed")
-        return int(status.total_physical), int(status.available_physical)
-    except (AttributeError, OSError):
+    status = _windows_memory_status()
+    if status is None:
         warnings.append("MEMORY_DISCOVERY_FAILED")
         return None, None
+    return status[0], status[1]
 
 
 def _macos_memory_bytes(warnings: list[str]) -> tuple[int | None, int | None]:
