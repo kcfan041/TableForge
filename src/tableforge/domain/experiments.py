@@ -42,12 +42,17 @@ class ExperimentConfig:
     learner_runtime: str = "cpu"
     hidden_size: int = 64
     batch_size: int = 64
+    players: int = 2
 
     def __post_init__(self) -> None:
         if self.learner_runtime not in ("cpu", "cuda"):
             raise ValueError("learner_runtime must be cpu or cuda")
         if self.hidden_size < 1 or self.batch_size < 1:
             raise ValueError("hidden_size and batch_size must be positive")
+        if not 2 <= self.players <= 6:
+            raise ValueError("players must be between 2 and 6")
+        if self.players != 2 and self.kind is not ExperimentKind.RULE_SIMULATION:
+            raise ValueError("only rule simulations support more than two players")
         if not self.schema_version or not self.preset_key or not self.preset_version:
             raise ValueError("experiment config identity cannot be empty")
         if self.hands < 1 or self.hands_per_job < 1:
@@ -101,6 +106,7 @@ class ExperimentPreset:
     learner_runtime: str = "cpu"
     hidden_size: int = 64
     batch_size: int = 64
+    players: int = 2
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -123,6 +129,7 @@ class ExperimentPreset:
             learner_runtime=self.learner_runtime,
             hidden_size=self.hidden_size,
             batch_size=self.batch_size,
+            players=self.players,
         )
 
 
@@ -130,6 +137,8 @@ BUILTIN_PRESETS = (
     ExperimentPreset("hu-rule-smoke", "1", hands=1_000, hands_per_job=250),
     ExperimentPreset("hu-rule-soak", "1", hands=1_000_000, hands_per_job=10_000),
     ExperimentPreset("hu-rule-soak-10m", "1", hands=10_000_000, hands_per_job=10_000),
+    ExperimentPreset("6max-rule-smoke", "1", hands=1_200, hands_per_job=300, players=6),
+    ExperimentPreset("6max-rule-soak", "1", hands=1_000_000, hands_per_job=10_000, players=6),
     ExperimentPreset(
         "hu-nfsp-cpu-smoke",
         "1",

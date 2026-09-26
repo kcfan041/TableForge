@@ -33,9 +33,7 @@ from tableforge.domain.simulation import SimulationJobPayload
 _TERMINAL = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
 
 
-def _profile(
-    payload_type: str, key: str | None = None, runtime: str = "cpu"
-) -> WorkloadProfile:
+def _profile(payload_type: str, key: str | None = None, runtime: str = "cpu") -> WorkloadProfile:
     matches = [
         profile
         for profile in BUILTIN_WORKLOADS
@@ -114,6 +112,7 @@ class ExperimentService:
                         schema_version="1.0",
                         hands=hands,
                         seed_start=config.seed_start + hand_start,
+                        players=config.players,
                     ).to_bytes(),
                     payload_type=profile.payload_type,
                     idempotency_key=self._key(experiment, f"segment:{segment}"),
@@ -200,11 +199,7 @@ class ExperimentService:
             finished = any(job.spec.payload_type == EVALUATION_PAYLOAD_TYPE for job in jobs)
         else:
             finished = True
-        if (
-            finished
-            and jobs
-            and all(job.status is JobStatus.SUCCEEDED for job in jobs)
-        ):
+        if finished and jobs and all(job.status is JobStatus.SUCCEEDED for job in jobs):
             return self.experiments.update_status(
                 experiment_id,
                 experiment.revision,

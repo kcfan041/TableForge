@@ -12,6 +12,7 @@ class SimulationJobPayload:
     starting_stack: int = 100
     small_blind: int = 1
     big_blind: int = 2
+    players: int = 2
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
@@ -22,17 +23,22 @@ class SimulationJobPayload:
             raise ValueError("starting_stack must cover the big blind")
         if not 0 < self.small_blind < self.big_blind:
             raise ValueError("invalid blinds")
+        if not 2 <= self.players <= 6:
+            raise ValueError("players must be between 2 and 6")
 
     def to_bytes(self) -> bytes:
+        data: dict[str, int | str] = {
+            "big_blind": self.big_blind,
+            "hands": self.hands,
+            "schema_version": self.schema_version,
+            "seed_start": self.seed_start,
+            "small_blind": self.small_blind,
+            "starting_stack": self.starting_stack,
+        }
+        if self.players != 2:
+            data["players"] = self.players
         return json.dumps(
-            {
-                "big_blind": self.big_blind,
-                "hands": self.hands,
-                "schema_version": self.schema_version,
-                "seed_start": self.seed_start,
-                "small_blind": self.small_blind,
-                "starting_stack": self.starting_stack,
-            },
+            data,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -49,4 +55,5 @@ class SimulationJobPayload:
             starting_stack=int(data["starting_stack"]),
             small_blind=int(data["small_blind"]),
             big_blind=int(data["big_blind"]),
+            players=int(data.get("players", 2)),
         )

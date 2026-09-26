@@ -10,6 +10,7 @@ from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.poker.betting import Seat
 from tableforge.poker.environment import HeadsUpHand
 from tableforge.poker.runner import HandRunner
+from tableforge.poker.table_play import simulate_table
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,8 @@ class SimulationExecutor:
         on_progress: Callable[[int], None] | None = None,
     ) -> bytes:
         payload = SimulationJobPayload.from_bytes(payload_bytes)
+        if payload.players != 2:
+            return self._execute_table(payload, on_progress)
         runner = HandRunner()
         actions = 0
         folds = 0
@@ -66,6 +69,38 @@ class SimulationExecutor:
                 "seed_start": payload.seed_start,
                 "showdowns": showdowns,
                 "winnings": winnings,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
+    def _execute_table(
+        self,
+        payload: SimulationJobPayload,
+        on_progress: Callable[[int], None] | None,
+    ) -> bytes:
+        summary = simulate_table(
+            players=payload.players,
+            hands=payload.hands,
+            seed_start=payload.seed_start,
+            starting_stack=payload.starting_stack,
+            small_blind=payload.small_blind,
+            big_blind=payload.big_blind,
+            on_progress=on_progress,
+            progress_interval=self.progress_interval_hands,
+        )
+        return json.dumps(
+            {
+                "actions": summary.actions,
+                "folds": summary.folds,
+                "hands": summary.hands,
+                "players": summary.players,
+                "schema_version": "tableforge.simulation-summary.v1",
+                "seed_end_exclusive": payload.seed_start + payload.hands,
+                "seed_start": payload.seed_start,
+                "showdowns": summary.showdowns,
+                "side_pots": summary.side_pots,
+                "winnings": list(summary.winnings),
             },
             sort_keys=True,
             separators=(",", ":"),

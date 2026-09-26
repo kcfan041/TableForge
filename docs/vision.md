@@ -29,7 +29,7 @@
 - 資金守恆、資訊隔離等既有不變量必須以同樣嚴格的 property test 與大規模 soak test 驗證。
 - 評估方式需要擴充：多人牌局的 bb/100 與信賴區間需要考慮座位輪替與多方互動。
 
-**目前狀態**：撲克引擎只支援 Heads-Up。
+**目前狀態**：2–6 人撲克引擎（side pot、多人 showdown）、多人 Rule Bot simulation 與座位輪替評估已完成，並通過 property test 與 2–6 人各 100 萬手 soak。NFSP 與 League 仍只支援 Heads-Up。
 
 ### 1.3 網頁介面
 

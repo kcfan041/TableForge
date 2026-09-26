@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：測試者使用前的穩定性（版本檢查、斷線恢復、憑證續期、CI）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：6-Max（2–6 人撲克引擎、side pot、多人 simulation 與評估）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -32,10 +32,11 @@
 | M3b-3 CUDA 容器 | GPU Worker 在容器內執行 | 延後 | 需要 Docker Desktop 的 WSL2 後端 |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
+| 6-Max | 2–6 人撲克引擎、side pot、多人 Rule Bot simulation、座位輪替評估 | 已完成 | 本階段；NFSP 與 League 維持兩人 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：382 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：417 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -252,6 +253,33 @@
   - 多程序測試：Worker 執行 12 個 simulation Job 期間，強制關閉並重啟 Coordinator，再關閉 30 秒後重啟。Worker 全程沒有結束，12 個 Job 全部成功，log 有斷線與恢復的紀錄，沒有 traceback。
   - 被撤銷的節點啟動 Worker 時，提示「請要新的邀請碼」並結束。
 
+### 6-Max
+- **新引擎**：`src/tableforge/poker/table.py` 的 `TableHand`，支援 2–6 人。原本的 `HeadsUpHand` 沒有修改，NFSP、League 與既有評估繼續使用它。
+  - 位置：小盲在按鈕左邊、大盲在小盲左邊；翻牌前由大盲左邊先行動，翻牌後由按鈕左邊先行動。兩人時沿用 Heads-Up 慣例（按鈕下小盲、翻牌前先行動）。
+  - 下注：min-raise、大盲在全員跟注後可以再加注；短碼 all-in 不足一個完整加注時，不重開已行動玩家的加注權。
+  - 結算：依投入金額分層建立主池與 side pot，每一層只有投入到該層、且未蓋牌的玩家可以爭取；只有一人投入的部分視為未被跟注，退還給該玩家。平分時零頭依座位順序（按鈕左邊開始）一枚一枚發給贏家。
+  - 發牌：從小盲開始一次一張，每人兩輪。
+  - `TableObservation` 列出所有座位的籌碼、投入與狀態，但只有自己的手牌。
+- **兩人時與 Heads-Up 引擎一致**：同樣的 seed 與行動下，手牌、行動紀錄、最終籌碼逐手相同（400 組隨機案例）。唯一刻意的差異：盲注玩家 all-in 且金額小於另一位盲注時，Heads-Up 引擎直接攤牌，新引擎讓另一位玩家選擇跟注或蓋牌。
+- **Rule Bots**：四種 Bot 同時接受兩種 Observation，不需要另外寫多人版本。
+- **Simulation**：`SimulationJobPayload` 新增 `players`（預設 2，只有不是 2 時才寫入 JSON，舊的 Job 內容不變）。多人時由 Worker 改用新引擎，結果多了 `players` 與 `side_pots`。新增 preset `6max-rule-smoke`（1,200 手）與 `6max-rule-soak`（100 萬手）；NFSP 類實驗設定多於 2 人會被拒絕。
+- **評估**：`src/tableforge/poker/table_play.py` 的 `evaluate_table`。每一手牌以相同的牌與按鈕位置重播 N 次，讓受測者輪流坐每個座位，以減少運氣造成的變異；回報整體 bb/100 與 95% 信賴區間，也分別回報每個座位的結果。`evaluate_against_rule_bots` 讓受測者分別對上整桌的每一種 Rule Bot。
+- 驗收：
+  - 單元測試：位置與行動順序、大盲的加注選擇、全部蓋牌、短碼 all-in 不重開加注權、非法行動、三人 all-in 產生主池與 side pot、未被跟注的籌碼退還、平分零頭、資訊隔離、17 張牌不重複。
+  - Property tests（Hypothesis）：隨機 2–6 人、隨機籌碼與按鈕，資金守恆、每一池的贏家都有資格且沒蓋牌、蓋牌玩家拿不到籌碼、重播結果相同。
+  - **2–6 人各 100 萬手 soak**，每手每個座位的籌碼隨機，確保經常出現 side pot，零錯誤：
+
+    | 人數 | 攤牌 | 蓋牌結束 | side pot | 手/秒 |
+    |---|---|---|---|---|
+    | 2 | 621,461 | 378,539 | 0 | 4,830 |
+    | 3 | 869,623 | 130,377 | 252,844 | 3,017 |
+    | 4 | 980,535 | 19,465 | 667,414 | 2,280 |
+    | 5 | 1,000,000 | 0 | 1,182,248 | 1,841 |
+    | 6 | 1,000,000 | 0 | 1,783,828 | 1,534 |
+
+    5–6 人時桌上幾乎一定有 CallBot，所以每手都到攤牌；蓋牌結束的情況由 2–4 人與 property tests 涵蓋。執行方式：`uv run python -m tableforge.poker.soak_cli --players 6 --hands 1000000`。
+- **尚未做**：NFSP 與 League 多人化（等模型強度問題解決後）、多人的 Rule Bot 策略（目前四種 Bot 的判斷都沒有考慮人數與位置）。
+
 ## 暫停中：P1 模型強度
 
 為了讓測試者先使用平台，這項工作暫停在「已找到主要瓶頸、尚未修正」的狀態。回來時從「下一步」接續。
@@ -336,18 +364,17 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **6-Max（下一個）**：新增 2–6 人的撲克引擎，現有 Heads-Up 引擎不變；2 人設定必須與 Heads-Up 逐手一致。擴充 Rule Bots、simulation、評估（座位輪替與信賴區間），property test 擴充到 N 人，2–6 人各 100 萬手 soak。NFSP 與 League 維持兩人，等模型強度解決後再擴充。
-2. **網頁介面**：Coordinator 內建 HTTP API（FastAPI，與 gRPC `ControlService` 共用程式與權限）與 React + TypeScript 前端（建置結果 commit 進 repo，使用者不需要 Node.js）。目標是日常操作都能在網頁完成，指令模式保留。
+1. **網頁介面（下一個）**：Coordinator 內建 HTTP API（FastAPI，與 gRPC `ControlService` 共用程式與權限）與 React + TypeScript 前端（建置結果 commit 進 repo，使用者不需要 Node.js）。目標是日常操作都能在網頁完成，指令模式保留。
    - 新增 admin 角色（只能在 Coordinator 電腦上核發），可在網頁上產生邀請碼、撤銷節點與憑證。
    - 測試者端另有本機網頁 `tableforge ui`（只開在 127.0.0.1）：貼邀請碼加入、連線檢查、啟動與停止 Worker、查看 log。
    - HTTPS 使用 `tailscale serve`；以邀請碼登入，換成 HttpOnly cookie session。
    - 介面以繁體中文為主，預留多語言。
-3. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。多演算法同桌對戰與 NFSP 多人化都以此為前提。
-4. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-5. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-6. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-7. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-8. **CUDA Worker 容器**（需要 WSL2 後端）。
-9. **O0–O7 對手建模**。
+2. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。多演算法同桌對戰與 NFSP 多人化都以此為前提。
+3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+5. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+6. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+7. **CUDA Worker 容器**（需要 WSL2 後端）。
+8. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

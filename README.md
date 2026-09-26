@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml/badge.svg)](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml)
 
-分散式多代理德州撲克 AI 訓練與評估框架。目前支援 Heads-Up No-Limit Hold'em、Rule Bots、NFSP（CPU 與 NVIDIA GPU），以及單一 Coordinator 搭配多個 Worker 的遠端執行。
+分散式多代理德州撲克 AI 訓練與評估框架。目前支援 No-Limit Hold'em（Heads-Up 與 2–6 人桌）、Rule Bots、NFSP（Heads-Up；CPU 與 NVIDIA GPU），以及單一 Coordinator 搭配多個 Worker 的遠端執行。
 
 - 開發進度：[docs/status.md](docs/status.md)
 - 架構規格：[docs/architecture/README.md](docs/architecture/README.md)
@@ -47,6 +47,8 @@ uv run tableforge experiment start <experiment-id>
 uv run tableforge worker start --max-jobs 10 --idle-seconds 0
 uv run tableforge experiment status <experiment-id>
 ```
+
+6 人桌的 Rule Bot simulation 改用 `--preset 6max-rule-smoke`（1,200 手）或 `6max-rule-soak`（100 萬手）。
 
 資料預設存在目前目錄的 `.tableforge/`，可用 `--data-dir <路徑>` 指定，這個選項要放在子指令之前。
 

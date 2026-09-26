@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 
 from tableforge.poker.betting import Action, LegalActions, Street
 from tableforge.poker.observation import Observation
+from tableforge.poker.table import TableObservation
+
+AnyObservation = Observation | TableObservation
 
 
 @dataclass(slots=True)
@@ -15,14 +18,14 @@ class RandomBot:
     def __post_init__(self) -> None:
         self._random = random.Random(self.seed)
 
-    def act(self, observation: Observation, legal_actions: LegalActions) -> Action:
+    def act(self, observation: AnyObservation, legal_actions: LegalActions) -> Action:
         actions = _legal_action_candidates(legal_actions)
         return self._random.choice(actions)
 
 
 @dataclass(frozen=True, slots=True)
 class CallBot:
-    def act(self, observation: Observation, legal_actions: LegalActions) -> Action:
+    def act(self, observation: AnyObservation, legal_actions: LegalActions) -> Action:
         if legal_actions.can_check:
             return Action.check()
         if legal_actions.call_amount is not None:
@@ -32,7 +35,7 @@ class CallBot:
 
 @dataclass(frozen=True, slots=True)
 class TightBot:
-    def act(self, observation: Observation, legal_actions: LegalActions) -> Action:
+    def act(self, observation: AnyObservation, legal_actions: LegalActions) -> Action:
         strength = _starting_hand_strength(observation)
         if legal_actions.can_check:
             return Action.check()
@@ -45,10 +48,8 @@ class TightBot:
 
 @dataclass(frozen=True, slots=True)
 class AggroBot:
-    def act(self, observation: Observation, legal_actions: LegalActions) -> Action:
-        can_aggress = (
-            observation.street is Street.PREFLOP or observation.pot % 3 != 0
-        )
+    def act(self, observation: AnyObservation, legal_actions: LegalActions) -> Action:
+        can_aggress = observation.street is Street.PREFLOP or observation.pot % 3 != 0
         if legal_actions.min_raise_to is not None and can_aggress:
             return Action.raise_to(legal_actions.min_raise_to)
         if legal_actions.call_amount is not None:
@@ -75,7 +76,7 @@ def _legal_action_candidates(legal: LegalActions) -> list[Action]:
     return actions
 
 
-def _starting_hand_strength(observation: Observation) -> int:
+def _starting_hand_strength(observation: AnyObservation) -> int:
     first, second = observation.hole_cards
     if observation.street is not Street.PREFLOP:
         return 1
