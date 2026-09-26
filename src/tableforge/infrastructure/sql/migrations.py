@@ -345,6 +345,20 @@ ALTER TABLE node_sessions ADD COLUMN invite_id TEXT
 SQLITE_V4 = _V4_COMMON.format(ts="TEXT")
 POSTGRES_V4 = _V4_COMMON.format(ts="TIMESTAMPTZ")
 
+_V5_COMMON = """
+CREATE TABLE web_sessions (
+    token_hash TEXT PRIMARY KEY,
+    operator_id TEXT NOT NULL,
+    csrf_token TEXT NOT NULL,
+    created_at {ts} NOT NULL,
+    expires_at {ts} NOT NULL
+);
+CREATE INDEX web_sessions_operator ON web_sessions(operator_id)
+"""
+
+SQLITE_V5 = _V5_COMMON.format(ts="TEXT")
+POSTGRES_V5 = _V5_COMMON.format(ts="TIMESTAMPTZ")
+
 _LEGACY_ATTEMPT_COLUMNS = {
     "error_code": "TEXT",
     "error_summary": "TEXT",
@@ -395,12 +409,14 @@ MIGRATIONS: dict[str, tuple[Migration, ...]] = {
         Migration(2, "query indexes", _script(SQLITE_V2)),
         Migration(3, "multi-use enrollment tokens", _script(SQLITE_V3)),
         Migration(4, "cluster identity, invites, operators, worker slots", _script(SQLITE_V4)),
+        Migration(5, "web sessions", _script(SQLITE_V5)),
     ),
     "postgres": (
         Migration(1, "initial schema", _script(POSTGRES_V1)),
         Migration(2, "query indexes", _script(POSTGRES_V2)),
         Migration(3, "multi-use enrollment tokens", _script(POSTGRES_V3)),
         Migration(4, "cluster identity, invites, operators, worker slots", _script(POSTGRES_V4)),
+        Migration(5, "web sessions", _script(POSTGRES_V5)),
     ),
 }
 

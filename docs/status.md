@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：6-Max（2–6 人撲克引擎、side pot、多人 simulation 與評估）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：W1 Coordinator 網頁介面（HTTP API、admin 角色、網頁登入、即時更新、React 前端）。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -20,7 +20,7 @@
 | C2 | NVIDIA GPU 偵測、GPU 測試分級 | 已完成 | `ca5e60e` |
 | C3 | Scheduler 資源過濾、reservation、capability revision | 已完成 | `179933e` |
 | C4 | 降級執行計畫（fallback）、OOM 分類 | 已完成 | `ca5e60e` |
-| C5 | UI 呈現能力資訊 | 未開始 | 平台化階段 |
+| C5 | UI 呈現能力資訊 | 部分完成 | 網頁「節點」頁顯示 CPU、記憶體、GPU、可執行角色與警告；尚未顯示 workload 相容性與原因碼 |
 | M3a | gRPC 傳輸、enrollment/session、TLS、artifact 傳輸 | 已完成 | `61cf545`、`b5c4c51` |
 | M3a 第 2 階段 | Mac 實機驗證、跨平台結果一致性 | 延後 | 需在 Mac 上執行 |
 | M3a 實機 | 兩台電腦實際連線驗收 | 延後 | 需要測試者與 Tailscale；程式與流程已以本機區域網路 IP 模擬驗證（見 S0） |
@@ -32,11 +32,13 @@
 | M3b-3 CUDA 容器 | GPU Worker 在容器內執行 | 延後 | 需要 Docker Desktop 的 WSL2 後端 |
 | M4 | NFSP 多輪訓練、評估、promotion（CPU） | 已完成 | `5abd094`、`c897b37`、`bf77238` 及本階段 |
 | M5 | League、歷史模型、matchup matrix、1,000 萬手 soak | 已完成 | 本階段 |
-| 6-Max | 2–6 人撲克引擎、side pot、多人 Rule Bot simulation、座位輪替評估 | 已完成 | 本階段；NFSP 與 League 維持兩人 |
+| 6-Max | 2–6 人撲克引擎、side pot、多人 Rule Bot simulation、座位輪替評估 | 已完成 | `d64d844`；NFSP 與 League 維持兩人 |
+| W1 | Coordinator 網頁介面：HTTP API、admin 角色、網頁登入、即時更新、React 前端 | 已完成 | 本階段 |
+| W2 | 測試者端本機網頁 `tableforge ui`（加入、連線檢查、啟停 Worker、log） | 未開始 | 下一個 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：417 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：436 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -280,6 +282,33 @@
     5–6 人時桌上幾乎一定有 CallBot，所以每手都到攤牌；蓋牌結束的情況由 2–4 人與 property tests 涵蓋。執行方式：`uv run python -m tableforge.poker.soak_cli --players 6 --hands 1000000`。
 - **尚未做**：NFSP 與 League 多人化（等模型強度問題解決後）、多人的 Rule Bot 策略（目前四種 Bot 的判斷都沒有考慮人數與位置）。
 
+### W1 Coordinator 網頁介面
+- **HTTP API**：`src/tableforge/web/app.py`（FastAPI），由 `coordinator serve` 在同一個程序內以背景執行緒啟動（uvicorn），預設 `127.0.0.1:8080`，可用 `--http-listen` 或 `coordinator.http_listen` 更改，設成空字串則關閉。直接呼叫與 gRPC `ControlService` 相同的 Application 服務，權限規則也相同。
+  - 資源：總覽、節點（含 Worker 編號）、preset、實驗（列表、明細、建立、開始、停止、模擬結果彙總、評估結果）、League 矩陣、checkpoint、事件、診斷。
+  - 管理者專用：邀請碼列表、產生、撤銷；操作憑證列表、撤銷；撤銷節點。
+  - 即時更新：`/api/events/stream`（Server-Sent Events）。伺服器每秒讀一次 outbox 事件表，每 15 秒送一次 keep-alive；每條連線最多 5 分鐘，之後瀏覽器從上次的事件編號自動重連，不會漏掉事件。頁面收到事件後會重新載入資料（多個事件合併成一次）。
+  - 前端的建置結果由同一個 HTTP 伺服器提供；網址找不到檔案時回傳 `index.html`（讓網頁內的網址可以直接開啟），並防止用 `../` 讀到 static 以外的檔案。
+- **權限與登入**：
+  - 新增 `admin` 角色，高於 `operator`。只能在 Coordinator 電腦上用 `tableforge coordinator admin` 產生，邀請碼不能授予（`InviteScope` 與網頁 API 都會拒絕），因此外流的邀請碼不會變成管理者權限。schema migration、GC、憑證變更等仍然只能在 Coordinator 電腦上用指令執行。
+  - 登入時貼上邀請碼或操作憑證。邀請碼只接受「只含 viewer／operator 權限」的；含 Worker 節點的邀請碼會被拒絕且不會用掉，讓它仍可以拿去 `join`。
+  - 登入後發給瀏覽器 HttpOnly、SameSite=Strict 的 cookie（HTTPS 時加上 Secure）。session 存在資料庫的新表 `web_sessions`（schema v5，SQLite 與 PostgreSQL 都有，`metadata copy-from-sqlite` 也會複製），最多 30 天，而且不會比原本的操作憑證更晚到期。撤銷操作憑證時會一併刪除它的網頁 session。
+  - 會修改資料的請求都要帶上 CSRF token（每個 session 一個）。腳本可以改用 `Authorization: Bearer tfo_...`，不需要 CSRF。
+  - 登入失敗每個來源 5 分鐘最多 10 次，之後回 429。
+  - 所有回應都加上安全標頭：CSP（只允許同網域）、禁止被嵌入其他網頁、nosniff、不送 Referrer；API 回應不快取。
+  - HTTPS：建議用 `tailscale serve` 把 `127.0.0.1:8080` 以 HTTPS 分享到 tailnet；也可以設定 `coordinator.http_certificate` 與 `coordinator.http_private_key` 讓網頁直接使用 TLS。
+- **邀請碼核發共用**：`transport/invite_issue.py`，CLI 的 `coordinator invite create` 與網頁共用同一段程式，檢查憑證是否涵蓋位址、storage 位址警告都一致。
+- **前端**：`web/`，React 19 + TypeScript 7 + Vite 8，嚴格型別檢查。建置結果放在 `src/tableforge/web/static/`（約 94 KB gzip）並 commit 進 repo，Python 套件會包含這些檔案，使用者不需要安裝 Node.js。
+  - 頁面：登入、總覽、節點、實驗（建立並開始、停止）、實驗明細（設定、Job、模擬結果的各座位輸贏長條圖、評估結果）、League 對戰矩陣熱圖（綠色列方贏、紅色列方輸，信賴區間跨過 0 的格子加上斜線，滑鼠移上去顯示信賴區間與手數）、Checkpoint、事件（可篩選）、診斷、邀請與憑證（管理者）。
+  - 繁體中文為主，另有英文（未翻譯的字自動用中文），選擇會記在瀏覽器。支援深色模式與窄螢幕。
+  - 依角色顯示：檢視者看不到建立、停止按鈕，只有管理者看得到邀請頁與撤銷按鈕；伺服器端仍會檢查權限。
+- **Docker**：Coordinator 容器開放 8080，compose 對應到主機的 `127.0.0.1:8080`（`WEB_HOST_PORT`）。即使設定了 `BIND_ADDRESS`，網頁仍只開在本機，要分享請用 `tailscale serve`。
+- **CI**：新增「Web UI build is committed」：重新 `npm ci && npm run build`，確認結果與 commit 的檔案完全相同。本機連續建置兩次，檔案 hash 相同。
+- 驗收：
+  - API 測試 19 個：未登入一律 401、cookie 屬性、邀請碼登入只能一次、含節點的邀請碼被拒且不會用掉、登入失敗次數限制、沒有 CSRF token 被拒、Bearer 不需要 CSRF、檢視者不能修改、實驗完整流程、錯誤回應格式、各唯讀頁面、管理者的邀請與憑證管理（含不能用邀請碼授予 admin、不能撤銷自己）、撤銷憑證後網頁 session 立即失效、session 隨憑證到期、登出、事件串流、static 檔案與 `../` 防護、真實伺服器啟動與關閉。
+  - `scripts/web_e2e.py`：以真實 HTTP 伺服器與 Worker 走完 13 個步驟（提供前端、拒絕未登入、管理者產生邀請碼、操作者用邀請碼登入且只能一次、CSRF、事件串流、建立並開始 6 人實驗、收到即時事件、Worker 跑完且各座位輸贏加總為 0、各頁資料、撤銷後立即登出、登出），全部通過，約 4 秒。每一步印一行，並有整體時間上限。
+  - 以 Edge 無介面模式實際開啟 10 個頁面並截圖檢查：登入、總覽、節點、實驗列表、實驗明細（6 人結果長條圖）、League 熱圖、事件、邀請與憑證、診斷，以及檢視者看到的實驗頁（沒有建立按鈕，顯示權限說明）。
+- **尚未做**：測試者端的本機網頁（W2）、workload 相容性說明（C5 剩餘部分）、訓練曲線、網頁上的即時 log。
+
 ## 暫停中：P1 模型強度
 
 為了讓測試者先使用平台，這項工作暫停在「已找到主要瓶頸、尚未修正」的狀態。回來時從「下一步」接續。
@@ -364,11 +393,7 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **網頁介面（下一個）**：Coordinator 內建 HTTP API（FastAPI，與 gRPC `ControlService` 共用程式與權限）與 React + TypeScript 前端（建置結果 commit 進 repo，使用者不需要 Node.js）。目標是日常操作都能在網頁完成，指令模式保留。
-   - 新增 admin 角色（只能在 Coordinator 電腦上核發），可在網頁上產生邀請碼、撤銷節點與憑證。
-   - 測試者端另有本機網頁 `tableforge ui`（只開在 127.0.0.1）：貼邀請碼加入、連線檢查、啟動與停止 Worker、查看 log。
-   - HTTPS 使用 `tailscale serve`；以邀請碼登入，換成 HttpOnly cookie session。
-   - 介面以繁體中文為主，預留多語言。
+1. **測試者端本機網頁 W2（下一個）**：`tableforge ui`，只開在 127.0.0.1。貼邀請碼加入、連線檢查（`doctor --coordinator`）、啟動與停止 Worker、查看 log，讓測試者不需要開終端機。
 2. **學習效果驗證（暫停）**：見上方「暫停中：P1 模型強度」。多演算法同桌對戰與 NFSP 多人化都以此為前提。
 3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
 4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。

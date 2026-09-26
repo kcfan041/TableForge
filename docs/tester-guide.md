@@ -88,7 +88,13 @@ uv run tableforge --data-dir .tableforge-node worker start --remote
 
 ### 6. 遠端建立與查看實驗
 
-如果邀請碼包含 `operator` 權限：
+**網頁（建議）**：管理者開放網頁後，會給你一個 `https://….ts.net` 網址。用瀏覽器開啟，在登入畫面貼上邀請碼即可。
+
+- 網頁登入要用**只含檢視者或操作者權限**的邀請碼。含 Worker 權限的邀請碼貼到網頁會被拒絕（不會用掉），請改用它執行 `join`，並向管理者索取另一個網頁用的邀請碼。
+- 登入後瀏覽器會保持登入 30 天。可以看到節點、實驗、結果、League 矩陣與事件，有新進度時頁面會自動更新。
+- 有操作者權限時，可以在「實驗」頁選擇 preset，按「建立並開始」。
+
+**指令**：如果邀請碼包含 `operator` 權限：
 
 ```powershell
 uv run tableforge remote whoami
@@ -194,7 +200,21 @@ docker compose up -d --wait
 
 Windows 防火牆若擋住連線，允許 TCP 7443 與 59000 從 Tailscale 網路介面連入。
 
-分享機器：在 Tailscale 後台把這台電腦分享給測試者，或邀請他加入 tailnet。建議用 ACL 限制測試者只能連 7443 與 59000。
+分享機器：在 Tailscale 後台把這台電腦分享給測試者，或邀請他加入 tailnet。建議用 ACL 限制測試者只能連 7443、59000 與 443（網頁）。
+
+**網頁介面**：網頁只開在這台電腦的 `127.0.0.1:8080`，透過 Tailscale 以 HTTPS 分享：
+
+```powershell
+tailscale serve --bg --https=443 http://127.0.0.1:8080
+```
+
+tailnet 內的人就可以用 `https://<這台電腦的 Tailscale 名稱>` 開啟（第一次使用時，Tailscale 後台可能要求啟用 HTTPS 憑證）。取得自己的管理者憑證：
+
+```powershell
+docker compose exec coordinator tableforge --data-dir /data coordinator admin --label <你的名字>
+```
+
+用輸出的 `credential` 登入網頁。管理者可以在「邀請與憑證」頁產生邀請碼、撤銷邀請碼與別人的憑證，在「節點」頁撤銷節點。
 
 ### 2. 產生邀請碼
 
@@ -203,7 +223,8 @@ docker compose exec coordinator tableforge --data-dir /data coordinator invite c
 ```
 
 - `--node`：讓對方的電腦成為 Worker 節點
-- `--role viewer` 或 `--role operator`：讓對方可以遠端查看，或同時可以建立、啟動、停止實驗
+- `--role viewer` 或 `--role operator`：讓對方可以遠端查看，或同時可以建立、啟動、停止實驗（網頁與 `remote` 指令都適用）
+- 邀請碼只能用一次：測試者要同時 `join` 當 Worker 又要登入網頁，請產生兩個邀請碼，一個 `--node`、一個只有 `--role`
 - 兩者可以只選一個，也可以都選
 - `--ttl-hours`：有效時間，預設 24 小時
 - 每個邀請碼只能使用一次，一次代表一台電腦
@@ -223,7 +244,7 @@ docker compose exec coordinator tableforge --data-dir /data node status
 docker compose exec coordinator tableforge --data-dir /data node revoke <node-id>
 ```
 
-撤銷節點後，它的 Worker 會立即無法領取工作；撤銷操作憑證後，`remote` 指令會立即失效。產生邀請碼與撤銷只能在 Coordinator 那台電腦上執行，不開放遠端。
+撤銷節點後，它的 Worker 會立即無法領取工作；撤銷操作憑證後，`remote` 指令與網頁登入會立即失效。以上操作也可以由管理者在網頁上完成；管理者憑證本身只能在 Coordinator 電腦上產生，不能透過邀請碼取得。
 
 ### 已知限制
 

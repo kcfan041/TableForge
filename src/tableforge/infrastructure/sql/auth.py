@@ -12,8 +12,10 @@ from tableforge.domain.auth import (
     IssuedOperator,
     IssuedSession,
     OperatorIdentity,
+    OperatorRecord,
     OperatorRole,
     Redemption,
+    WebSession,
 )
 from tableforge.domain.ids import (
     ClusterId,
@@ -361,7 +363,135 @@ class SqlAuthRepository:
                 "UPDATE operators SET revoked = 1 WHERE operator_id = ? AND revoked = 0",
                 (str(operator_id),),
             )
+            connection.execute(
+                "DELETE FROM web_sessions WHERE operator_id = ?", (str(operator_id),)
+            )
             return cursor.rowcount == 1
+
+    def issue_operator(
+        self, role: OperatorRole, label: str, now: datetime, ttl: timedelta
+    ) -> IssuedOperator:
+        """Issue an operator credential directly, without an invite.
+
+        This is the only way to obtain the admin role and must only be reachable from the
+        coordinator host.
+        """
+        require_aware(now)
+        if ttl <= timedelta(0):
+            raise ValueError("operator ttl must be positive")
+        token = f"{OPERATOR_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+        issued = IssuedOperator(new_operator_id(), token, role, now + ttl)
+        with self._db.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO operators (
+                    operator_id, token_hash, role, label, invite_id, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+                """,
+                (
+                    str(issued.operator_id),
+                    _hash(token),
+                    role.value,
+                    label,
+                    self._db.timestamp(now),
+                    self._db.timestamp(issued.expires_at),
+                ),
+            )
+        return issued
+
+    def list_operator_records(self) -> tuple[OperatorRecord, ...]:
+        with self._db.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM operators WHERE revoked = 0 ORDER BY created_at"
+            ).fetchall()
+        return tuple(
+            OperatorRecord(
+                OperatorIdentity(
+                    OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
+                ),
+                parse_timestamp(row["created_at"]),
+                parse_timestamp(row["expires_at"]),
+            )
+            for row in rows
+        )
+
+    def create_web_session(self, operator_token: str, now: datetime, ttl: timedelta) -> WebSession:
+        """Exchange an operator credential for a browser session.
+
+        The session never outlives the credential it came from.
+        """
+        identity = self.authenticate_operator(operator_token, now)
+        with self._db.read() as connection:
+            row = connection.execute(
+                "SELECT expires_at FROM operators WHERE operator_id = ?",
+                (str(identity.operator_id),),
+            ).fetchone()
+        expires_at = min(now + ttl, parse_timestamp(row["expires_at"]))
+        token = secrets.token_urlsafe(32)
+        csrf = secrets.token_urlsafe(24)
+        with self._db.transaction() as connection:
+            connection.execute(
+                "DELETE FROM web_sessions WHERE expires_at <= ?", (self._db.timestamp(now),)
+            )
+            connection.execute(
+                """
+                INSERT INTO web_sessions (
+                    token_hash, operator_id, csrf_token, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    _hash(token),
+                    str(identity.operator_id),
+                    csrf,
+                    self._db.timestamp(now),
+                    self._db.timestamp(expires_at),
+                ),
+            )
+        return WebSession(token, csrf, identity, expires_at)
+
+    def web_session(self, token: str, now: datetime) -> WebSession:
+        require_aware(now)
+        with self._db.read() as connection:
+            row = connection.execute(
+                """
+                SELECT s.csrf_token, s.expires_at AS session_expires, o.*
+                FROM web_sessions s JOIN operators o ON o.operator_id = s.operator_id
+                WHERE s.token_hash = ?
+                """,
+                (_hash(token),),
+            ).fetchone()
+        if (
+            row is None
+            or row["revoked"]
+            or parse_timestamp(row["session_expires"]) <= now
+            or parse_timestamp(row["expires_at"]) <= now
+        ):
+            raise AuthenticationError("session expired; sign in again")
+        identity = OperatorIdentity(
+            OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
+        )
+        return WebSession(
+            token, row["csrf_token"], identity, parse_timestamp(row["session_expires"])
+        )
+
+    def end_web_session(self, token: str) -> None:
+        with self._db.transaction() as connection:
+            connection.execute("DELETE FROM web_sessions WHERE token_hash = ?", (_hash(token),))
+
+    def list_worker_slots(self) -> tuple[tuple[WorkerId, NodeId, str, datetime], ...]:
+        with self._db.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM worker_slots ORDER BY last_seen_at DESC"
+            ).fetchall()
+        return tuple(
+            (
+                WorkerId(row["worker_id"]),
+                NodeId(row["node_id"]),
+                row["label"],
+                parse_timestamp(row["last_seen_at"]),
+            )
+            for row in rows
+        )
 
     def start_worker(self, node_id: NodeId, label: str, now: datetime) -> WorkerId:
         require_aware(now)

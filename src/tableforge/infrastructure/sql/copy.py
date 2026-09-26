@@ -23,6 +23,7 @@ TABLES: tuple[str, ...] = (
     "invites",
     "operators",
     "worker_slots",
+    "web_sessions",
 )
 
 TIMESTAMP_COLUMNS: dict[str, frozenset[str]] = {
@@ -42,6 +43,7 @@ TIMESTAMP_COLUMNS: dict[str, frozenset[str]] = {
     "invites": frozenset({"created_at", "expires_at", "redeemed_at"}),
     "operators": frozenset({"created_at", "expires_at"}),
     "worker_slots": frozenset({"started_at", "last_seen_at"}),
+    "web_sessions": frozenset({"created_at", "expires_at"}),
 }
 
 ORDER_BY: dict[str, str] = {
@@ -61,6 +63,7 @@ ORDER_BY: dict[str, str] = {
     "invites": "invite_id",
     "operators": "operator_id",
     "worker_slots": "worker_id",
+    "web_sessions": "token_hash",
 }
 
 BATCH = 500

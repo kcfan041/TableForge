@@ -47,6 +47,9 @@ class WorkerSettings:
 @dataclass(frozen=True, slots=True)
 class CoordinatorSettings:
     listen: str = "0.0.0.0:7443"
+    http_listen: str = "127.0.0.1:8080"
+    http_certificate: str = ""
+    http_private_key: str = ""
     reconcile_seconds: float = 2.0
     metrics_listen: str = ""
     node_ttl_seconds: float = 120.0

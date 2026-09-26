@@ -41,7 +41,7 @@
 
 原則：核心判定只在 Scheduler/Application 層，UI 只負責呈現；UI 不阻塞 CLI 版本的任何功能。
 
-**目前狀態**：只有 CLI 與 Prometheus metrics。
+**目前狀態**：Coordinator 內建網頁介面（W1）已完成，提供節點與硬體、實驗、Job、checkpoint、matchup matrix 熱圖、事件、診斷與邀請管理，並即時更新。尚未提供：workload 相容性說明（C5）、訓練曲線、使用者與專案（`architecture/07` S1–S5）、測試者端的本機網頁（W2）。
 
 ### 1.4 對手建模
 

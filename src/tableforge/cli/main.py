@@ -17,7 +17,7 @@ from tableforge.capability.evaluator import assess_compatibility
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.composition import Services, build_services
 from tableforge.coordinator.service import CoordinatorService
-from tableforge.domain.auth import OperatorRole
+from tableforge.domain.auth import INVITABLE_ROLES, OperatorRole
 from tableforge.domain.capabilities import CompatibilityStatus, NodeCapability
 from tableforge.domain.ids import (
     AgentId,
@@ -102,6 +102,16 @@ def main() -> None:
     coordinator_serve.add_argument("--insecure", action="store_true")
     coordinator_serve.add_argument("--reconcile-seconds", type=float)
     coordinator_serve.add_argument("--metrics-listen")
+    coordinator_serve.add_argument(
+        "--http-listen",
+        help="web UI address (default 127.0.0.1:8080); an empty string disables the web UI",
+    )
+    coordinator_admin = coordinator_subparsers.add_parser(
+        "admin",
+        help="issue a web/remote admin credential (coordinator host only, never by invite)",
+    )
+    coordinator_admin.add_argument("--label", default="admin")
+    coordinator_admin.add_argument("--ttl-days", type=float, default=30.0)
     enrollment = coordinator_subparsers.add_parser("enrollment-token")
     enrollment.add_argument("--ttl-minutes", type=int, default=60)
     enrollment.add_argument("--max-uses", type=int, default=1)
@@ -121,7 +131,7 @@ def main() -> None:
     )
     invite_create.add_argument(
         "--role",
-        choices=[role.value for role in OperatorRole],
+        choices=[role.value for role in INVITABLE_ROLES],
         help="also grant a remote control credential with this role",
     )
     invite_create.add_argument("--ttl-hours", type=float, default=24.0)
@@ -240,6 +250,7 @@ def main() -> None:
                 "coordinator.listen": getattr(args, "listen", None),
                 "coordinator.reconcile_seconds": getattr(args, "reconcile_seconds", None),
                 "coordinator.metrics_listen": getattr(args, "metrics_listen", None),
+                "coordinator.http_listen": getattr(args, "http_listen", None),
             },
         )
     except SettingsError as error:
@@ -608,6 +619,28 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
         )
     elif args.coordinator_command == "invite":
         _invite_command(args, services)
+    elif args.coordinator_command == "admin":
+        if args.ttl_days <= 0:
+            raise SystemExit("--ttl-days must be positive")
+        issued = auth.issue_operator(
+            OperatorRole.ADMIN, args.label, datetime.now(UTC), timedelta(days=args.ttl_days)
+        )
+        print(
+            json.dumps(
+                {
+                    "credential": issued.token,
+                    "expires_at": issued.expires_at.isoformat(),
+                    "operator_id": str(issued.operator_id),
+                    "role": issued.role.value,
+                },
+                sort_keys=True,
+            )
+        )
+        print(
+            "Sign in to the web UI with this credential. It is shown only once; revoke it "
+            "with `tableforge coordinator operator revoke <operator_id>`.",
+            file=sys.stderr,
+        )
     elif args.coordinator_command == "operator":
         if args.operator_command == "list":
             for identity in auth.list_operators():
@@ -669,6 +702,20 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
             tls=tls is not None,
             settings=settings.redacted(),
         )
+        web = None
+        if settings.coordinator.http_listen:
+            from tableforge.web.app import WebContext
+            from tableforge.web.server import start_web_server
+
+            web = start_web_server(
+                WebContext(services, clock),
+                settings.coordinator.http_listen,
+                certificate=settings.coordinator.http_certificate or None,
+                private_key=settings.coordinator.http_private_key or None,
+            )
+            scheme = "https" if settings.coordinator.http_certificate else "http"
+            host = settings.coordinator.http_listen.rpartition(":")[0] or "127.0.0.1"
+            logger.emit("web_started", url=f"{scheme}://{host}:{web.port}/")
         experiments = services.experiments
         metrics = None
         if settings.coordinator.metrics_listen:
@@ -692,6 +739,8 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
                 logger.emit("experiments_reconciled", count=advanced)
         if metrics is not None:
             metrics.stop()
+        if web is not None:
+            web.stop()
         running.stop(5.0)
         logger.emit("coordinator_stopped")
 
@@ -715,9 +764,7 @@ def _doctor_coordinator(settings: Settings, as_json: bool) -> int:
 
 def _invite_command(args: argparse.Namespace, services: Services) -> None:
     from tableforge.domain.auth import InviteScope
-    from tableforge.infrastructure.s3_artifacts import parse_endpoints
-    from tableforge.transport.invite import InviteCode
-    from tableforge.transport.tls import covers
+    from tableforge.transport.invite_issue import InviteIssueError, issue_invite
 
     auth = services.repositories.auth
     settings = services.settings
@@ -747,43 +794,20 @@ def _invite_command(args: argparse.Namespace, services: Services) -> None:
         scope = InviteScope(node=args.node, role=OperatorRole(args.role) if args.role else None)
     except ValueError as error:
         raise SystemExit("choose --node, --role, or both") from error
-    if args.ttl_hours <= 0:
-        raise SystemExit("--ttl-hours must be positive")
-    material = TlsMaterial(
-        settings.data_dir / "tls" / "server.crt", settings.data_dir / "tls" / "server.key"
-    )
-    if not material.certificate_path.is_file():
-        raise SystemExit("no coordinator certificate; run `tableforge coordinator init` first")
-    host = args.address.rsplit(":", 1)[0].strip("[]")
-    if ":" not in args.address or not covers(material.hosts(), host):
-        raise SystemExit(
-            f"the coordinator certificate does not cover {host!r} "
-            f"(covers {', '.join(material.hosts())}). Run "
-            f"`tableforge coordinator init --host {host} --regenerate`, restart the "
-            "coordinator, and invite again."
+    try:
+        issued = issue_invite(
+            auth, settings, args.address, scope, timedelta(hours=args.ttl_hours), args.label, now
         )
-    if scope.node and settings.artifacts.backend == "s3" and settings.artifacts.direct_transfer:
-        offered = parse_endpoints(settings.artifacts.endpoints)
-        if not offered and not settings.artifacts.public_endpoint_url:
-            print(
-                "warning: only the internal storage address is offered to nodes; remote "
-                "machines usually need artifacts.endpoints (EXTRA_STORAGE_ENDPOINTS)",
-                file=sys.stderr,
-            )
-    invite, secret = auth.create_invite(scope, now, timedelta(hours=args.ttl_hours), args.label)
-    code = InviteCode(
-        cluster_id=str(auth.cluster_id(now)),
-        address=args.address,
-        fingerprint=material.fingerprint(),
-        secret=secret,
-        scope=scope,
-    ).encode()
+    except InviteIssueError as error:
+        raise SystemExit(str(error)) from error
+    for warning in issued.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
     print(
         json.dumps(
             {
-                "expires_at": invite.expires_at.isoformat(),
-                "invite": code,
-                "invite_id": str(invite.invite_id),
+                "expires_at": issued.invite.expires_at.isoformat(),
+                "invite": issued.code,
+                "invite_id": str(issued.invite.invite_id),
                 "scope": scope.encode(),
             },
             sort_keys=True,

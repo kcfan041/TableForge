@@ -25,18 +25,22 @@ class IssuedSession:
 class OperatorRole(StrEnum):
     """Remote control-plane roles.
 
-    Administrative actions (invites, revocation, GC, migrations) are not remote roles:
-    they run only on the coordinator host.
+    ``admin`` may also create invites and revoke nodes, invites and credentials. It can
+    only be issued on the coordinator host (``tableforge coordinator admin``), never
+    through an invite, so a leaked invite cannot grant cluster administration. Schema
+    migrations, GC and certificate changes stay host-only for every role.
     """
 
     VIEWER = "viewer"
     OPERATOR = "operator"
+    ADMIN = "admin"
 
     def allows(self, required: OperatorRole) -> bool:
         return _RANK[self] >= _RANK[required]
 
 
-_RANK = {OperatorRole.VIEWER: 0, OperatorRole.OPERATOR: 1}
+_RANK = {OperatorRole.VIEWER: 0, OperatorRole.OPERATOR: 1, OperatorRole.ADMIN: 2}
+INVITABLE_ROLES = (OperatorRole.VIEWER, OperatorRole.OPERATOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +53,8 @@ class InviteScope:
     def __post_init__(self) -> None:
         if not self.node and self.role is None:
             raise ValueError("an invite must grant a node enrollment or an operator role")
+        if self.role is not None and self.role not in INVITABLE_ROLES:
+            raise ValueError("the admin role cannot be granted by invite")
 
     def encode(self) -> str:
         parts = (["node"] if self.node else []) + ([self.role.value] if self.role else [])
@@ -94,6 +100,21 @@ class OperatorIdentity:
     operator_id: OperatorId
     role: OperatorRole
     label: str
+
+
+@dataclass(frozen=True, slots=True)
+class WebSession:
+    token: str
+    csrf_token: str
+    identity: OperatorIdentity
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorRecord:
+    identity: OperatorIdentity
+    created_at: datetime
+    expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

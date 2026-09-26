@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
 # Targets:
-#   coordinator  - gRPC coordinator, PostgreSQL/S3 clients, no PyTorch (~small)
+#   coordinator  - gRPC coordinator and web UI, PostgreSQL/S3 clients, no PyTorch (~small)
 #   worker-cpu   - worker with CPU-only PyTorch
 #   worker-cuda  - worker with CUDA 13 PyTorch; run with --gpus all
 #
@@ -77,7 +77,7 @@ ENTRYPOINT ["tableforge-entrypoint"]
 FROM runtime-base AS coordinator
 COPY --from=build-coordinator /opt/venv /opt/venv
 ENV TABLEFORGE_ROLE=coordinator
-EXPOSE 7443 9464
+EXPOSE 7443 8080 9464
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
     CMD ["python", "-c", "import socket,sys; socket.create_connection(('127.0.0.1', 7443), 3); sys.exit(0)"]
 CMD ["serve"]

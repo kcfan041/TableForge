@@ -9,9 +9,13 @@ from tableforge.domain.artifacts import Artifact, ArtifactDescriptor
 from tableforge.domain.auth import (
     Invite,
     InviteScope,
+    IssuedOperator,
     IssuedSession,
     OperatorIdentity,
+    OperatorRecord,
+    OperatorRole,
     Redemption,
+    WebSession,
 )
 from tableforge.domain.capabilities import NodeCapability
 from tableforge.domain.checkpoints import Checkpoint
@@ -109,9 +113,7 @@ class JobRepository(Protocol):
         worker_id: str = "",
     ) -> JobLease | None: ...
 
-    def renew(
-        self, job_id: JobId, token: str, now: datetime, duration: timedelta
-    ) -> JobLease: ...
+    def renew(self, job_id: JobId, token: str, now: datetime, duration: timedelta) -> JobLease: ...
 
     def complete(
         self,
@@ -199,9 +201,7 @@ class CheckpointRepository(Protocol):
 
 
 class AuthRepository(Protocol):
-    def create_enrollment_token(
-        self, now: datetime, ttl: timedelta, max_uses: int = 1
-    ) -> str: ...
+    def create_enrollment_token(self, now: datetime, ttl: timedelta, max_uses: int = 1) -> str: ...
 
     def enroll(
         self,
@@ -243,6 +243,22 @@ class AuthRepository(Protocol):
     def list_operators(self) -> tuple[OperatorIdentity, ...]: ...
 
     def revoke_operator(self, operator_id: OperatorId) -> bool: ...
+
+    def issue_operator(
+        self, role: OperatorRole, label: str, now: datetime, ttl: timedelta
+    ) -> IssuedOperator: ...
+
+    def list_operator_records(self) -> tuple[OperatorRecord, ...]: ...
+
+    def create_web_session(
+        self, operator_token: str, now: datetime, ttl: timedelta
+    ) -> WebSession: ...
+
+    def web_session(self, token: str, now: datetime) -> WebSession: ...
+
+    def end_web_session(self, token: str) -> None: ...
+
+    def list_worker_slots(self) -> tuple[tuple[WorkerId, NodeId, str, datetime], ...]: ...
 
     def start_worker(self, node_id: NodeId, label: str, now: datetime) -> WorkerId: ...
 

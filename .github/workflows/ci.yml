@@ -43,6 +43,28 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy
 
+  web:
+    name: Web UI build is committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: Committed build matches the source
+        run: |
+          git status --porcelain -- src/tableforge/web/static
+          test -z "$(git status --porcelain -- src/tableforge/web/static)" || {
+            echo "src/tableforge/web/static is out of date: run 'npm ci && npm run build' in web/ and commit";
+            git diff --stat -- src/tableforge/web/static; exit 1; }
+
   test-linux:
     name: Tests (Linux, PostgreSQL + S3)
     runs-on: ubuntu-latest

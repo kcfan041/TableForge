@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 
 from tableforge.composition import repositories_for
+from tableforge.domain.auth import OperatorRole
 from tableforge.domain.experiments import ExperimentStatus
 from tableforge.domain.ids import NodeId, new_experiment_id
 from tableforge.infrastructure.sql import SQLiteDatabase
@@ -31,6 +32,8 @@ def test_copy_preserves_all_metadata_and_continues_sequences(
     source.checkpoints.decide(checkpoint.checkpoint_id, True, "initial", NOW)
     token = source.auth.create_enrollment_token(NOW, timedelta(hours=1))
     session = source.auth.enroll(token, NodeId("node-a"), NOW, timedelta(days=1))
+    admin = source.auth.issue_operator(OperatorRole.ADMIN, "admin", NOW, timedelta(days=1))
+    web = source.auth.create_web_session(admin.token, NOW, timedelta(hours=1))
     source_events = source.events.list_events(limit=1000)
 
     target = repositories_for(database_factory())
@@ -44,6 +47,7 @@ def test_copy_preserves_all_metadata_and_continues_sequences(
     assert target.nodes.list_nodes() == source.nodes.list_nodes()
     assert target.checkpoints.list_checkpoints() == source.checkpoints.list_checkpoints()
     assert target.auth.authenticate(session.token, NOW) == NodeId("node-a")
+    assert target.auth.web_session(web.token, NOW).identity.role is OperatorRole.ADMIN
     assert target.events.list_events(limit=1000) == source_events
 
     retry = target.jobs.claim_next(NodeId("node-b"), NOW, timedelta(minutes=5))

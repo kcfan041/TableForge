@@ -52,6 +52,30 @@ uv run tableforge experiment status <experiment-id>
 
 資料預設存在目前目錄的 `.tableforge/`，可用 `--data-dir <路徑>` 指定，這個選項要放在子指令之前。
 
+## 網頁介面
+
+`coordinator serve` 同時提供網頁介面，預設開在 `http://127.0.0.1:8080`，只有這台電腦連得到：
+
+```
+uv run tableforge coordinator init
+uv run tableforge coordinator admin --label <你的名字>
+uv run tableforge coordinator serve
+```
+
+用瀏覽器開 `http://127.0.0.1:8080`，貼上 `coordinator admin` 輸出的 `credential`（`tfo_` 開頭）登入。這個管理者憑證只會顯示一次，30 天內有效。
+
+- 頁面：總覽、節點（CPU、記憶體、GPU、Worker）、實驗（建立、開始、停止、結果）、League 對戰矩陣熱圖、Checkpoint、事件、診斷，以及管理者專用的邀請與憑證頁。
+- 有新事件時頁面會自動更新，不需要重新整理。
+- 權限分三種：
+  - **檢視者**：只能查看。
+  - **操作者**：另外可以建立、開始、停止實驗。
+  - **管理者**：另外可以產生與撤銷邀請碼、撤銷節點與別人的憑證。只能在 Coordinator 電腦上用 `coordinator admin` 產生，不能透過邀請碼取得。
+- 其他人登入：產生帶有檢視者或操作者權限的邀請碼（網頁或 `coordinator invite create --role ...`），對方在登入畫面貼上。邀請碼只能用一次，登入後瀏覽器會保持登入 30 天。
+- 讓其他電腦的瀏覽器連線：在 tailnet 內用 HTTPS 分享，執行 `tailscale serve --bg --https=443 http://127.0.0.1:8080`，對方用 `https://<這台電腦的 Tailscale 名稱>` 開啟。不建議把 `--http-listen` 改成對外位址，那樣會沒有 HTTPS。
+- `--http-listen <host:port>` 或設定 `coordinator.http_listen` 可以改位址，設成空字串則關閉網頁介面。
+- 網頁的原始碼在 `web/`（React + TypeScript），建置結果已放在 `src/tableforge/web/static/`，使用者不需要安裝 Node.js。修改前端後在 `web/` 執行 `npm ci && npm run build`，並把建置結果一起 commit；CI 會檢查建置結果和原始碼一致。
+- 檢查網頁與 API 的整個流程：`uv run python scripts/web_e2e.py`，約 5 秒，會印出每一步的結果。
+
 ## NFSP
 
 多輪訓練（每輪：Actor 對打產生資料 → Learner 訓練 → candidate 與目前 active 對打 → 決定是否升級）：
@@ -193,7 +217,7 @@ uv run tableforge remote experiment create --preset hu-rule-smoke
 
 - 邀請碼只能使用一次（一台電腦），預設 24 小時內有效；包含叢集 ID 與憑證指紋，加入時會確認沒有連錯 Coordinator，不需要另外傳憑證檔。
 - `--node` 讓對方成為 Worker；`--role viewer` 可遠端查看；`--role operator` 另外可以建立、啟動、停止實驗。節點憑證與操作憑證分開存放，互相不能代用。
-- 產生邀請碼、撤銷節點與操作憑證只能在 Coordinator 電腦上執行。
+- 產生邀請碼、撤銷節點與操作憑證可以在 Coordinator 電腦上用指令執行，或由管理者在網頁的「邀請與憑證」頁操作。
 - 同一台電腦可以用同一個 `--data-dir` 開多個 Worker，各自有 Worker 編號。
 
 `coordinator serve` 會在背景自動推進實驗，多台 Worker 可平行執行同一輪的 Actor Job。Worker 不需要資料庫，也不會讀寫 Coordinator 的檔案。Worker 只需要能連到 Coordinator 與 storage；不在同一個網路時，建議使用 [Tailscale](https://tailscale.com/) 之類的私有網路，不要把 port 直接開放到網際網路。
@@ -213,7 +237,7 @@ docker compose up -d --build --wait
 
 - 預設啟動 2 個 CPU Worker，可在 `.env` 調整 `CPU_WORKERS`，或執行 `docker compose up -d --scale worker=4`。
 - Worker 啟動時會自動向 Coordinator 註冊，不需要手動操作。
-- 服務預設只對本機開放：Coordinator `127.0.0.1:7443`、metrics `127.0.0.1:9464`、storage `127.0.0.1:59000`。要讓其他電腦加入時，在 `.env` 設定 `BIND_ADDRESS`、`EXTRA_TLS_HOSTS`、`EXTRA_STORAGE_ENDPOINTS`，見 [docs/tester-guide.md](docs/tester-guide.md)。
+- 服務預設只對本機開放：Coordinator `127.0.0.1:7443`、網頁 `127.0.0.1:8080`、metrics `127.0.0.1:9464`、storage `127.0.0.1:59000`。網頁的管理者憑證用 `docker compose exec coordinator tableforge --data-dir /data coordinator admin` 取得。要讓其他電腦加入時，在 `.env` 設定 `BIND_ADDRESS`、`EXTRA_TLS_HOSTS`、`EXTRA_STORAGE_ENDPOINTS`，見 [docs/tester-guide.md](docs/tester-guide.md)。
 
 操作實驗時在 Coordinator 容器裡執行指令：
 

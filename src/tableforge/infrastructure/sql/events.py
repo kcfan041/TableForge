@@ -68,6 +68,18 @@ class SqlEventLog:
             ).fetchall()
         return tuple(_row(row) for row in rows)
 
+    def recent_events(self, limit: int = 100) -> tuple[DomainEvent, ...]:
+        with self._database.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM events ORDER BY sequence DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return tuple(_row(row) for row in rows)
+
+    def latest_sequence(self) -> int:
+        with self._database.read() as connection:
+            row = connection.execute("SELECT MAX(sequence) AS latest FROM events").fetchone()
+        return int(row["latest"] or 0)
+
     def mark_published(self, up_to: int, now: datetime) -> int:
         with self._database.transaction() as connection:
             cursor = connection.execute(

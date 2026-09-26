@@ -14,11 +14,13 @@ services:
     environment:
       TABLEFORGE_TLS_HOSTS: coordinator,localhost,127.0.0.1
       TABLEFORGE_ENROLLMENT_MAX_USES: ${ENROLLMENT_MAX_USES:-16}
+      TABLEFORGE_COORDINATOR__HTTP_LISTEN: 0.0.0.0:8080
     volumes:
       - coordinator-data:/data
       - shared:/shared
     ports:
       - "127.0.0.1:${COORDINATOR_HOST_PORT:-7443}:7443"
+      - "127.0.0.1:${WEB_HOST_PORT:-8080}:8080"
     mem_limit: 1g
 
   worker:
