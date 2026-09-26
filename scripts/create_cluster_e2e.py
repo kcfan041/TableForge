@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import local_ui_e2e  # noqa: E402
 from local_ui_e2e import Panel, expect, fail, free_port, ok, step  # noqa: E402
+from web_e2e import Browser as WebBrowser  # noqa: E402
 
 from tableforge.transport.control_client import RemoteControl  # noqa: E402
 from tableforge.transport.join import OperatorCredentials  # noqa: E402
@@ -201,6 +202,37 @@ def main() -> int:
             status_code, doctor = panel.call("POST", "/api/doctor", timeout=90)
             expect(doctor["ok"], f"doctor: {[c for c in doctor['checks'] if not c['ok']]}")
             ok("history kept, connection check passed")
+
+            step("the browser-only web page is off by default and can be turned on")
+            expect(not port_open("127.0.0.1:8080"), "web page is on by default")
+            status_code, status = panel.call(
+                "POST", "/api/cluster/service/web", {"enabled": True}, timeout=90
+            )
+            expect(status_code == 200, f"{status_code} {status}")
+            expect(status["hosting"]["web_listen"] == "127.0.0.1:8080", f"{status['hosting']}")
+            expect(port_open("127.0.0.1:8080"), "web page not listening")
+            browser = WebBrowser("http://127.0.0.1:8080")
+            code, mode = browser.call("GET", "/api/mode")
+            expect(code == 200 and mode == {"mode": "coordinator"}, f"{code} {mode}")
+            invite = RemoteControl(OperatorCredentials.load(layout.operators)).command(
+                "create_invite", {"node": False, "role": "viewer", "ttl_hours": 1}
+            )
+            code, session = browser.call("POST", "/api/session", {"credential": invite["invite"]})
+            expect(code == 200 and session["role"] == "viewer", f"{code} {session}")
+            code, experiments = browser.call("GET", "/api/experiments")
+            expect(code == 200 and len(experiments) == 1, f"{code} {experiments}")
+            status_code, status = panel.call("GET", "/api/status")
+            expect(status["joined"], "this machine's node lost after restart")
+            ok("viewer signed in with a browser and saw the experiment")
+
+            step("turn the browser page off again")
+            status_code, status = panel.call(
+                "POST", "/api/cluster/service/web", {"enabled": False}, timeout=90
+            )
+            expect(status_code == 200 and not status["hosting"]["web_listen"], f"{status}")
+            expect(not port_open("127.0.0.1:8080"), "web page still listening")
+            new_pid = status["hosting"]["pid"]
+            ok()
 
             step("stop the service and close the UI")
             panel.call("POST", "/api/cluster/service/stop", timeout=60)

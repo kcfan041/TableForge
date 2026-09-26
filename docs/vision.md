@@ -41,7 +41,7 @@
 
 原則：核心判定只在 Scheduler/Application 層，UI 只負責呈現；UI 不阻塞 CLI 版本的任何功能。
 
-**目前狀態**：Coordinator 內建網頁介面（W1）已完成，提供節點與硬體、實驗、Job、checkpoint、matchup matrix 熱圖、事件、診斷與邀請管理，並即時更新。尚未提供：workload 相容性說明（C5）、訓練曲線、使用者與專案（`architecture/07` S1–S5）、測試者端的本機網頁（W2）。
+**目前狀態**：單一入口 `tableforge ui` 已完成（W1、W2、U1–U3）：建立或加入叢集、提供運算，以及依權限顯示的叢集管理（節點與硬體、實驗、Job、checkpoint、matchup matrix 熱圖、事件、診斷與邀請管理）；同一套頁面也能由叢集服務提供給只用瀏覽器的人。尚未提供：workload 相容性說明（C5）、訓練曲線、使用者與專案（`architecture/07` S1–S5）。
 
 ### 1.4 對手建模
 

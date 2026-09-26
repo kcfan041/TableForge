@@ -1,22 +1,28 @@
-# TableForge 測試者指南（Windows + NVIDIA GPU）
+# TableForge 使用指南
 
-本指南分兩部分：
+TableForge 只有一個入口：
 
-- **測試者**：把自己的電腦加入叢集、提供 GPU、遠端建立並查看實驗。
-- **管理者**（架設 Coordinator 的人）：開放連線並產生邀請碼。
+```powershell
+uv run tableforge ui
+```
 
-兩台電腦不需要在同一個網路，透過 [Tailscale](https://tailscale.com/) 連線。
+它會在瀏覽器開啟 `http://127.0.0.1:8765`（只有這台電腦連得到）。第一次開啟時選：
+
+- **建立新的叢集**：你是第一個人。這台電腦負責協調工作，也可以同時提供運算。
+- **加入現有叢集**：別人已經建立叢集，並給你一個邀請碼（`tfinv1_` 開頭）。
+
+之後的所有操作（提供運算、邀請別人、建立實驗、看結果）都在同一個頁面完成。
+
+兩台電腦不需要在同一個網路，透過 [Tailscale](https://tailscale.com/) 連線。指令版本的做法見 [進階：指令與部署](advanced.md)。
 
 ---
 
-## 測試者
-
-### 1. 事前準備
+## 1. 安裝（每台電腦都一樣）
 
 需要：
 
-- Windows 10/11，64 位元
-- NVIDIA 顯示卡與最新驅動程式（支援 CUDA 13）；沒有 GPU 也可以加入，只是只能跑 CPU 工作
+- Windows 10/11（64 位元）、macOS 或 Linux
+- 要提供 GPU 運算時：NVIDIA 顯示卡與最新驅動程式（支援 CUDA 13）。沒有 GPU 也可以加入，只是只能跑 CPU 工作
 - 約 10 GB 硬碟空間（PyTorch 與 CUDA 函式庫）
 
 安裝以下軟體：
@@ -27,247 +33,148 @@
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
    裝完後重新開啟 PowerShell。
-3. **Tailscale**：<https://tailscale.com/download/windows>。登入後，接受管理者分享給你的機器，或加入管理者的 tailnet。在 PowerShell 執行 `tailscale status`，應該能看到管理者的電腦。
+3. **Tailscale**：<https://tailscale.com/download/windows>，安裝後登入。所有人需要在同一個 tailnet，或由建立者把自己的電腦分享給其他人。
 
-### 2. 取得 TableForge
-
-你會收到 GitHub 的 repository 邀請，請先接受。
+取得 TableForge（你會先收到 GitHub repository 的邀請，請接受）：
 
 ```powershell
 git clone https://github.com/kcfan041/TableForge.git
 cd TableForge
-uv sync --extra learning --extra gpu --extra s3
+uv sync --extra learning --extra gpu
 ```
 
-第一次會下載約 3 GB 的套件，需要一些時間。
+第一次會下載約 3 GB 的套件，需要一些時間。沒有 NVIDIA GPU 的電腦可以省略 `--extra gpu`。
 
-確認硬體偵測正確：
-
-```powershell
-uv run tableforge doctor
-```
-
-應該看到你的 GPU，例如 `cuda:0 NVIDIA GeForce RTX ...`，以及 `hu-nfsp-learner-gpu  SUPPORTED`。
-
-### 本機控制台（建議）
-
-接下來的第 3 到第 5 步（加入、檢查連線、啟動 Worker）都可以在瀏覽器上完成，不必輸入指令：
+## 2. 建立叢集（第一個人）
 
 ```powershell
 uv run tableforge ui
 ```
 
-會自動開啟 `http://127.0.0.1:8765`（只有這台電腦連得到）：
+1. 選「建立新的叢集」。
+2. 選誰可以連進來：
+   - **Tailscale 上的其他人（建議）**：TableForge 會自動偵測這台電腦的 Tailscale 位址。沒有偵測到時，先確認 Tailscale 已登入，再重新整理頁面。
+   - **只有這台電腦**：自己試用。之後要讓別人加入需要重新建立。
+3. 按「建立」。TableForge 會自動產生憑證、把你設為管理者、在背景啟動叢集服務，並讓這台電腦也能提供運算。
+
+完成後會進入「這台電腦」頁：
+
+- **叢集服務**：顯示是否執行中。關掉 TableForge 頁面或 PowerShell 視窗後，叢集服務仍會在背景執行，其他人的 Worker 不受影響；下次開啟 `tableforge ui` 時會自動接上，如果它已停止（例如重開機）會自動重新啟動。
+- **Worker**：按「啟動 Worker」讓這台電腦也提供運算。
+- 側邊欄的其他頁面是叢集管理：總覽、節點、實驗、Checkpoint、事件、邀請與憑證、診斷。
+
+Windows 防火牆若詢問，允許 TableForge（Python）在 Tailscale 網路上接受連線（TCP 7443）。
+
+## 3. 邀請別人
+
+在「邀請與憑證」頁：
+
+1. 勾選「讓對方的電腦提供運算（Worker）」—— 對方要提供 GPU 或 CPU 時。
+2. 選「叢集管理權限」：
+   - **不給**：只提供運算。
+   - **檢視者**：可以查看節點、實驗與結果。
+   - **操作者**：另外可以建立、開始、停止實驗。
+   - **管理者**：和你一樣可以管理整個叢集。需要勾選確認，最多 1 小時有效，使用時會記錄在「事件」頁。
+3. 填備註（例如對方名字），按「產生」，把邀請碼私下傳給對方。
+
+邀請碼只能使用一次，預設 24 小時內有效。一個邀請碼可以同時給「提供運算」和管理權限。連線位址會自動帶入，通常不需要修改。
+
+## 4. 加入叢集（其他人）
+
+```powershell
+uv run tableforge ui
+```
 
 1. 選「加入現有叢集」，貼上邀請碼，按「加入」。
-2. 按「開始檢查」確認連線，全部是「成功」即可。
+2. 在「這台電腦」頁按「開始檢查」，確認連線的每一項都是「成功」。
 3. 按「啟動 Worker」。下方會顯示 Worker 的狀態、完成的工作數量與紀錄；按「停止」會讓 Worker 做完目前的步驟後結束。
 
-這個 PowerShell 視窗要保持開著；按 `Ctrl+C` 關閉控制台時，由它啟動的 Worker 也會一起停止。沒有 GPU 或不想用 GPU 時，加上 `--no-gpu`。之後每次要提供 GPU，只要再執行同一行指令、按「啟動 Worker」。
+邀請碼帶有管理權限時，側邊欄會多出叢集管理的頁面（依權限顯示）。
 
-下面是指令版本的做法，兩者效果相同。
+注意：
 
-### 3. 用邀請碼加入
+- PowerShell 視窗要保持開著；按 `Ctrl+C` 關閉 TableForge 時，由它啟動的 Worker 也會一起停止。之後每次要提供運算，再執行同一行指令、按「啟動 Worker」即可，不需要重新加入。
+- 不想用 GPU 時，改用 `uv run tableforge ui --no-gpu`。
+- 同一台電腦可以啟動多個 Worker。目前還不會自動把 Worker 分配到不同 GPU，只有一張 GPU 時建議只開一個。
 
-管理者會傳給你一串 `tfinv1_` 開頭的邀請碼。它**只能使用一次**，預設 24 小時內有效，請不要轉給別人。
+## 5. 建立與查看實驗
 
-```powershell
-uv run tableforge --data-dir .tableforge-node join tfinv1_...
-```
-
-成功時會顯示 `cluster_id`、`node_id`、使用的 storage 位址，以及下一步要執行的指令。
-
-加入時會自動完成：
-
-- 確認連到的是邀請碼指定的 Coordinator（比對憑證指紋與叢集 ID）；不符合就停止，不會送出任何資料。
-- 取得這台電腦的節點憑證，存在 `.tableforge-node\coordinator.json`。
-- 如果邀請碼包含操作權限，取得遠端操作憑證，存在 `%APPDATA%\TableForge\clusters\<cluster_id>\operator.json`。
-- 逐一測試管理者提供的 storage 位址，選用第一個連得到的。
-
-加入完成後，邀請碼就失效了，之後都使用上面兩個憑證檔。**請不要把這兩個檔案傳給別人。**
-
-### 4. 檢查連線
-
-```powershell
-uv run tableforge --data-dir .tableforge-node doctor --coordinator
-```
-
-會依序檢查 dns、tcp、tls、cluster、session、storage，全部顯示 `OK` 就代表連線正常。任何一項失敗時會停在那一項，並提示可能的原因（見下方「常見問題」）。
-
-### 5. 提供 GPU（啟動 Worker）
-
-```powershell
-uv run tableforge --data-dir .tableforge-node worker start --remote
-```
-
-這個視窗要保持開著，按 `Ctrl+C` 停止。Worker 會自動領取工作；GPU 訓練工作只會派給有 GPU 的電腦。
-
-同一台電腦可以用同一個 `--data-dir` 開多個 Worker（例如開兩個視窗），每個 Worker 會有自己的編號。目前還不會自動把 Worker 綁定到不同 GPU，只有一張 GPU 時建議只開一個 GPU Worker。
-
-### 6. 遠端建立與查看實驗
-
-**網頁（建議）**：管理者開放網頁後，會給你一個 `https://….ts.net` 網址。用瀏覽器開啟，在登入畫面貼上邀請碼即可。
-
-- 網頁登入要用**只含檢視者或操作者權限**的邀請碼。含 Worker 權限的邀請碼貼到網頁會被拒絕（不會用掉），請改用它執行 `join`，並向管理者索取另一個網頁用的邀請碼。
-- 登入後瀏覽器會保持登入 30 天。可以看到節點、實驗、結果、League 矩陣與事件，有新進度時頁面會自動更新。
-- 有操作者權限時，可以在「實驗」頁選擇 preset，按「建立並開始」。
-
-**指令**：如果邀請碼包含 `operator` 權限：
-
-```powershell
-uv run tableforge remote whoami
-uv run tableforge remote presets
-uv run tableforge remote experiment create --preset hu-nfsp-gpu-iterative
-uv run tableforge remote experiment start <experiment-id>
-uv run tableforge remote experiment status <experiment-id>
-uv run tableforge remote experiment list
-uv run tableforge remote experiment stop <experiment-id>
-uv run tableforge remote checkpoints
-uv run tableforge remote matrix <experiment-id>
-uv run tableforge remote nodes
-```
-
-`remote` 指令不需要 `--data-dir`，它使用 `%APPDATA%` 裡的操作憑證。只有 `viewer` 權限時只能查看，建立、啟動、停止會顯示 `ROLE_REQUIRED`。
+有操作者（或管理者）權限時，在「實驗」頁選擇 preset，按「建立並開始」。實驗明細會顯示 Job 狀態、模擬結果（各座位輸贏）、評估結果，League 實驗還有對戰矩陣熱圖。頁面會自動更新。
 
 推薦的 preset：
 
 | preset | 說明 | 大約時間 |
 |---|---|---|
 | `hu-rule-smoke` | Rule Bot 對戰 1,000 手，確認流程 | 數秒 |
+| `6max-rule-smoke` | 6 人桌 Rule Bot 對戰 1,200 手 | 數秒 |
 | `hu-nfsp-gpu-iterative` | NFSP 3 輪，Learner 用 GPU | 約 6 分鐘 |
-| `hu-nfsp-cpu-league` | League 4 輪，最後產生 matchup matrix | 約 1 分鐘 |
+| `hu-nfsp-cpu-league` | League 4 輪，最後產生對戰矩陣 | 約 1 分鐘 |
 
 目前模型仍在改進中，小型 preset 只能確認流程正常，不能用來判斷模型強弱。
 
-### 7. 更新
+## 6. 給只用瀏覽器的人（選用）
+
+一般不需要。只有對方不想安裝 TableForge、只想用瀏覽器看結果時：
+
+1. 建立者在「這台電腦」→「叢集服務」→「進階：給只用瀏覽器的人」按「開啟瀏覽器網頁」。
+2. 依畫面上的指令執行 `tailscale serve`，以 HTTPS 分享給 tailnet 上的人。
+3. 對方開啟 `https://<建立者電腦的 Tailscale 名稱>`，貼上一個**只含檢視者或操作者權限**（不含 Worker）的邀請碼登入。
+
+## 7. 更新
 
 ```powershell
 git pull
-uv sync --extra learning --extra gpu --extra s3
+uv sync --extra learning --extra gpu
 ```
 
-更新後重新啟動 Worker 即可，不需要重新加入。
+更新後重新執行 `uv run tableforge ui`，不需要重新加入。建立者更新時，先在「叢集服務」按「停止叢集服務」，更新後再開啟 TableForge，服務會自動用新版本重新啟動。
 
-更新前可以先到 GitHub 的 Actions 頁面，確認最新一次的 CI 是綠勾。你和管理者的版本不相容時，Worker 和 `doctor --coordinator` 會直接提示需要更新哪一邊；只是版本不同但相容時，只會顯示警告。
+你和建立者的版本不相容時，連線檢查與 Worker 會直接提示需要更新哪一邊；只是版本不同但相容時，只會顯示警告。
 
-### 8. Worker 會自己處理的事
+## 8. Worker 會自己處理的事
 
-- **斷線**：管理者的電腦重開機、Coordinator 重啟、Tailscale 暫時中斷時，Worker 不會結束，會每隔 1、2、4……最多 60 秒重試，恢復後自動繼續。log 只會各出現一次 `coordinator_unreachable` 和 `coordinator_reconnected`。Worker 也可以在 Coordinator 還沒啟動前先開，它會等到連得上為止。
-- **斷線期間手上的工作**：如果斷線太久，這個工作會被交給別的 Worker，恢復後 log 會出現 `lease_lost`，Worker 直接繼續領下一個，不影響結果。
-- **憑證續期**：節點憑證預設 7 天有效，剩下不到 1/4 時 Worker 會自動換新（log 出現 `session_renewed`），不需要重新加入。同一台電腦開多個 Worker 時只會換一次。
-- **會停止的情況**：節點被管理者撤銷、或版本不相容時，Worker 會停止並說明要怎麼做，不會一直重試。
+- **斷線**：建立者的電腦重開機、叢集服務重啟、Tailscale 暫時中斷時，Worker 不會結束，會每隔 1、2、4……最多 60 秒重試，恢復後自動繼續。
+- **斷線期間手上的工作**：斷線太久時這個工作會交給別的 Worker，恢復後 Worker 直接繼續領下一個，不影響結果。
+- **憑證續期**：這台電腦的憑證預設 7 天有效，剩下不到 1/4 時 Worker 會自動換新，不需要重新加入。
+- **會停止的情況**：這台電腦被管理者撤銷、或版本不相容時，Worker 會停止並說明要怎麼做，不會一直重試。
 
-### 常見問題
+## 常見問題
 
 | 狀況 | 原因與處理 |
 |---|---|
-| `join failed: cannot reach the coordinator` | Tailscale 沒有連線，或位址錯誤。執行 `tailscale status` 確認看得到管理者的電腦；請管理者確認 Coordinator 正在執行 |
-| `certificate does not match the invite` | 管理者重新產生了憑證，或連到了別台電腦。請管理者產生新的邀請碼 |
-| `invite was already used` / `invite expired` | 邀請碼只能用一次、有有效期限。請管理者產生新的邀請碼 |
-| `already belongs to a cluster` | 這個 `--data-dir` 已經加入過叢集。換一個新的目錄名稱，或刪除舊目錄後重新加入 |
-| `none of the coordinator's storage addresses are reachable` | 管理者提供的 storage 位址你連不到。把錯誤訊息傳給管理者 |
-| doctor 的 `session` 失敗，或 Worker 顯示 `worker stopped: ... new invite` | 節點憑證被撤銷，或 Worker 超過 7 天沒有執行、來不及自動續期。請管理者產生新的邀請碼，用新的 `--data-dir` 重新加入 |
-| doctor 的 `version` 失敗 | 你和 Coordinator 的版本不相容。依提示更新你這邊（`git pull` 後 `uv sync`），或請管理者更新 Coordinator |
-| doctor 的 `storage` 失敗 | 可以連 Coordinator，但連不到 storage。把 doctor 的完整輸出傳給管理者 |
-| `remote` 顯示 `UNAUTHENTICATED` | 操作憑證被撤銷或過期（預設 30 天）。請管理者產生新的邀請碼 |
-| `remote` 顯示 `ROLE_REQUIRED` | 你的權限是 `viewer`，只能查看 |
-| 本機控制台顯示「無法讀取狀態」或按鈕沒反應 | 控制台已經關閉（PowerShell 視窗被關掉），重新執行 `tableforge ui` 後重新整理頁面 |
-| 本機控制台 Worker 顯示「異常結束」 | 看「最後的問題」與下方紀錄；通常和上面 doctor 的項目對應 |
+| 建立叢集時沒有偵測到 Tailscale | Tailscale 沒有安裝、沒有登入或沒有連線。確認系統匣的 Tailscale 圖示是已連線，再重新整理頁面 |
+| 加入時顯示 `cannot reach the coordinator` | Tailscale 沒有連線、建立者的叢集服務沒有執行，或建立者的電腦沒有分享給你。執行 `tailscale status` 確認看得到建立者的電腦，並請建立者確認「叢集服務」是執行中 |
+| `certificate does not match the invite` | 建立者重新建立了叢集，或連到了別台電腦。請建立者產生新的邀請碼 |
+| `invite was already used` / `invite expired` | 邀請碼只能用一次、有有效期限。請建立者產生新的邀請碼 |
+| 連線檢查的 `session` 失敗，或 Worker 顯示需要新的邀請碼 | 這台電腦被撤銷，或超過 7 天沒有啟動 Worker、來不及自動續期。請建立者產生新的邀請碼，並用新的資料位置重新加入（`uv run tableforge ui --home <新的資料夾>`） |
+| 連線檢查的 `version` 失敗 | 版本不相容。依提示更新你這邊，或請建立者更新 |
+| 連線檢查的 `storage` 失敗 | 連得到叢集，但無法傳送資料。把連線檢查的畫面截圖給建立者 |
+| 叢集管理頁面顯示權限不足 | 你的權限只能查看，或已被撤銷 |
+| 頁面顯示「無法讀取狀態」或按鈕沒反應 | TableForge 已經關閉（PowerShell 視窗被關掉）。重新執行 `uv run tableforge ui` 後重新整理頁面 |
+| Worker 顯示「異常結束」 | 看「最後的問題」與下方紀錄；通常和連線檢查的項目對應 |
+| 叢集服務顯示「已停止」且無法啟動 | 畫面上的錯誤會附上服務紀錄最後幾行；常見原因是 7443 port 被其他程式佔用 |
 | GPU 工作沒有被領取 | 執行 `uv run tableforge doctor`，確認 `hu-nfsp-learner-gpu` 為 `SUPPORTED`，並確認沒有用 `--no-gpu` 啟動 |
 
-### 回報問題時請附上
+## 回報問題時請附上
 
-1. `uv run tableforge --data-dir .tableforge-node doctor --coordinator --json` 的輸出
+1. TableForge 頁面的截圖（「這台電腦」頁，包含連線檢查結果與 Worker 紀錄）
 2. `uv run tableforge doctor --json` 的輸出
-3. Worker 視窗中出錯前後的幾行 log（使用本機控制台時，截圖控制台畫面即可）
-4. `git rev-parse --short HEAD` 的結果（你使用的版本）
+3. `git rev-parse --short HEAD` 的結果（你使用的版本）
 
-請不要附上 `coordinator.json`、`operator.json` 或邀請碼。
+請不要附上邀請碼，也不要傳送資料夾裡的 `coordinator.json`、`operator.json`、`admin` 相關檔案。
 
----
+## 資料放在哪裡
 
-## 管理者
+預設放在每個使用者的應用程式資料夾，不在 TableForge 的原始碼目錄裡：
 
-以下假設 Coordinator 以 `docker compose` 執行（見 README「Docker」）。
+- Windows：`%LOCALAPPDATA%\TableForge`
+- macOS：`~/Library/Application Support/TableForge`
+- Linux：`~/.local/share/tableforge`
 
-### 1. 開放給 Tailscale
+可用 `uv run tableforge ui --home <資料夾>` 或環境變數 `TABLEFORGE_HOME` 改到其他位置。同一台電腦要加入第二個叢集時，用不同的 `--home`。
 
-在 Coordinator 那台電腦上安裝並登入 Tailscale，查出它的 Tailscale IP：
+## 已知限制
 
-```powershell
-tailscale ip -4
-```
-
-在 `.env` 加入（`100.x.y.z` 換成上面的 IP）：
-
-```text
-BIND_ADDRESS=100.x.y.z
-EXTRA_TLS_HOSTS=100.x.y.z
-EXTRA_STORAGE_ENDPOINTS=tailnet=http://100.x.y.z:59000
-```
-
-然後重新啟動：
-
-```powershell
-docker compose up -d --wait
-```
-
-說明：
-
-- `BIND_ADDRESS`：Coordinator 與 storage 只在這個 IP 上接受連線。不要用 `0.0.0.0`，那會開放給所有網路。
-- `EXTRA_TLS_HOSTS`：憑證加入這個 IP。**修改後憑證會重新產生**，之前加入的節點必須用新的邀請碼重新加入。
-- `EXTRA_STORAGE_ENDPOINTS`：提供給遠端節點的 storage 位址。
-
-Windows 防火牆若擋住連線，允許 TCP 7443 與 59000 從 Tailscale 網路介面連入。
-
-分享機器：在 Tailscale 後台把這台電腦分享給測試者，或邀請他加入 tailnet。建議用 ACL 限制測試者只能連 7443、59000 與 443（網頁）。
-
-**網頁介面**：網頁只開在這台電腦的 `127.0.0.1:8080`，透過 Tailscale 以 HTTPS 分享：
-
-```powershell
-tailscale serve --bg --https=443 http://127.0.0.1:8080
-```
-
-tailnet 內的人就可以用 `https://<這台電腦的 Tailscale 名稱>` 開啟（第一次使用時，Tailscale 後台可能要求啟用 HTTPS 憑證）。取得自己的管理者憑證：
-
-```powershell
-docker compose exec coordinator tableforge --data-dir /data coordinator admin --label <你的名字>
-```
-
-用輸出的 `credential` 登入網頁。管理者可以在「邀請與憑證」頁產生邀請碼、撤銷邀請碼與別人的憑證，在「節點」頁撤銷節點。
-
-### 2. 產生邀請碼
-
-```powershell
-docker compose exec coordinator tableforge --data-dir /data coordinator invite create --address 100.x.y.z:7443 --node --role operator --label tester
-```
-
-- `--node`：讓對方的電腦成為 Worker 節點
-- `--role viewer` 或 `--role operator`：讓對方可以遠端查看，或同時可以建立、啟動、停止實驗（網頁與 `remote` 指令都適用）
-- 邀請碼只能用一次：測試者要同時 `join` 當 Worker 又要登入網頁，請產生兩個邀請碼，一個 `--node`、一個只有 `--role`
-- 兩者可以只選一個，也可以都選
-- `--ttl-hours`：有效時間，預設 24 小時
-- 每個邀請碼只能使用一次，一次代表一台電腦
-
-輸出中的 `invite` 欄位就是要傳給測試者的邀請碼，請用私訊傳送。
-
-如果 `--address` 不在憑證內，指令會直接拒絕，並提示如何重新產生憑證。
-
-### 3. 管理
-
-```powershell
-docker compose exec coordinator tableforge --data-dir /data coordinator invite list
-docker compose exec coordinator tableforge --data-dir /data coordinator invite revoke <invite-id>
-docker compose exec coordinator tableforge --data-dir /data coordinator operator list
-docker compose exec coordinator tableforge --data-dir /data coordinator operator revoke <operator-id>
-docker compose exec coordinator tableforge --data-dir /data node status
-docker compose exec coordinator tableforge --data-dir /data node revoke <node-id>
-```
-
-撤銷節點後，它的 Worker 會立即無法領取工作；撤銷操作憑證後，`remote` 指令與網頁登入會立即失效。以上操作也可以由管理者在網頁上完成；管理者憑證本身只能在 Coordinator 電腦上產生，不能透過邀請碼取得。
-
-### 已知限制
-
-- 目前所有持有 `operator` 權限的人權限相同，可以停止彼此的實驗；使用者、專案與隔離屬於完整版（`docs/architecture/07-multi-party-and-trust.md` S1–S5）。
+- 目前所有持有操作者權限的人權限相同，可以停止彼此的實驗；使用者、專案與隔離屬於完整版（`docs/architecture/07-multi-party-and-trust.md` S1–S5）。
 - 同一台電腦的多個 Worker 還不會自動分配到不同的 GPU。
-- 透過 Tailscale 的兩台實體電腦驗收尚未完成；目前以本機的區域網路 IP 模擬遠端電腦驗證。
+- 透過 Tailscale 的兩台實體電腦驗收尚未完成；目前在一台電腦上以多個 TableForge 驗證建立、加入與管理流程。

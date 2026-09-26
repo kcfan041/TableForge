@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, type Session } from "../api";
 import { Shell } from "../App";
-import { Card, StatusBadge } from "../components";
+import { Card, CopyButton, StatusBadge } from "../components";
 import { useI18n, type Locale, type MessageKey } from "../i18n";
 import { local, type DoctorReport, type LocalStatus, type LogLine, type WorkerView } from "./api";
 import { Setup } from "./Setup";
@@ -90,6 +90,43 @@ function ClusterService({ status, refresh }: { status: LocalStatus; refresh: () 
         )}
       </div>
       {error ? <pre className="error small config">{error}</pre> : null}
+      <details className="advanced" open={Boolean(hosting.web_listen)}>
+        <summary className="small muted">{t("service.advanced")}</summary>
+        <div className="stack">
+          <p className="small">{t("service.webHelp")}</p>
+          {hosting.web_listen ? (
+            <>
+              <p className="small">
+                <StatusBadge status="service_running" /> {t("service.webOn", { address: `http://${hosting.web_listen}` })}
+              </p>
+              <p className="small muted">{t("service.webShare")}</p>
+              <div className="code-box">
+                <code className="wrap">tailscale serve --bg --https=443 http://{hosting.web_listen}</code>
+                <CopyButton text={`tailscale serve --bg --https=443 http://${hosting.web_listen}`} />
+              </div>
+              <div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void act(() => local.setWeb(false), t("service.webOffConfirm"))}
+                >
+                  {t("service.webDisable")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div>
+              <button
+                type="button"
+                disabled={busy || !hosting.running}
+                onClick={() => void act(() => local.setWeb(true), t("service.webOnConfirm"))}
+              >
+                {t("service.webEnable")}
+              </button>
+            </div>
+          )}
+        </div>
+      </details>
     </Card>
   );
 }

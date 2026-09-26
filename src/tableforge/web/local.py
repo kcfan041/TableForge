@@ -240,6 +240,10 @@ class CreateClusterRequest(BaseModel):
     network: str = Field(pattern="^(tailscale|local)$")
 
 
+class WebToggleRequest(BaseModel):
+    enabled: bool
+
+
 def create_local_app(context: LocalUiContext) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -402,6 +406,14 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
     @app.post("/api/cluster/service/stop")
     def stop_service() -> dict[str, object]:
         supervisor().stop()
+        return status()
+
+    @app.post("/api/cluster/service/web")
+    def service_web(body: WebToggleRequest) -> dict[str, object]:
+        try:
+            supervisor().set_web(body.enabled)
+        except ClusterSetupError as error:
+            raise HTTPException(400, str(error)) from error
         return status()
 
     @app.post("/api/join")

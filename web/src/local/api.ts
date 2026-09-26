@@ -48,6 +48,7 @@ export interface HostingStatus {
   pid?: number | null;
   started_at?: string;
   log_file?: string;
+  web_listen?: string;
 }
 
 export interface LogLine {
@@ -89,6 +90,7 @@ export const local = {
     }),
   startService: () => call<LocalStatus>("POST", "/api/cluster/service/start"),
   stopService: () => call<LocalStatus>("POST", "/api/cluster/service/stop"),
+  setWeb: (enabled: boolean) => call<LocalStatus>("POST", "/api/cluster/service/web", { enabled }),
   join: (invite: string) =>
     call<{ report: Record<string, unknown>; status: LocalStatus }>("POST", "/api/join", { invite }),
   doctor: () => call<DoctorReport>("POST", "/api/doctor"),

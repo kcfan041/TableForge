@@ -32,6 +32,7 @@ from tableforge.settings import Settings
 from tableforge.transport.tls import generate_self_signed
 
 GRPC_PORT = 7443
+WEB_LISTEN = "127.0.0.1:8080"
 SERVICE_FILE = "service.json"
 # `coordinator serve` exits cleanly when this file appears in its data directory; this
 # works for detached background processes, which cannot receive console signals.
@@ -195,7 +196,29 @@ class CoordinatorSupervisor:
             "pid": config.pid if alive else None,
             "started_at": config.started_at,
             "log_file": str(self.layout.log_file),
+            "web_listen": config.web_listen,
         }
+
+    def set_web(self, enabled: bool, wait_seconds: float = 30.0) -> ServiceConfig:
+        """Turn the browser-only web page on or off; restarts the service to apply it.
+
+        The page only listens on this machine (127.0.0.1); sharing it with others goes
+        through ``tailscale serve`` so it is always HTTPS.
+        """
+        config = self.config()
+        if config is None:
+            raise ClusterSetupError("this machine does not host a cluster")
+        web_listen = WEB_LISTEN if enabled else ""
+        if web_listen == config.web_listen and process_alive(config.pid):
+            return config
+        if enabled and port_open(WEB_LISTEN):
+            raise ClusterSetupError(
+                f"another program already uses {WEB_LISTEN}; close it and try again"
+            )
+        self.stop()
+        updated = ServiceConfig(listen=config.listen, address=config.address, web_listen=web_listen)
+        updated.save(self.layout.service_file)
+        return self.start(updated, wait_seconds)
 
     def ensure_running(self, wait_seconds: float = 30.0) -> ServiceConfig:
         config = self.config()
