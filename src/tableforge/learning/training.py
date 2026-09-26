@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from tableforge.agents.protocol import PokerAgent
 from tableforge.learning.actions import ActionTranslator
 from tableforge.learning.buffers import PolicySample, Transition
-from tableforge.learning.encoding import encode
 from tableforge.learning.nfsp import NfspAgent
 from tableforge.poker.betting import Action, LegalActions, Seat
 from tableforge.poker.environment import HeadsUpHand
@@ -34,7 +33,7 @@ class _RecordingSeat:
         self.pending: _Pending | None = None
 
     def act(self, observation: Observation, legal: LegalActions) -> Action:
-        state = tuple(encode(observation, self.agent.config.big_blind))
+        state = tuple(self.agent.encoder.encode(observation, self.agent.config.big_blind))
         mask = self.translator.legal_mask(legal)
         if self.pending is not None:
             self.sink(

@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：定案錦標賽／PKO 路線（T1–T3）與 P1 的新順序，設計見 [architecture/08-tournament.md](architecture/08-tournament.md)；尚未動工。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：P1-a v2 輸入完成（牌力特徵、2–6 人通用、錦標賽欄位）。錦標賽路線見 [architecture/08-tournament.md](architecture/08-tournament.md)。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -39,12 +39,13 @@
 | U2 | `tableforge ui` 內的叢集管理頁面（依權限顯示）、`ControlService` 補齊、admin 邀請碼 | 已完成 | `cf470a7` |
 | U3 | 瀏覽器網頁（給只用瀏覽器的人）預設關閉、由建立者在 UI 開啟；文件改成只介紹 `tableforge ui` | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
-| P1 | 模型強度驗證 | 未開始（已排定） | 分成 P1-a（v2 輸入）與 P1-b（HU cash 長時間訓練），見下方「P1 模型強度」 |
+| P1-a | v2 輸入：牌力特徵、2–6 人通用、錦標賽欄位 | 已完成 | 本階段；R² 0.48 → 0.87–0.89 |
+| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 未開始 | T1 之後，與 T2 平行 |
 | T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 未開始 | P1-a 之後；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
 | T2 | PKO bounty 規則與 bounty 指標 | 未開始 | T1 之後 |
 | T3 | 錦標賽上的學習 | 未開始 | T2 之後，開始前再討論演算法與獎勵 |
 
-目前測試：448 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：471 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -433,6 +434,35 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 
 在最單純的監督式設定下，網路都難以從 one-hot 牌面學到牌型組合；RL 的訊號（每手一個有雜訊的輸贏）弱得多，因此只加長訓練或換更強的 GPU 幫助有限。
 
+### P1-a 結果（已完成）
+- **實作**：
+  - `poker/strength.py`：只用自己的手牌與公牌計算的牌力特徵（Chen 分數、手牌大小、同花、對子；成牌類型與最大牌、頂對、超對、同花聽牌、兩頭與卡順聽牌、公牌成對／三條／同花／可能成順）。
+  - `learning/encoding_v2.py`：406 維，同時接受兩人與 2–6 人的 Observation；對手固定 5 個槽位；籌碼、彩池、下注以 BB 計；錦標賽欄位由 `TournamentContext` 提供，cash 時為 0。每個欄位有名稱（`feature_names()`），方便除錯。
+  - `learning/encoders.py`：依名稱選擇輸入格式。`NfspConfig.observation_schema` 預設仍是 v1；checkpoint、experience shard 與 init payload 都記錄格式，舊 checkpoint（沒有這個欄位）照常以 v1 載入；learner 會拒絕與模型格式不同的 shard。
+  - 新增 preset `hu-nfsp-cpu-iterative-v2`；v1 的 init payload 位元組完全不變（不影響既有實驗的冪等鍵）。
+- **監督式測試**（`scripts/encoding_r2.py`，2 萬筆、30 epochs、每筆 100 次 Monte Carlo，約 30 秒資料加 1 分鐘訓練）：
+
+  | seed | v1 R² | v2 R² |
+  |---|---|---|
+  | 7 | 0.476 | **0.887** |
+  | 11 | 0.493 | **0.863** |
+
+  比先前「v1 加 30 個特徵」的 0.78 更高。
+- **NFSP 冒煙測試**（`scripts/nfsp_compare.py`，預設設定、自我對打 2 萬手、每個 Bot 2,000 手評估、2 個 seed）：
+
+  | 輸入／seed | random | call | tight | aggro |
+  |---|---|---|---|---|
+  | v1 / 1 | **+258** | **−165** | **−358** | +46 |
+  | v1 / 2 | **+349** | +54 | **−372** | −1 |
+  | v2 / 1 | **+353** | +43 | **−185** | **+264** |
+  | v2 / 2 | **+242** | **−274** | **−300** | **−225** |
+
+  粗體表示 95% 信賴區間不含 0。v2 能正常訓練；seed 1 對 tight 與 aggro 明顯較好，但 seed 2 沒有，兩個 seed 差距很大。**光換輸入不足以打贏 tight**，訓練設定本身（每手訓練次數、學習率、目標網路更新、buffer）仍是瓶頸，留給 P1-b。
+- **速度**（`scripts/nfsp_speed.py`，hidden 128）：CPU 自我對打約 500 手/秒、benchmark 約 3,800 手/秒；GPU 反而較慢（約 220 與 2,350 手/秒），因為每個決策只算一筆，傳資料的成本大於計算。一次完整 benchmark（4 個 Bot 各 4,000 手）在 CPU 上約 5 秒。自我對打 2 萬手約 80 秒（v1）至 110 秒（v2）。
+- 驗收：
+  - 單元與性質測試 22 個：Chen 分數、成牌與聽牌判斷（含河牌不算聽牌、公牌同花不算自己的同花聽牌）、欄位數與名稱一致、兩人引擎與 6 人引擎在兩人時編碼完全相同、6 人時對手槽位依座位順序、金額以 BB 計（盲注放大 10 倍編碼不變）、錦標賽欄位（cash 為 0）、所有欄位都在小範圍內，以及 150 組隨機牌局的資訊隔離測試（換掉別人的手牌與未發的公牌，編碼不變）。
+  - NFSP v2 測試 6 個：v1 仍是預設、v2 訓練與 checkpoint 來回一致、舊 checkpoint 照常載入、checkpoint 格式與設定不一致會被拒絕、shard 記錄並檢查格式、v1 init payload 位元組不變。
+
 ### 已決定
 - 新增輸入格式 `poker-hunlhe-vector-v2`：
   - 牌力特徵：翻牌前加入兩張手牌大小、同花、對子、手牌類別；翻牌後加入目前成牌類型與最大牌、同花聽牌、順子聽牌、公牌結構（公牌成對、三張以上同花）。
@@ -444,13 +474,12 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 - v1 保留；checkpoint 已記錄輸入格式版本，舊模型照常載入。新 preset 使用 v2。
 
 ### 尚未決定
-- 是否加入 Monte Carlo equity 特徵：效果可能最好，但會拖慢對局，需要先量速度。建議先只加牌型特徵。
+- 是否加入 Monte Carlo equity 特徵：牌型特徵已讓 R² 到 0.86–0.89，暫時不需要；P1-b 若仍卡在牌力判斷再考慮。
 - 加入特徵並調整參數後仍無法穩定贏 tight 時：先檢查 NFSP 實作與動作抽象（目前加注只有半池、滿池、all-in），或提早引入其他演算法（例如 Deep CFR）。
 
 ### 下一步
-1. **P1-a**：實作 `poker-hunlhe-vector-v2` 與對應測試，重跑上面的監督式測試確認 R² 提升；兩人 NFSP 改用 v2 訓練。
-2. **T1**：錦標賽環境與 tournament benchmark（見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 4 節）。
-3. **P1-b**（與 T2 平行）：調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），在 5070 Ti 上長時間訓練，並用不同 seed 重跑。
+1. **T1**：錦標賽環境與 tournament benchmark（見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 4 節）。
+2. **P1-b**（與 T2 平行）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
 
 ### 驗收條件
 - **P1-a**：v2 的監督式 equity 測試 R² 明顯高於 v1 的 0.46；資訊隔離測試通過；兩人 NFSP 能用 v2 訓練。
@@ -495,14 +524,13 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **P1-a：v2 輸入（下一個）**：見上方「P1 模型強度」。
-2. **T1：6 人錦標賽環境與 tournament benchmark**。
-3. **P1-b 與 T2/T3（平行）**：HU cash 長時間訓練；PKO bounty；錦標賽上的學習（演算法與獎勵開始前再討論）。
-4. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-5. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-6. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-7. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-8. **CUDA Worker 容器**（需要 WSL2 後端）。
-9. **O0–O7 對手建模**。
+1. **T1：6 人錦標賽環境與 tournament benchmark（下一個）**。
+2. **P1-b 與 T2/T3（平行）**：HU cash 長時間訓練；PKO bounty；錦標賽上的學習（演算法與獎勵開始前再討論）。
+3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+5. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+6. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+7. **CUDA Worker 容器**（需要 WSL2 後端）。
+8. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

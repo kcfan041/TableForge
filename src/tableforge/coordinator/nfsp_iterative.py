@@ -202,6 +202,7 @@ class IterativeNfspOrchestrator:
                     agent_seed=experiment.config.seed_start,
                     hidden_size=experiment.config.hidden_size,
                     batch_size=experiment.config.batch_size,
+                    observation_schema=experiment.config.observation_schema,
                 ).to_bytes(),
             )
             return False

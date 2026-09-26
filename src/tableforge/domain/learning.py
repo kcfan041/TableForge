@@ -83,12 +83,16 @@ def _require_sha(value: str) -> None:
         raise ValueError("sha256 reference is invalid")
 
 
+V1_OBSERVATION_SCHEMA = "poker-hunlhe-vector-v1"
+
+
 @dataclass(frozen=True, slots=True)
 class NfspInitPayload:
     schema_version: str
     agent_seed: int
     hidden_size: int = 64
     batch_size: int = 64
+    observation_schema: str = V1_OBSERVATION_SCHEMA
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
@@ -97,7 +101,11 @@ class NfspInitPayload:
             raise ValueError("init payload values must be positive")
 
     def to_bytes(self) -> bytes:
-        return _dump(asdict(self))
+        data = asdict(self)
+        if self.observation_schema == V1_OBSERVATION_SCHEMA:
+            # Keep the exact bytes (and idempotency keys) of payloads written before v2.
+            del data["observation_schema"]
+        return _dump(data)
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> NfspInitPayload:

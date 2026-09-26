@@ -16,8 +16,7 @@ from tableforge.learning.bundle import (
     pack_entries,
     unpack_entries,
 )
-from tableforge.learning.encoding import FEATURE_SIZE
-from tableforge.learning.encoding import SCHEMA as OBSERVATION_SCHEMA
+from tableforge.learning.encoders import DEFAULT_SCHEMA, encoder
 
 SHARD_SCHEMA = "tableforge.nfsp-experience-shard.v1"
 _SHARD_ENTRIES = frozenset(
@@ -44,11 +43,13 @@ class ExperienceShard:
     hands: int
     transitions: tuple[Transition, ...]
     policy_samples: tuple[PolicySample, ...]
+    observation_schema: str = DEFAULT_SCHEMA
 
     def to_bytes(self) -> bytes:
         rl = self.transitions
         sl = self.policy_samples
-        zero_state = (0.0,) * FEATURE_SIZE
+        size = encoder(self.observation_schema).feature_size
+        zero_state = (0.0,) * size
         zero_mask = (False,) * ACTION_COUNT
         return pack_entries(
             {
@@ -56,14 +57,14 @@ class ExperienceShard:
                     {
                         "checkpoint_sha256": self.checkpoint_sha256,
                         "hands": self.hands,
-                        "observation_schema": OBSERVATION_SCHEMA,
+                        "observation_schema": self.observation_schema,
                         "policy_samples": len(sl),
                         "schema_version": SHARD_SCHEMA,
                         "seed_start": self.seed_start,
                         "transitions": len(rl),
                     }
                 ),
-                "rl_states.npy": _states([item.state for item in rl]),
+                "rl_states.npy": _states([item.state for item in rl], size),
                 "rl_masks.npy": _masks([item.mask for item in rl]),
                 "rl_actions.npy": array_bytes(
                     np.asarray([item.action for item in rl], dtype=np.int8)
@@ -72,13 +73,13 @@ class ExperienceShard:
                     np.asarray([item.reward for item in rl], dtype=np.float32)
                 ),
                 "rl_next_states.npy": _states(
-                    [item.next_state or zero_state for item in rl]
+                    [item.next_state or zero_state for item in rl], size
                 ),
                 "rl_next_masks.npy": _masks([item.next_mask or zero_mask for item in rl]),
                 "rl_done.npy": array_bytes(
                     np.asarray([item.next_state is None for item in rl], dtype=np.bool_)
                 ),
-                "sl_states.npy": _states([item.state for item in sl]),
+                "sl_states.npy": _states([item.state for item in sl], size),
                 "sl_masks.npy": _masks([item.mask for item in sl]),
                 "sl_actions.npy": array_bytes(
                     np.asarray([item.action for item in sl], dtype=np.int8)
@@ -94,8 +95,8 @@ class ExperienceShard:
         manifest = json.loads(entries["manifest.json"])
         if manifest.get("schema_version") != SHARD_SCHEMA:
             raise ValueError("unsupported experience shard schema")
-        if manifest.get("observation_schema") != OBSERVATION_SCHEMA:
-            raise ValueError("experience shard observation schema mismatch")
+        schema = str(manifest.get("observation_schema", DEFAULT_SCHEMA))
+        size = encoder(schema).feature_size
         arrays = {
             name: array_from_bytes(entries[name]) for name in _SHARD_ENTRIES - {"manifest.json"}
         }
@@ -104,6 +105,9 @@ class ExperienceShard:
             "states", "masks", "actions", "rewards", "next_states", "next_masks", "done"
         )):
             raise ValueError("experience shard arrays have inconsistent lengths")
+        for name in ("rl_states.npy", "rl_next_states.npy", "sl_states.npy"):
+            if arrays[name].ndim != 2 or arrays[name].shape[1] != size:
+                raise ValueError(f"experience shard {name} does not match {schema}")
         transitions = tuple(
             Transition(
                 state=_row_floats(arrays["rl_states.npy"][index]),
@@ -138,6 +142,7 @@ class ExperienceShard:
             hands=int(manifest["hands"]),
             transitions=transitions,
             policy_samples=policy_samples,
+            observation_schema=schema,
         )
 
 
@@ -188,8 +193,8 @@ def verified(content: bytes, sha256: str) -> bytes:
     return content
 
 
-def _states(rows: list[tuple[float, ...]]) -> bytes:
-    return array_bytes(np.asarray(rows, dtype=np.float32).reshape(len(rows), FEATURE_SIZE))
+def _states(rows: list[tuple[float, ...]], size: int) -> bytes:
+    return array_bytes(np.asarray(rows, dtype=np.float32).reshape(len(rows), size))
 
 
 def _masks(rows: list[tuple[bool, ...]]) -> bytes:

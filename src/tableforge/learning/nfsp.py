@@ -28,8 +28,7 @@ from tableforge.learning.bundle import (
     pack_entries,
     unpack_entries,
 )
-from tableforge.learning.encoding import FEATURE_SIZE, encode
-from tableforge.learning.encoding import SCHEMA as OBSERVATION_SCHEMA
+from tableforge.learning.encoders import DEFAULT_SCHEMA, Encoder, encoder
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.observation import Observation
 
@@ -49,11 +48,12 @@ class NfspConfig:
     target_update_steps: int = 200
     big_blind: int = 2
     seed: int = 0
+    observation_schema: str = DEFAULT_SCHEMA
 
 
-def _network(hidden: int) -> nn.Sequential:
+def _network(inputs: int, hidden: int) -> nn.Sequential:
     return nn.Sequential(
-        nn.Linear(FEATURE_SIZE, hidden),
+        nn.Linear(inputs, hidden),
         nn.LayerNorm(hidden),
         nn.ReLU(),
         nn.Linear(hidden, hidden),
@@ -72,10 +72,12 @@ class NfspAgent:
         self.config = config
         self.device = torch.device(device)
         self.rng = random.Random(config.seed)
-        self.q_network = _network(config.hidden_size).to(self.device)
-        self.target_network = _network(config.hidden_size).to(self.device)
+        self.encoder: Encoder = encoder(config.observation_schema)
+        inputs = self.encoder.feature_size
+        self.q_network = _network(inputs, config.hidden_size).to(self.device)
+        self.target_network = _network(inputs, config.hidden_size).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
-        self.policy_network = _network(config.hidden_size).to(self.device)
+        self.policy_network = _network(inputs, config.hidden_size).to(self.device)
         self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), config.learning_rate)
         self.policy_optimizer = torch.optim.Adam(
             self.policy_network.parameters(), config.learning_rate
@@ -94,7 +96,7 @@ class NfspAgent:
         self.best_response_mode = self.training and self.rng.random() < self.config.anticipatory
 
     def act(self, observation: Observation, legal: LegalActions) -> Action:
-        state = encode(observation, self.config.big_blind)
+        state = self.encoder.encode(observation, self.config.big_blind)
         mask = self.translator.legal_mask(legal)
         choice = self.choose(state, mask)
         self.last_choice = choice
@@ -150,7 +152,7 @@ class NfspAgent:
             [item.next_state is None for item in batch], dtype=torch.bool, device=device
         )
         next_states = torch.tensor(
-            [item.next_state or (0.0,) * FEATURE_SIZE for item in batch],
+            [item.next_state or (0.0,) * self.encoder.feature_size for item in batch],
             dtype=torch.float32,
             device=device,
         )
@@ -191,7 +193,7 @@ class NfspAgent:
                     "algorithm": "nfsp",
                     "config": asdict(self.config),
                     "metadata": metadata or {},
-                    "observation_schema": OBSERVATION_SCHEMA,
+                    "observation_schema": self.encoder.schema,
                     "schema_version": BUNDLE_SCHEMA,
                     "train_steps": self.train_steps,
                 }
@@ -220,7 +222,7 @@ class NfspAgent:
             ),
             RESERVOIR_STATES: array_bytes(
                 np.asarray([item.state for item in self.sl_buffer.items], dtype=np.float32)
-                .reshape(len(self.sl_buffer), FEATURE_SIZE)
+                .reshape(len(self.sl_buffer), self.encoder.feature_size)
             ),
             RESERVOIR_MASKS: array_bytes(
                 np.asarray([item.mask for item in self.sl_buffer.items], dtype=np.bool_)
@@ -243,11 +245,9 @@ class NfspAgent:
         manifest = json.loads(entries[MANIFEST])
         if manifest.get("schema_version") != BUNDLE_SCHEMA:
             raise ValueError("unsupported checkpoint bundle schema")
-        if manifest["observation_schema"] != OBSERVATION_SCHEMA:
-            raise ValueError("unsupported observation schema")
         if manifest["action_schema"] != ACTION_SCHEMA:
             raise ValueError("unsupported action schema")
-        agent = cls(NfspConfig(**manifest["config"]), device=device)
+        agent = cls(_config_from_manifest(manifest), device=device)
         agent.train_steps = int(manifest["train_steps"])
         if inference_only:
             weights = st_load(entries[INFERENCE])
@@ -283,7 +283,7 @@ class NfspAgent:
     def from_actor_bundle(cls, content: bytes, device: str = "cpu") -> NfspAgent:
         entries = unpack_entries(content, BUNDLE_ENTRIES)
         manifest = json.loads(entries[MANIFEST])
-        agent = cls(NfspConfig(**manifest["config"]), device=device)
+        agent = cls(_config_from_manifest(manifest), device=device)
         actor = st_load(entries[ACTOR])
         agent.q_network.load_state_dict(_unprefixed("q", actor))
         agent.policy_network.load_state_dict(_unprefixed("policy", actor))
@@ -323,6 +323,16 @@ BUNDLE_ENTRIES = frozenset(
     }
 )
 REQUIRED_ENTRIES = BUNDLE_ENTRIES
+
+
+def _config_from_manifest(manifest: dict[str, Any]) -> NfspConfig:
+    """Rebuild the config; checkpoints from before v2 have no schema field and are v1."""
+    config = dict(manifest["config"])
+    config.setdefault("observation_schema", DEFAULT_SCHEMA)
+    if manifest.get("observation_schema", DEFAULT_SCHEMA) != config["observation_schema"]:
+        raise ValueError("checkpoint observation schema does not match its config")
+    encoder(config["observation_schema"])
+    return NfspConfig(**config)
 
 
 def checkpoint_manifest(content: bytes) -> dict[str, Any]:

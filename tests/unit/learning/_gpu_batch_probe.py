@@ -32,7 +32,7 @@ def planned_batch() -> int:
     batch = assessment.plan.batch_size
     device = assessment.plan.device_id or "cuda:0"
     torch.cuda.reset_peak_memory_stats()
-    network = _network(1024).to(device)
+    network = _network(FEATURE_SIZE, 1024).to(device)
     optimizer = torch.optim.Adam(network.parameters())
     inputs = torch.randn(batch, FEATURE_SIZE, device=device)
     for _ in range(2):

@@ -43,12 +43,15 @@ class ExperimentConfig:
     hidden_size: int = 64
     batch_size: int = 64
     players: int = 2
+    observation_schema: str = "poker-hunlhe-vector-v1"
 
     def __post_init__(self) -> None:
         if self.learner_runtime not in ("cpu", "cuda"):
             raise ValueError("learner_runtime must be cpu or cuda")
         if self.hidden_size < 1 or self.batch_size < 1:
             raise ValueError("hidden_size and batch_size must be positive")
+        if self.observation_schema not in ("poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2"):
+            raise ValueError(f"unknown observation schema: {self.observation_schema}")
         if not 2 <= self.players <= 6:
             raise ValueError("players must be between 2 and 6")
         if self.players != 2 and self.kind is not ExperimentKind.RULE_SIMULATION:
@@ -107,6 +110,7 @@ class ExperimentPreset:
     hidden_size: int = 64
     batch_size: int = 64
     players: int = 2
+    observation_schema: str = "poker-hunlhe-vector-v1"
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -130,6 +134,7 @@ class ExperimentPreset:
             hidden_size=self.hidden_size,
             batch_size=self.batch_size,
             players=self.players,
+            observation_schema=self.observation_schema,
         )
 
 
@@ -159,6 +164,20 @@ BUILTIN_PRESETS = (
         train_steps_per_round=400,
         max_evaluation_deals=1_000,
         target_ci_width=150.0,
+    ),
+    ExperimentPreset(
+        "hu-nfsp-cpu-iterative-v2",
+        "1",
+        hands=1_000,
+        hands_per_job=1_000,
+        kind=ExperimentKind.NFSP_ITERATIVE,
+        evaluation_deals=200,
+        rounds=3,
+        actors_per_round=2,
+        train_steps_per_round=400,
+        max_evaluation_deals=1_000,
+        target_ci_width=150.0,
+        observation_schema="poker-hunlhe-vector-v2",
     ),
     ExperimentPreset(
         "hu-nfsp-cpu-league",

@@ -25,6 +25,11 @@ def main() -> None:
     parser.add_argument("--epsilon", type=float, default=0.06)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--schema",
+        default="poker-hunlhe-vector-v1",
+        choices=("poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2"),
+    )
     args = parser.parse_args()
 
     agent = NfspAgent(
@@ -35,6 +40,7 @@ def main() -> None:
             anticipatory=args.anticipatory,
             epsilon=args.epsilon,
             seed=args.seed,
+            observation_schema=args.schema,
         ),
         device=args.device,
     )
@@ -57,6 +63,8 @@ def main() -> None:
         print(
             json.dumps(
                 {
+                    "schema": args.schema,
+                    "seed": args.seed,
                     "hands": trained,
                     "elapsed_s": round(time.perf_counter() - started),
                     "train_steps": agent.train_steps,

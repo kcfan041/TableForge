@@ -53,6 +53,7 @@ class NfspInitExecutor:
                 hidden_size=payload.hidden_size,
                 batch_size=payload.batch_size,
                 seed=payload.agent_seed,
+                observation_schema=payload.observation_schema,
             )
         )
         return agent.to_bundle({"round_index": 0})
@@ -99,6 +100,7 @@ class NfspActorExecutor:
             hands=payload.hands,
             transitions=tuple(transitions),
             policy_samples=tuple(samples),
+            observation_schema=agent.encoder.schema,
         ).to_bytes()
 
 
@@ -132,6 +134,7 @@ class NfspLearnerExecutor:
             raise ValueError("dataset snapshot was generated from a different checkpoint")
         if snapshot.round_index != payload.round_index:
             raise ValueError("dataset snapshot round does not match learner round")
+        agent = NfspAgent.from_bundle(checkpoint, device=device)
         transitions: list[Transition] = []
         samples: list[PolicySample] = []
         for reference in snapshot.shards:
@@ -140,9 +143,13 @@ class NfspLearnerExecutor:
             )
             if shard.checkpoint_sha256 != payload.checkpoint_sha256:
                 raise ValueError("experience shard was generated from a different checkpoint")
+            if shard.observation_schema != agent.encoder.schema:
+                raise ValueError(
+                    f"experience shard uses {shard.observation_schema}, "
+                    f"the model uses {agent.encoder.schema}"
+                )
             transitions.extend(shard.transitions)
             samples.extend(shard.policy_samples)
-        agent = NfspAgent.from_bundle(checkpoint, device=device)
         learn_from_experience(
             agent, transitions, samples, payload.train_steps, on_progress, batch_size
         )
