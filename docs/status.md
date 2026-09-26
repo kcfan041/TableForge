@@ -35,7 +35,7 @@
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1 | 模型強度驗證 | 暫停 | 已找到主要瓶頸；先完善平台（見下方「P1 模型強度」） |
 
-目前測試：381 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：382 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -243,6 +243,9 @@
   - 建置 Coordinator 與 CPU Worker 映像並做簡單檢查。
 
   CI 裝 CPU 版 PyTorch，並跳過 lock 檔中的 CUDA 套件，節省時間。README 加上 CI 狀態徽章。
+  - CI 第一次執行就抓到兩個本機測試沒發現的問題，已修正：
+    - Windows 專用的記憶體查詢在 Linux 上無法通過型別檢查：合併為單一函式，並以平台判斷隔開。
+    - 多個程序同時建立 node-id 時，其中一個可能讀到寫到一半的檔案：改成先寫入暫存檔，再以原子性的 hard link 發布，並新增 8 個程序同時建立的測試。
 - **文件整理**：根目錄的 `test.md`、`test2.md`、`test3.md` 搬到 `docs/concepts/`，改為有意義的檔名並加上說明。
 - 驗收：
   - 單元測試：退避間隔與上限、只記錄狀態轉換、lease 失效後繼續、憑證撤銷時停止、未預期錯誤照常拋出、版本相容規則、只在最後 1/4 有效期續期、第二個 Worker 沿用第一個換好的憑證。

@@ -35,3 +35,26 @@ def test_corrupt_identity_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="invalid node identity"):
         NodeIdentityStore(path).load_or_create()
+
+
+def test_concurrent_creation_across_processes(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    path = tmp_path / "node-id"
+    code = (
+        "import sys; from pathlib import Path; "
+        "from tableforge.infrastructure.node_identity import NodeIdentityStore; "
+        "print(NodeIdentityStore(Path(sys.argv[1])).load_or_create())"
+    )
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", code, str(path)], stdout=subprocess.PIPE, text=True
+        )
+        for _ in range(8)
+    ]
+    identities = {process.communicate(timeout=60)[0].strip() for process in processes}
+
+    assert all(process.returncode == 0 for process in processes)
+    assert len(identities) == 1
+    assert not list(tmp_path.glob(".node-id.*.tmp"))
