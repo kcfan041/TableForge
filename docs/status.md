@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 未開始 | T2 之後，開始前再討論演算法與獎勵 |
 
-目前測試：509 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：511 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -413,6 +413,15 @@
   - **10 萬場錦標賽 soak**（`uv run python -m tableforge.poker.tournament_soak --tournaments 100000 --workers 16`，10/25/50 BB × 兩種 payout 輪流、混合 Rule Bot），零錯誤：共 457 萬手，每場平均 45.7 手、最長 189 手，95,583 次同手多人淘汰，16 個程序 66 秒（約 1,500 場/秒）。
   - 實際在 `tableforge ui` 建立 `6max-sng-10bb`：10 個 Job、3,000 場約 26 秒完成，`HeuristicPushFoldBot` 對混合 Rule Bot 的 ROI 為 +14.6%（95% 信賴區間 +9.5% 至 +19.8%），ITM 44.3%；並截圖確認錦標賽結果卡片。
 - **尚未做**：PKO bounty（T2）；dead button；多桌。
+
+### 背景程序不再跳出視窗
+- **問題**：從沒有主控台的程序啟動 `.venv\Scripts\python.exe` 時會跳出黑色視窗。uv 建立的 `.venv\Scripts\python.exe` 是轉接程式，會再啟動真正的 Python；父程序用 `DETACHED_PROCESS`（或同時設 `DETACHED_PROCESS` 與 `CREATE_NO_WINDOW`，此時 Windows 會忽略後者）時，真正的 Python 沒有主控台，Windows 就替它開新視窗。
+- **修正**：`tableforge/processes.py` 統一提供旗標：背景程序用 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`（隱藏的主控台，轉接程式的子程序也共用），短指令（`taskkill`、`nvidia-smi`、`tailscale`）用 `CREATE_NO_WINDOW`。叢集服務、`tableforge ui` 的 Worker 與這些短指令都改用它。
+- 隱藏主控台的 Worker 收不到 `tableforge ui` 送的 Ctrl+Break，因此改用停止檔：`tableforge ui` 啟動 Worker 時以環境變數 `TABLEFORGE_STOP_FILE` 指定一個檔案，停止時建立它，Worker 看到後完成目前步驟並正常結束（結束碼 0）。Linux／macOS 仍送 SIGINT。
+- 驗收：
+  - 實測比較：用舊旗標啟動 `.venv\Scripts\python.exe` 出現 1 個新視窗，新旗標 0 個。
+  - 在 `tableforge ui` 建立叢集、開 2 個 Worker、停止 Worker、停止叢集服務，全程監看新出現的視窗：0 個；Worker 都以結束碼 0 停止。
+  - 新增測試 2 個（旗標不含 `DETACHED_PROCESS`、停止檔會讓 Worker 停止）；三個端對端腳本（`local_ui_e2e`、`create_cluster_e2e`、`cluster_ui_e2e`）通過。
 
 ### T2 PKO
 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 5 節。

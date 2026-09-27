@@ -21,8 +21,9 @@ from tableforge.web.local import (
 
 FAKE_WORKER = textwrap.dedent(
     """
-    import json, signal, sys, time
+    import json, os, pathlib, signal, sys, time
     stop = False
+    stop_file = pathlib.Path(os.environ["TABLEFORGE_STOP_FILE"])
     def handler(*_):
         global stop
         stop = True
@@ -34,7 +35,7 @@ FAKE_WORKER = textwrap.dedent(
     print("plain text line", flush=True)
     print(json.dumps({"event": "worker_idle"}), flush=True)
     deadline = time.time() + 30
-    while not stop and time.time() < deadline:
+    while not stop and not stop_file.exists() and time.time() < deadline:
         time.sleep(0.05)
     print(json.dumps({"event": "worker_stopped", "jobs": 1}), flush=True)
     """

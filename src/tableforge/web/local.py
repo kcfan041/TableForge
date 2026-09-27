@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from tableforge.processes import STOP_FILE_ENV, background_process_flags
 from tableforge.transport.control_client import ControlError, RemoteControl
 from tableforge.transport.credentials import RemoteCredentials
 from tableforge.transport.diagnostics import check_connection
@@ -64,6 +65,7 @@ class WorkerProcess:
     jobs: int = 0
     state: str = "starting"
     last_error: str = ""
+    stop_file: Path | None = None
 
     def view(self) -> dict[str, object]:
         return {
@@ -133,9 +135,11 @@ class WorkerManager:
         environment = dict(self.environment or os.environ)
         environment["PYTHONUNBUFFERED"] = "1"
         environment["PYTHONIOENCODING"] = "utf-8"
-        flags = 0
-        if sys.platform == "win32":
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        stop_file = self.data_dir / "worker-stop" / f"{os.getpid()}-{number}"
+        stop_file.parent.mkdir(parents=True, exist_ok=True)
+        stop_file.unlink(missing_ok=True)
+        environment[STOP_FILE_ENV] = str(stop_file)
+        flags = background_process_flags()
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -149,7 +153,7 @@ class WorkerManager:
             creationflags=flags,
             start_new_session=os.name != "nt",
         )
-        worker = WorkerProcess(number, command, process)
+        worker = WorkerProcess(number, command, process, stop_file=stop_file)
         with self._lock:
             self._workers.append(worker)
             self._workers = self._workers[-20:]
@@ -162,12 +166,14 @@ class WorkerManager:
             raise HTTPException(404, "no such worker")
         if worker.process.poll() is None:
             worker.state = "stopping"
-            _interrupt(worker.process)
+            _interrupt(worker)
             try:
                 worker.process.wait(timeout)
             except subprocess.TimeoutExpired:
                 worker.process.kill()
                 worker.process.wait(5)
+        if worker.stop_file is not None:
+            worker.stop_file.unlink(missing_ok=True)
         return worker
 
     def stop_all(self, timeout: float = 15.0) -> None:
@@ -204,11 +210,19 @@ class WorkerManager:
             worker.state = "stopped" if worker.exit_code == 0 else "failed"
 
 
-def _interrupt(process: subprocess.Popen[str]) -> None:
-    """Ask the worker to finish its current step and exit, like Ctrl+C in a terminal."""
+def _interrupt(worker: WorkerProcess) -> None:
+    """Ask the worker to finish its current step and exit, like Ctrl+C in a terminal.
+
+    On Windows the worker runs with a hidden console of its own, which a console control
+    event from here cannot reach, so it is asked to stop through its stop file.
+    """
+    process = worker.process
     try:
         if sys.platform == "win32":
-            process.send_signal(signal.CTRL_BREAK_EVENT)
+            if worker.stop_file is None:
+                process.terminate()
+                return
+            worker.stop_file.write_text(_now(), encoding="utf-8")
         else:
             process.send_signal(signal.SIGINT)
     except (OSError, ValueError):

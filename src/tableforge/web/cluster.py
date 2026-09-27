@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from tableforge.domain.auth import InviteScope, OperatorRole
+from tableforge.processes import background_process_flags, no_window_flags
 from tableforge.settings import Settings
 from tableforge.transport.tls import generate_self_signed
 
@@ -101,6 +102,7 @@ def tailscale_ipv4(timeout: float = 5.0) -> str | None:
             text=True,
             timeout=timeout,
             check=False,
+            creationflags=no_window_flags(),
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
@@ -254,13 +256,7 @@ class CoordinatorSupervisor:
         log = self.layout.log_file.open("a", encoding="utf-8")
         log.write(f"--- starting coordinator {datetime.now(UTC).isoformat()} ---\n")
         log.flush()
-        flags = 0
-        if sys.platform == "win32":
-            flags = (
-                subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NO_WINDOW
-            )
+        flags = background_process_flags()
         try:
             process = subprocess.Popen(
                 command,
@@ -337,7 +333,12 @@ def _tail(path: Path, lines: int = 15) -> str:
 
 def _kill(pid: int) -> None:
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+            creationflags=no_window_flags(),
+        )
         return
     import signal
 

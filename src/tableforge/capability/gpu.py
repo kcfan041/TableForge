@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from tableforge.domain.capabilities import GpuCapability
+from tableforge.processes import no_window_flags
 
 CommandRunner = Callable[[list[str]], str]
 
@@ -103,7 +104,12 @@ def _default_runner() -> CommandRunner | None:
 
     def run(arguments: list[str]) -> str:
         return subprocess.run(
-            arguments, check=True, capture_output=True, text=True, timeout=15
+            arguments,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=no_window_flags(),
         ).stdout
 
     return run

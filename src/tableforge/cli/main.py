@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import threading
@@ -36,6 +37,7 @@ from tableforge.domain.simulation import SimulationJobPayload
 from tableforge.infrastructure.node_identity import NodeIdentityStore
 from tableforge.learning.device import hide_accelerators
 from tableforge.observability import COUNTERS
+from tableforge.processes import STOP_FILE_ENV
 from tableforge.settings import Settings, SettingsError, load_settings
 from tableforge.transport.client import enroll
 from tableforge.transport.credentials import RemoteCredentials
@@ -569,6 +571,18 @@ def _stop_event() -> threading.Event:
         signal.signal(signal.SIGTERM, request_stop)
     if sys.platform == "win32":
         signal.signal(signal.SIGBREAK, request_stop)
+    stop_file = os.environ.get(STOP_FILE_ENV)
+    if stop_file:
+        # Processes started without a visible console (tableforge ui workers) cannot
+        # receive Ctrl+Break from their parent; they are asked to stop with a file.
+        path = Path(stop_file)
+
+        def watch() -> None:
+            while not stop.wait(0.3):
+                if path.exists():
+                    stop.set()
+
+        threading.Thread(target=watch, name="stop-file", daemon=True).start()
     return stop
 
 
