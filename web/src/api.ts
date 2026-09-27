@@ -56,6 +56,8 @@ export interface Preset {
   rounds: number;
   league: boolean;
   learner_runtime: string;
+  observation_schema?: string;
+  starting_stack_bb?: number | null;
 }
 
 export interface ExperimentSummary {
@@ -90,6 +92,32 @@ export interface ExperimentDetail extends ExperimentSummary {
     folds: number;
     winnings: number[];
   } | null;
+  tournament?: TournamentSummary | null;
+}
+
+export interface Interval {
+  mean: number;
+  low: number;
+  high: number;
+}
+
+export interface TournamentSummary {
+  config: string;
+  candidate: string;
+  opponents: string;
+  starting_stack_bb: number;
+  payout: number[];
+  seeds: number;
+  tournaments: number;
+  jobs_finished: number;
+  prize_ev: Interval;
+  bounty_ev: Interval;
+  total_ev: Interval;
+  roi: Interval;
+  average_place: Interval;
+  itm: Interval;
+  place_share: number[];
+  average_hands: number;
 }
 
 export interface MatrixCell {

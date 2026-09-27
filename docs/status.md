@@ -1,6 +1,6 @@
 # TableForge 開發進度
 
-最後更新：P1-a v2 輸入完成（牌力特徵、2–6 人通用、錦標賽欄位）。錦標賽路線見 [architecture/08-tournament.md](architecture/08-tournament.md)。每完成一個階段，本文件與程式碼在同一個 commit 更新。
+最後更新：T1 6 人錦標賽環境與 tournament benchmark 完成。錦標賽路線見 [architecture/08-tournament.md](architecture/08-tournament.md)。每完成一個階段，本文件與程式碼在同一個 commit 更新。
 
 狀態定義：
 
@@ -40,12 +40,13 @@
 | U3 | 瀏覽器網頁（給只用瀏覽器的人）預設關閉、由建立者在 UI 開啟；文件改成只介紹 `tableforge ui` | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1-a | v2 輸入：牌力特徵、2–6 人通用、錦標賽欄位 | 已完成 | 本階段；R² 0.48 → 0.87–0.89 |
-| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 未開始 | T1 之後，與 T2 平行 |
-| T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 未開始 | P1-a 之後；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
+| P1-b0 | 訓練用的 UI：訓練曲線（每輪 Rule Bot benchmark）、自訂訓練參數、多 seed 並排 | 未開始 | T1 之後、P1-b 之前 |
+| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 未開始 | P1-b0 之後，與 T2 平行 |
+| T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 已完成 | 本階段；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
 | T2 | PKO bounty 規則與 bounty 指標 | 未開始 | T1 之後 |
 | T3 | 錦標賽上的學習 | 未開始 | T2 之後，開始前再討論演算法與獎勵 |
 
-目前測試：471 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：493 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -389,6 +390,30 @@
   - README 精簡為四行指令開始使用，其他內容連到使用指南與進階文件；開發段落列出四個端對端腳本。
 - 驗收：`scripts/create_cluster_e2e.py` 新增兩個步驟（共 11 步，約 26 秒）：確認網頁預設關閉 → 從 UI 開啟後，以瀏覽器方式用檢視者邀請碼登入並看到實驗、這台電腦仍是 Worker → 關閉後 8080 不再接受連線。
 
+### T1 6 人錦標賽環境
+規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 4 節。
+- **BB ante**：`TableHand` 新增選填的 `big_blind_ante`。由大盲位代付，盲注優先；是主池裡的 dead money，不算下注、不影響跟注金額，這手留在桌上的人都能贏。不傳時行為與之前完全相同（測試確認同 seed 結果一致）。
+- **設定**（`poker/tournament.py` 的 `TournamentConfig`，可存成 JSON）：人數、`starting_stack_bb`、盲注表（每級 SB、BB、ante、維持手數，最後一級一直重複）、payout 比例、buy-in、名次判定器。金額以 buy-in 為單位。
+  - `standard_levels()`：從 10/20 開始，每級約增加 25%，BB ante 等於一個 BB，預設每 10 手升一級。
+  - `preset_config(stack_bb, payout)`：payout 有 `65-35`、`50-30-20`、`winner-take-all`。
+- **引擎**（`Tournament`）：每手用 `TableHand` 打，籌碼跨手保留，每手結束後籌碼為 0 的人淘汰；按鈕移到下一個還有籌碼的人（第一版不做 dead button）；起始按鈕由 seed 決定；每手牌由 `錦標賽 seed + 手數` 決定，重播完全相同。每手結束都檢查整場籌碼守恆。
+- **同手多人淘汰**：名次判定器可替換，預設 `stack_at_hand_start`：那手開始前籌碼多的名次較好；籌碼相同時並列，平分他們所佔名次的獎金總和。
+- **結果**：每個人的名次、名次獎金、bounty（T1 為 0）、最終結果（= 名次獎金 + bounty − buy-in），以及淘汰順序。選擇記錄每手時，另外有盲注、按鈕、每手前後籌碼、淘汰者與 ICM 權益。
+- **ICM telemetry**：Malmuth-Harville 算法，每手開始與結束各算一次，**只記錄，不作訓練獎勵**，也不保證逐手加總等於最終結果。
+- **錦標賽用的對手**：`HeuristicPushFoldBot`（`agents/rule/tournament.py`）。翻牌前只全下或蓋牌，門檻依籌碼 BB 數、後面還有幾人、Chen 分數決定；被加注時用較嚴的門檻跟注；翻牌後只過牌或跟注。這是規則近似，不是 Nash。預設參數是在混合 Rule Bot 對手中測試幾組後選的中間值，避免過度貼合單一對手。25 BB、50 BB 時它仍只會全下或蓋牌，只當參考對手。
+- **Tournament benchmark**（`poker/tournament_benchmark.py`）：同一組 seed 讓受測者輪流坐 6 個座位，以每個 seed 的平均當一筆觀測值計算 95% 信賴區間。指標：Prize EV、Bounty EV、Total EV、ROI、平均名次、ITM%、各名次比例、每場平均手數。每個 Job 輸出原始樣本（`TournamentSamples`），多個 Job 的樣本可以合併後再算指標。
+- **驗收場數（已量測）**：受測者 `HeuristicPushFoldBot`、對手為混合 Rule Bot、10 BB、65/35 時，一次觀測值的 ROI 標準差約 0.65 buy-in（輪流座位）或 1.42（不輪流）。ROI 95% 信賴區間半寬 ±10%、±5%、±2% 分別約需 1,000、3,900、24,000 場。內建 preset 用 500 組 seed × 6 座位 = 3,000 場，約 ±5%。
+- **平台**：
+  - 新增 Job 類型 `tableforge.v1.TournamentJobPayload`（JSON payload，不需要改 proto）與 workload `tournament-rule-benchmark`（需要 simulation 角色，不需要 PyTorch，所有 Worker 都能跑）。
+  - 新增實驗類型 `tournament_benchmark` 與 6 個 preset：`6max-sng-10bb`、`6max-sng-25bb`、`6max-sng-50bb`（65/35），以及各自的 `-top3`（50/30/20）版本；每個 preset 分成 10 個 Job，每個 Job 50 組 seed。
+  - 實驗明細新增「錦標賽結果」卡片：各指標的平均與 95% 信賴區間（不含 0 時以顏色標示）、各名次比例長條圖，以及受測者、對手、起始籌碼、獎金結構與場數。
+- 驗收：
+  - 單元與性質測試 19 個：ante 規則、設定驗證與 JSON 來回、起始籌碼可設定（10、25、50、7.5 BB）、盲注依手數升級、同手淘汰的排序與並列、並列時平分獎金、ICM 已知值、150 組隨機錦標賽（2–6 人、3–25 BB、三種 payout、有無 ante）的不變量（名次、獎金總額、結果加總為 0、淘汰順序完整、每手籌碼守恆、盲注等級、ICM 總和等於剩餘獎金）、同 seed 重播相同、按鈕跳過已淘汰的人、`HeuristicPushFoldBot` 翻牌前只全下或蓋牌、benchmark 指標（相同對手時 Total EV 為 0）。
+  - 整合測試 3 個：payload 驗證、分開執行的 Job 合併後與一次執行結果完全相同、實驗從建立到 Worker 執行再到合併結果。
+  - **10 萬場錦標賽 soak**（`uv run python -m tableforge.poker.tournament_soak --tournaments 100000 --workers 16`，10/25/50 BB × 兩種 payout 輪流、混合 Rule Bot），零錯誤：共 457 萬手，每場平均 45.7 手、最長 189 手，95,583 次同手多人淘汰，16 個程序 66 秒（約 1,500 場/秒）。
+  - 實際在 `tableforge ui` 建立 `6max-sng-10bb`：10 個 Job、3,000 場約 26 秒完成，`HeuristicPushFoldBot` 對混合 Rule Bot 的 ROI 為 +14.6%（95% 信賴區間 +9.5% 至 +19.8%），ITM 44.3%；並截圖確認錦標賽結果卡片。
+- **尚未做**：PKO bounty（T2）；dead button；多桌。
+
 ## P1 模型強度
 
 之前為了先完善平台而暫停，停在「已找到主要瓶頸、尚未修正」的狀態。現在與錦標賽路線一起重新排定（見下方「路線」）。
@@ -478,8 +503,13 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 - 加入特徵並調整參數後仍無法穩定贏 tight 時：先檢查 NFSP 實作與動作抽象（目前加注只有半池、滿池、all-in），或提早引入其他演算法（例如 Deep CFR）。
 
 ### 下一步
-1. **T1**：錦標賽環境與 tournament benchmark（見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 4 節）。
-2. **P1-b**（與 T2 平行）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
+1. ~~T1~~ 已完成（見上方「T1 6 人錦標賽環境」）。
+2. **P1-b0**：訓練用的 UI，讓 P1-b 的調參在 `tableforge ui` 上進行：
+   - NFSP 實驗每一輪自動對 4 種 Rule Bot 跑 benchmark，實驗明細畫出 bb/100 與信賴區間的訓練曲線。
+   - 建立實驗時可自訂訓練參數（學習率、每幾手訓練一次、hidden size、batch、輸入格式、seed、輪數），不只選 preset。
+   - 建立時可選「用 N 個 seed 各建立一個」，實驗列表把同一組放在一起、並排顯示曲線。
+   - 節點測速與輸入格式 R² 診斷留在腳本（`scripts/nfsp_speed.py`、`scripts/encoding_r2.py`），不做進 UI。
+3. **P1-b**（與 T2 平行）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
 
 ### 驗收條件
 - **P1-a**：v2 的監督式 equity 測試 R² 明顯高於 v1 的 0.46；資訊隔離測試通過；兩人 NFSP 能用 v2 訓練。
@@ -524,7 +554,7 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **T1：6 人錦標賽環境與 tournament benchmark（下一個）**。
+1. **P1-b0：訓練用的 UI（下一個）**：訓練曲線、自訂參數、多 seed。
 2. **P1-b 與 T2/T3（平行）**：HU cash 長時間訓練；PKO bounty；錦標賽上的學習（演算法與獎勵開始前再討論）。
 3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
 4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。

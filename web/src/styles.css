@@ -741,3 +741,30 @@ details.advanced {
   border-top: 1px solid var(--border);
   padding-top: 0.75rem;
 }
+
+table.metrics {
+  width: auto;
+  min-width: 420px;
+}
+
+table.metrics th {
+  text-align: left;
+}
+
+.positive-text {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.negative-text {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.bar-track.plain::after {
+  display: none;
+}
+
+.bar.neutral {
+  background: var(--muted);
+}

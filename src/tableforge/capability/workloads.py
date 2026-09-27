@@ -103,6 +103,25 @@ BUILTIN_WORKLOADS = (
     ),
     WorkloadProfile(
         schema_version="1.0",
+        key="tournament-rule-benchmark",
+        version="1",
+        payload_type="tableforge.v1.TournamentJobPayload",
+        minimum=ResourceRequest(
+            cpu_cores=1,
+            memory_bytes=512 * MIB,
+            storage_bytes=GIB,
+            required_role="simulation",
+        ),
+        recommended=ResourceRequest(
+            cpu_cores=2,
+            memory_bytes=2 * GIB,
+            storage_bytes=2 * GIB,
+            required_role="simulation",
+        ),
+        supported_runtimes=("cpu",),
+    ),
+    WorkloadProfile(
+        schema_version="1.0",
         key="hu-nfsp-learner-gpu",
         version="1",
         payload_type="tableforge.v1.NfspLearnerJobPayload",

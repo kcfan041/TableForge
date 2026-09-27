@@ -19,6 +19,8 @@ class ExperimentKind(StrEnum):
     RULE_SIMULATION = "rule_simulation"
     NFSP_PIPELINE = "nfsp_pipeline"
     NFSP_ITERATIVE = "nfsp_iterative"
+    # `hands` is the number of tournament seeds and `hands_per_job` the seeds per job.
+    TOURNAMENT_BENCHMARK = "tournament_benchmark"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,9 @@ class ExperimentConfig:
     batch_size: int = 64
     players: int = 2
     observation_schema: str = "poker-hunlhe-vector-v1"
+    tournament_json: str = ""
+    candidate: str = ""
+    opponents: str = ""
 
     def __post_init__(self) -> None:
         if self.learner_runtime not in ("cpu", "cuda"):
@@ -54,8 +59,15 @@ class ExperimentConfig:
             raise ValueError(f"unknown observation schema: {self.observation_schema}")
         if not 2 <= self.players <= 6:
             raise ValueError("players must be between 2 and 6")
-        if self.players != 2 and self.kind is not ExperimentKind.RULE_SIMULATION:
-            raise ValueError("only rule simulations support more than two players")
+        if self.players != 2 and self.kind not in (
+            ExperimentKind.RULE_SIMULATION,
+            ExperimentKind.TOURNAMENT_BENCHMARK,
+        ):
+            raise ValueError("only rule simulations and tournaments support more than two players")
+        if self.kind is ExperimentKind.TOURNAMENT_BENCHMARK:
+            from tableforge.domain.tournament import TournamentJobPayload
+
+            TournamentJobPayload("1.0", self.tournament_json, 1, 0, self.candidate, self.opponents)
         if not self.schema_version or not self.preset_key or not self.preset_version:
             raise ValueError("experiment config identity cannot be empty")
         if self.hands < 1 or self.hands_per_job < 1:
@@ -111,6 +123,9 @@ class ExperimentPreset:
     batch_size: int = 64
     players: int = 2
     observation_schema: str = "poker-hunlhe-vector-v1"
+    tournament_json: str = ""
+    candidate: str = ""
+    opponents: str = ""
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -135,10 +150,13 @@ class ExperimentPreset:
             batch_size=self.batch_size,
             players=self.players,
             observation_schema=self.observation_schema,
+            tournament_json=self.tournament_json,
+            candidate=self.candidate,
+            opponents=self.opponents,
         )
 
 
-BUILTIN_PRESETS = (
+BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
     ExperimentPreset("hu-rule-smoke", "1", hands=1_000, hands_per_job=250),
     ExperimentPreset("hu-rule-soak", "1", hands=1_000_000, hands_per_job=10_000),
     ExperimentPreset("hu-rule-soak-10m", "1", hands=10_000_000, hands_per_job=10_000),
@@ -211,4 +229,28 @@ BUILTIN_PRESETS = (
         hidden_size=512,
         batch_size=8_192,
     ),
+)
+
+
+def _tournament_preset(stack_bb: int, payout: str, suffix: str) -> ExperimentPreset:
+    """Push/fold baseline in a mixed rule-bot field: 500 seeds x 6 seats = 3,000 tournaments."""
+    from tableforge.poker.tournament import preset_config
+
+    return ExperimentPreset(
+        f"6max-sng-{stack_bb}bb{suffix}",
+        "1",
+        hands=500,
+        hands_per_job=50,
+        kind=ExperimentKind.TOURNAMENT_BENCHMARK,
+        players=6,
+        tournament_json=preset_config(stack_bb, payout).to_json(),
+        candidate="pushfold",
+        opponents="mixed",
+    )
+
+
+BUILTIN_PRESETS = BUILTIN_PRESETS + tuple(
+    _tournament_preset(stack_bb, payout, suffix)
+    for stack_bb in (10, 25, 50)
+    for payout, suffix in (("65-35", ""), ("50-30-20", "-top3"))
 )

@@ -89,9 +89,12 @@ class TableBetting:
         button: int,
         small_blind: int,
         big_blind: int,
+        big_blind_ante: int = 0,
     ) -> None:
         if small_blind <= 0 or big_blind <= small_blind:
             raise ValueError("blinds must satisfy 0 < small_blind < big_blind")
+        if big_blind_ante < 0:
+            raise ValueError("ante cannot be negative")
         if any(stack <= 0 for stack in stacks):
             raise ValueError("starting stacks must be positive")
         self.positions = TablePositions.for_table(len(stacks), button)
@@ -112,13 +115,19 @@ class TableBetting:
             self.positions.small_blind, min(small_blind, stacks[self.positions.small_blind])
         )
         self._contribute(self.positions.big_blind, min(big_blind, stacks[self.positions.big_blind]))
+        # Big blind ante: posted by the big blind after the blind (the blind has priority
+        # when short). It is dead money in the main pot: not a bet, not part of anyone's
+        # contribution, and every player still in the hand can win it.
+        big_blind_seat = self.seats[self.positions.big_blind]
+        self.dead_money = min(big_blind_ante, big_blind_seat.stack)
+        big_blind_seat.stack -= self.dead_money
         self.current_bet = max(seat.street_contribution for seat in self.seats)
         self._open_round(self.positions.first_preflop)
         self._assert_invariants()
 
     @property
     def pot(self) -> int:
-        return sum(seat.total_contribution for seat in self.seats)
+        return sum(seat.total_contribution for seat in self.seats) + self.dead_money
 
     def legal_actions(self, seat: int) -> LegalActions:
         if self.status is not BettingStatus.ACTIVE or seat != self.current_actor:
@@ -323,10 +332,11 @@ class TableHand:
         small_blind: int,
         big_blind: int,
         seed: int | str | bytes,
+        big_blind_ante: int = 0,
     ) -> None:
         self.initial_stacks = tuple(stacks)
         self.button = button
-        self.betting = TableBetting(stacks, button, small_blind, big_blind)
+        self.betting = TableBetting(stacks, button, small_blind, big_blind, big_blind_ante)
         self.players = len(stacks)
         self._deck = Deck.shuffled(seed)
         self.hole_cards = self._deal_hole_cards()
@@ -437,6 +447,7 @@ class TableHand:
             return
         seats = self.betting.seats
         contributions = [state.total_contribution for state in seats]
+        dead_money = self.betting.dead_money
         payouts = [0] * self.players
         ranks: list[HandRank | None] = [None] * self.players
         pots: list[PotAward] = []
@@ -445,8 +456,9 @@ class TableHand:
             winner = self.betting.winner
             if winner is None:
                 raise AssertionError("folded hand must have a winner")
-            payouts[winner] = sum(contributions)
-            pots.append(PotAward(sum(contributions), (winner,), (winner,)))
+            total = sum(contributions) + dead_money
+            payouts[winner] = total
+            pots.append(PotAward(total, (winner,), (winner,)))
             winners: tuple[int, ...] = (winner,)
             ended_by_fold = True
         else:
@@ -464,6 +476,8 @@ class TableHand:
                     top = max(contributions[index] for index in live)
                     eligible = [index for index in live if contributions[index] == top]
                 key = tuple(sorted(eligible))
+                if not layers:
+                    amount += dead_money
                 if layers and layers[-1][1] == key:
                     layers[-1] = (layers[-1][0] + amount, key)
                 else:
@@ -485,7 +499,7 @@ class TableHand:
         final_stacks = tuple(state.stack + payouts[index] for index, state in enumerate(seats))
         if sum(final_stacks) != sum(self.initial_stacks):
             raise AssertionError("chip conservation violated")
-        if sum(payouts) != sum(contributions):
+        if sum(payouts) != sum(contributions) + dead_money:
             raise AssertionError("payouts do not match the pot")
         self.result = TableResult(
             payouts=tuple(payouts),

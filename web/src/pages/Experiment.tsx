@@ -1,12 +1,89 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { api, ApiError, type ExperimentDetail, type Session } from "../api";
+import {
+  api,
+  ApiError,
+  type ExperimentDetail,
+  type Interval,
+  type Session,
+  type TournamentSummary,
+} from "../api";
 import { Card, Counts, LoadState, Page, ShortId, StatusBadge } from "../components";
-import { useI18n } from "../i18n";
+import { useI18n, type MessageKey } from "../i18n";
 import { useLiveData } from "../live";
 import { canOperate, KindLabel } from "./Experiments";
 import { MatrixHeatmap } from "./Matrix";
+
+function TournamentResults({ summary }: { summary: TournamentSummary }) {
+  const { t, formatNumber } = useI18n();
+  const money = (value: number) => formatNumber(value, 3);
+  const percent = (value: number) => `${formatNumber(value * 100, 1)}%`;
+  const rows: [string, Interval, (value: number) => string][] = [
+    [t("tournament.roi"), summary.roi, percent],
+    [t("tournament.totalEv"), summary.total_ev, money],
+    [t("tournament.prizeEv"), summary.prize_ev, money],
+    [t("tournament.bountyEv"), summary.bounty_ev, money],
+    [t("tournament.itm"), summary.itm, percent],
+    [t("tournament.averagePlace"), summary.average_place, (value) => formatNumber(value, 2)],
+  ];
+  const maxShare = Math.max(0.01, ...summary.place_share);
+  return (
+    <>
+      <p className="muted small">
+        {t("tournament.setup", {
+          candidate: t(`bot.${summary.candidate}` as MessageKey),
+          opponents: t(`field.${summary.opponents}` as MessageKey),
+          stack: summary.starting_stack_bb,
+          payout: summary.payout.map((share) => `${Math.round(share * 100)}%`).join(" / "),
+          tournaments: formatNumber(summary.tournaments),
+          hands: formatNumber(summary.average_hands, 1),
+        })}
+      </p>
+      <table className="metrics">
+        <thead>
+          <tr>
+            <th />
+            <th>{t("tournament.mean")}</th>
+            <th>{t("tournament.interval")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, interval, format]) => {
+            const significant = interval.low > 0 || interval.high < 0;
+            return (
+              <tr key={label}>
+                <th>{label}</th>
+                <td className={significant ? (interval.mean > 0 ? "positive-text" : "negative-text") : ""}>
+                  {format(interval.mean)}
+                </td>
+                <td className="muted small">
+                  {format(interval.low)} – {format(interval.high)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="muted small">{t("tournament.moneyNote")}</p>
+      <h3>{t("tournament.places")}</h3>
+      <div className="bars">
+        {summary.place_share.map((share, index) => (
+          <div key={index} className="bar-row">
+            <span className="bar-label">{t("tournament.place", { place: index + 1 })}</span>
+            <span className="bar-track plain">
+              <span
+                className={`bar ${index < summary.payout.filter((value) => value > 0).length ? "positive" : "neutral"}`}
+                style={{ width: `${(share / maxShare) * 100}%` }}
+              />
+            </span>
+            <span className="bar-value">{percent(share)}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
 
 function Results({ results, players }: { results: NonNullable<ExperimentDetail["results"]>; players: number }) {
   const { t, formatNumber } = useI18n();
@@ -123,6 +200,11 @@ export function ExperimentPage({ session }: { session: Session }) {
               <pre className="config">{JSON.stringify(data.config, null, 2)}</pre>
             </Card>
           </div>
+          {data.tournament ? (
+            <Card title={t("tournament.title")}>
+              <TournamentResults summary={data.tournament} />
+            </Card>
+          ) : null}
           {data.results ? (
             <Card title={t("experiment.results")}>
               <Results results={data.results} players={data.players} />

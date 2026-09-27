@@ -107,10 +107,14 @@ uv run tableforge ui
 |---|---|---|
 | `hu-rule-smoke` | Rule Bot 對戰 1,000 手，確認流程 | 數秒 |
 | `6max-rule-smoke` | 6 人桌 Rule Bot 對戰 1,200 手 | 數秒 |
+| `6max-sng-10bb` | 6 人錦標賽 benchmark，起始 10 BB，獎金 65/35；3,000 場 | 約 30 秒 |
+| `6max-sng-10bb-top3` | 同上，獎金 50/30/20 | 約 30 秒 |
 | `hu-nfsp-gpu-iterative` | NFSP 3 輪，Learner 用 GPU | 約 6 分鐘 |
 | `hu-nfsp-cpu-league` | League 4 輪，最後產生對戰矩陣 | 約 1 分鐘 |
 
 目前模型仍在改進中，小型 preset 只能確認流程正常，不能用來判斷模型強弱。
+
+錦標賽 benchmark 的結果以 buy-in 為單位：ROI、Total EV（總盈虧）、Prize EV（名次獎金）、Bounty EV（賞金，PKO 才有）、ITM（拿到獎金的比例）、平均名次與各名次比例，都附 95% 信賴區間。另有 25 BB、50 BB 版本（`6max-sng-25bb`、`6max-sng-50bb` 與各自的 `-top3`）。
 
 ## 6. 給只用瀏覽器的人（選用）
 

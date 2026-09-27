@@ -29,6 +29,7 @@ from tableforge.domain.learning import (
     NfspTrainingPayload,
 )
 from tableforge.domain.simulation import SimulationJobPayload
+from tableforge.domain.tournament import TOURNAMENT_PAYLOAD_TYPE, TournamentJobPayload
 
 _TERMINAL = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
 
@@ -83,6 +84,8 @@ class ExperimentService:
             self._create_training_job(experiment)
         elif experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
             self._orchestrator()
+        elif experiment.config.kind is ExperimentKind.TOURNAMENT_BENCHMARK:
+            self._create_tournament_jobs(experiment)
         else:
             self._create_simulation_jobs(experiment)
         running = self.experiments.update_status(
@@ -118,6 +121,70 @@ class ExperimentService:
                     idempotency_key=self._key(experiment, f"segment:{segment}"),
                 )
             )
+
+    def _create_tournament_jobs(self, experiment: Experiment) -> None:
+        profile = _profile(TOURNAMENT_PAYLOAD_TYPE)
+        config = experiment.config
+        for segment, seed_offset in enumerate(range(0, config.hands, config.hands_per_job)):
+            seeds = min(config.hands_per_job, config.hands - seed_offset)
+            self.coordinator.create_job(
+                JobSpec(
+                    schema_version="1.0",
+                    job_id=new_job_id(),
+                    experiment_id=experiment.experiment_id,
+                    type=JobType.EVALUATION,
+                    priority=1,
+                    resources=profile.minimum,
+                    payload=TournamentJobPayload(
+                        "1.0",
+                        config.tournament_json,
+                        seeds,
+                        config.seed_start + seed_offset,
+                        config.candidate,
+                        config.opponents,
+                    ).to_bytes(),
+                    payload_type=profile.payload_type,
+                    idempotency_key=self._key(experiment, f"tournament:{segment}"),
+                )
+            )
+
+    def tournament_result(self, experiment_id: ExperimentId) -> dict[str, object] | None:
+        """Merge the samples of every finished tournament job into one benchmark summary."""
+        experiment = self.experiments.get(experiment_id)
+        if experiment.config.kind is not ExperimentKind.TOURNAMENT_BENCHMARK:
+            return None
+        from tableforge.poker.tournament import TournamentConfig
+        from tableforge.poker.tournament_benchmark import TournamentBenchmark, TournamentSamples
+
+        config = TournamentConfig.from_json(experiment.config.tournament_json)
+        merged = TournamentSamples(players=config.players, buy_in=config.buy_in)
+        finished = 0
+        for job in self.coordinator.jobs.list_jobs(experiment_id):
+            if job.spec.payload_type != TOURNAMENT_PAYLOAD_TYPE:
+                continue
+            if job.status is not JobStatus.SUCCEEDED:
+                continue
+            outputs = self.coordinator.job_outputs(job.spec.job_id)
+            if not outputs:
+                continue
+            content = self.coordinator.read_artifact(
+                str(outputs[0].artifact.descriptor.artifact_id)
+            )
+            merged = merged.merge(TournamentSamples.from_json(content))
+            finished += 1
+        if finished == 0:
+            return None
+        summary = TournamentBenchmark.from_samples(merged, config.name).summary()
+        summary.update(
+            {
+                "candidate": experiment.config.candidate,
+                "opponents": experiment.config.opponents,
+                "starting_stack_bb": config.starting_stack_bb,
+                "payout": list(config.payout),
+                "jobs_finished": finished,
+            }
+        )
+        return summary
 
     def _create_training_job(self, experiment: Experiment) -> None:
         profile = _profile(TRAINING_PAYLOAD_TYPE, "hu-nfsp-cpu-smoke")

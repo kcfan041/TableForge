@@ -1092,8 +1092,22 @@ def _local_worker(service: CoordinatorClient, settings: Settings) -> WorkerRunti
         lease_duration=lease_duration,
         simulation_executor=SimulationExecutor(),
         renew_margin=min(timedelta(seconds=30), lease_duration / 2),
-        extra_executors=_learning_executors(service),
+        extra_executors={**_rule_executors(), **_learning_executors(service)},
     )
+
+
+def _rule_executors() -> dict[str, RegisteredExecutor]:
+    from tableforge.domain.tournament import TOURNAMENT_PAYLOAD_TYPE
+    from tableforge.worker.runtime import OutputSpec
+    from tableforge.worker.tournament import TournamentExecutor
+
+    executor = TournamentExecutor()
+    return {
+        TOURNAMENT_PAYLOAD_TYPE: RegisteredExecutor(
+            executor,
+            OutputSpec(executor.output_kind, executor.output_media_type, executor.output_schema),
+        )
+    }
 
 
 def run_doctor(data_path: Path, as_json: bool) -> int:

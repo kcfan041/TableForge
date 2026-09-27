@@ -17,6 +17,14 @@ export function KindLabel({ kind }: { kind: string }) {
 }
 
 function presetInfo(preset: Preset, t: ReturnType<typeof useI18n>["t"], format: (n: number) => string) {
+  if (preset.kind === "tournament_benchmark") {
+    return t("experiments.presetTournament", {
+      seeds: format(preset.hands),
+      tournaments: format(preset.hands * preset.players),
+      players: preset.players,
+      stack: preset.starting_stack_bb ?? 0,
+    });
+  }
   let text = t("experiments.presetInfo", {
     hands: format(preset.hands),
     perJob: format(preset.hands_per_job),
@@ -25,6 +33,7 @@ function presetInfo(preset: Preset, t: ReturnType<typeof useI18n>["t"], format: 
   if (preset.rounds) text += t("experiments.presetRounds", { rounds: preset.rounds });
   if (preset.league) text += t("experiments.presetLeague");
   if (preset.learner_runtime === "cuda") text += t("experiments.presetGpu");
+  if (preset.observation_schema === "poker-hunlhe-vector-v2") text += t("experiments.presetV2");
   return text;
 }
 

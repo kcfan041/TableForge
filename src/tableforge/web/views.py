@@ -171,6 +171,8 @@ class ClusterViews:
                 "rounds": preset.rounds,
                 "league": preset.league,
                 "learner_runtime": preset.learner_runtime,
+                "observation_schema": preset.observation_schema,
+                "starting_stack_bb": _stack_bb(preset.tournament_json),
             }
             for preset in BUILTIN_PRESETS
         ]
@@ -405,6 +407,9 @@ class ClusterViews:
                 experiment.experiment_id
             )
             view["results"] = self._simulation_results(jobs)
+            view["tournament"] = self.services.experiments.tournament_result(
+                experiment.experiment_id
+            )
         return view
 
     def _simulation_results(self, jobs: Any) -> dict[str, object] | None:
@@ -438,6 +443,12 @@ class ClusterViews:
 
 def _iso(value: datetime) -> str:
     return value.isoformat()
+
+
+def _stack_bb(tournament_json: str) -> float | None:
+    if not tournament_json:
+        return None
+    return float(json.loads(tournament_json)["starting_stack_bb"])
 
 
 def _int(value: str, default: int) -> int:
