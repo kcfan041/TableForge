@@ -29,8 +29,26 @@ from tableforge.learning.bundle import (
     unpack_entries,
 )
 from tableforge.learning.encoders import DEFAULT_SCHEMA, Encoder, encoder
+from tableforge.learning.encoding_v2 import TournamentContext
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.observation import Observation
+from tableforge.poker.table import TableObservation
+from tableforge.poker.tournament import TournamentHandInfo
+
+
+def tournament_context(info: TournamentHandInfo) -> TournamentContext:
+    """What the v2 encoder's tournament fields need; bounties are relative to the start."""
+    scale = info.starting_bounty if info.starting_bounty > 0 else 1.0
+    return TournamentContext(
+        starting_stack=info.starting_stack,
+        level=info.level,
+        hands_to_next_level=info.hands_to_next_level,
+        hands_per_level=info.hands_per_level,
+        players_left=info.players_left,
+        ante=info.ante,
+        payout=info.payout,
+        bounties=tuple(value / scale for value in info.bounties),
+    )
 
 MASKED = -1e9
 
@@ -49,6 +67,9 @@ class NfspConfig:
     big_blind: int = 2
     seed: int = 0
     observation_schema: str = DEFAULT_SCHEMA
+    double_q: bool = False
+    """Double DQN targets: the online network picks the next action, the target network
+    values it. Reduces the overestimation that builds up over long episodes."""
     reward_scale: float = 1.0
     """Rewards (in big blinds) are divided by this before Q learning.
 
@@ -101,15 +122,33 @@ class NfspAgent:
         self.batch_size = config.batch_size
         self.last_choice: AbstractAction | None = None
         self.policy_sink: Callable[[PolicySample], None] | None = None
+        self.hand_info: TournamentHandInfo | None = None
+        self.last_state: tuple[tuple[float, ...], tuple[bool, ...]] | None = None
+        """Encoded state and legal mask of the last decision."""
 
     def start_hand(self) -> None:
         self.best_response_mode = self.training and self.rng.random() < self.config.anticipatory
 
-    def act(self, observation: Observation, legal: LegalActions) -> Action:
-        state = self.encoder.encode(observation, self.config.big_blind)
+    def begin_hand(self, info: TournamentHandInfo) -> None:
+        """Tournament hook (`TournamentAware`): blinds and tournament state of this hand."""
+        if not self.encoder.supports_tables:
+            raise ValueError(f"{self.encoder.schema} cannot play tournaments")
+        self.hand_info = info
+
+    def encode(self, observation: Observation | TableObservation) -> list[float]:
+        info = self.hand_info
+        if info is None:
+            return self.encoder.encode(observation, self.config.big_blind)
+        return self.encoder.encode(
+            observation, info.big_blind, info.small_blind, tournament_context(info)
+        )
+
+    def act(self, observation: Observation | TableObservation, legal: LegalActions) -> Action:
+        state = self.encode(observation)
         mask = self.translator.legal_mask(legal)
         choice = self.choose(state, mask)
         self.last_choice = choice
+        self.last_state = (tuple(state), mask)
         if self.training and self.best_response_mode:
             sample = PolicySample(tuple(state), mask, int(choice))
             if self.policy_sink is not None:
@@ -176,7 +215,12 @@ class NfspAgent:
             device=device,
         )
         with torch.no_grad():
-            next_values = _masked(self.target_network(next_states), next_masks).max(dim=1).values
+            target_values = _masked(self.target_network(next_states), next_masks)
+            if self.config.double_q:
+                chosen = _masked(self.q_network(next_states), next_masks).argmax(dim=1)
+                next_values = target_values.gather(1, chosen.unsqueeze(1)).squeeze(1)
+            else:
+                next_values = target_values.max(dim=1).values
             targets = rewards + self.config.gamma * next_values.masked_fill(done, 0.0)
         predicted = self.q_network(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         loss = nn.functional.smooth_l1_loss(predicted, targets)
@@ -344,6 +388,7 @@ def _config_from_manifest(manifest: dict[str, Any]) -> NfspConfig:
     config = dict(manifest["config"])
     config.setdefault("observation_schema", DEFAULT_SCHEMA)
     config.setdefault("reward_scale", 1.0)
+    config.setdefault("double_q", False)
     if manifest.get("observation_schema", DEFAULT_SCHEMA) != config["observation_schema"]:
         raise ValueError("checkpoint observation schema does not match its config")
     encoder(config["observation_schema"])

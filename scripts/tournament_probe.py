@@ -1,0 +1,118 @@
+"""T3 probe: NFSP on 6-max PKO tournaments, benchmarked against a mixed rule-bot field.
+
+uv run python scripts/tournament_probe.py --tournaments 20000 --checkpoints 4 --seeds 300
+
+Prints one JSON line per checkpoint with the tournament benchmark of the average policy
+(ROI, Prize EV, Bounty EV, ITM with 95% intervals). Baselines on the same benchmark:
+`HeuristicPushFoldBot` ROI -10.5%, `hunter` -7.3% (10 BB PKO, 65/35).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+
+import torch
+
+from tableforge.learning.nfsp import NfspAgent, NfspConfig
+from tableforge.learning.tournament_training import (
+    FrozenTournamentPlayer,
+    tournament_self_play_train,
+)
+from tableforge.poker.tournament import BountyConfig, preset_config
+from tableforge.poker.tournament_benchmark import evaluate_tournament
+from tableforge.worker.tournament import field_factory
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tournaments", type=int, default=20_000)
+    parser.add_argument("--checkpoints", type=int, default=4)
+    parser.add_argument("--seeds", type=int, default=300, help="benchmark seeds (x6 seats)")
+    parser.add_argument("--stack-bb", type=float, default=10)
+    parser.add_argument("--no-pko", action="store_true")
+    parser.add_argument("--hidden", type=int, default=128)
+    parser.add_argument("--batch", type=int, default=128)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--train-every", type=int, default=1, help="hands per train step")
+    parser.add_argument("--anticipatory", type=float, default=0.1)
+    parser.add_argument("--epsilon", type=float, default=0.06)
+    parser.add_argument("--target-update", type=int, default=200)
+    parser.add_argument("--reward-scale", type=float, default=1.0)
+    parser.add_argument("--self-play", type=float, default=0.5)
+    parser.add_argument("--double-q", action="store_true")
+    parser.add_argument("--hand-horizon", action="store_true")
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--tag", default="")
+    args = parser.parse_args()
+    if args.threads:
+        torch.set_num_threads(args.threads)
+    config = preset_config(args.stack_bb, bounty=None if args.no_pko else BountyConfig())
+    agent = NfspAgent(
+        NfspConfig(
+            hidden_size=args.hidden,
+            batch_size=args.batch,
+            learning_rate=args.lr,
+            anticipatory=args.anticipatory,
+            epsilon=args.epsilon,
+            target_update_steps=args.target_update,
+            reward_scale=args.reward_scale,
+            double_q=args.double_q,
+            seed=args.seed,
+            observation_schema="poker-hunlhe-vector-v2",
+        )
+    )
+    per_stage = args.tournaments // args.checkpoints
+    trained = 0
+    hands = 0
+    started = time.perf_counter()
+    for stage in range(args.checkpoints + 1):
+        losses: dict[str, float] = {}
+        if stage:
+            report = tournament_self_play_train(
+                agent,
+                config,
+                per_stage,
+                seed_start=args.seed * 10_000_000 + trained,
+                train_every_hands=args.train_every,
+                self_play_share=args.self_play,
+                hand_horizon=args.hand_horizon,
+            )
+            trained += per_stage
+            hands += report.hands
+            losses = report.last_metrics
+        frozen = NfspAgent.from_bundle(agent.to_bundle(), inference_only=True)
+        benchmark = evaluate_tournament(
+            lambda frozen=frozen: FrozenTournamentPlayer(frozen),
+            field_factory("mixed"),
+            config,
+            seeds=args.seeds,
+            seed_start=900_000_000,
+        ).summary()
+        print(
+            json.dumps(
+                {
+                    "tag": args.tag,
+                    "seed": args.seed,
+                    "tournaments": trained,
+                    "hands": hands,
+                    "elapsed_s": round(time.perf_counter() - started),
+                    "train_steps": agent.train_steps,
+                    "losses": {key: round(value, 5) for key, value in losses.items()},
+                    "benchmark": {
+                        key: benchmark[key]
+                        for key in ("roi", "prize_ev", "bounty_ev", "itm", "average_place")
+                    },
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

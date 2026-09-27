@@ -21,22 +21,37 @@ AnyObservation = Observation | TableObservation
 class Encoder:
     schema: str
     feature_size: int
-    encode: Callable[[AnyObservation, int], list[float]]
+    encode: Callable[..., list[float]]
+    """``encode(observation, big_blind, small_blind=None, tournament=None)``."""
+    supports_tables: bool = False
 
 
-def _v1(observation: AnyObservation, big_blind: int) -> list[float]:
+def _v1(
+    observation: AnyObservation,
+    big_blind: int,
+    small_blind: int | None = None,
+    tournament: v2.TournamentContext | None = None,
+) -> list[float]:
+    del small_blind
     if not isinstance(observation, Observation):
         raise ValueError(f"{v1.SCHEMA} only encodes heads-up observations")
+    if tournament is not None:
+        raise ValueError(f"{v1.SCHEMA} has no tournament fields")
     return v1.encode(observation, big_blind)
 
 
-def _v2(observation: AnyObservation, big_blind: int) -> list[float]:
-    return v2.encode(observation, big_blind)
+def _v2(
+    observation: AnyObservation,
+    big_blind: int,
+    small_blind: int | None = None,
+    tournament: v2.TournamentContext | None = None,
+) -> list[float]:
+    return v2.encode(observation, big_blind, small_blind, tournament)
 
 
 ENCODERS: dict[str, Encoder] = {
     v1.SCHEMA: Encoder(v1.SCHEMA, v1.FEATURE_SIZE, _v1),
-    v2.SCHEMA: Encoder(v2.SCHEMA, v2.FEATURE_SIZE, _v2),
+    v2.SCHEMA: Encoder(v2.SCHEMA, v2.FEATURE_SIZE, _v2, supports_tables=True),
 }
 DEFAULT_SCHEMA = v1.SCHEMA
 LATEST_SCHEMA = v2.SCHEMA

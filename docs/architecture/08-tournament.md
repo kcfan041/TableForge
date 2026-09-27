@@ -205,15 +205,23 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 
 ## 6. 錦標賽上的學習（T3）
 
-開始前再討論，至少包含：
+### 6.1 已決定（2026-09 與使用者討論）
 
-- 6 人輸入與網路架構（沿用 v2）。
-- 獎勵：以整場最終結果為主；是否使用 ICM／bounty 權益做 potential-based shaping。
-- 演算法：NFSP 在多人遊戲沒有收斂到均衡的保證，可能需要改用其他方法（例如 PPO 自我對打加 league）。
-- 對手池：Rule Bot、`HeuristicPushFoldBot`、歷史 checkpoint。
+| 項目 | 決定 |
+|---|---|
+| 演算法 | 第一版擴充現有 NFSP（沿用 checkpoint、Actor/Learner、升級判定、訓練曲線）；以錦標賽 benchmark 判斷，卡住再換 PPO 自我對打加 league |
+| 輸入 | v2（406 維），錦標賽欄位由每手的 `TournamentHandInfo` 填入：盲注、ante、等級、剩餘人數、payout 向量、各座位 bounty（以起始 bounty 為 1） |
+| 獎勵 | 每手結束時給「權益變化」：權益 = 剩餘獎金的 ICM 份額 + 已拿到的 bounty 現金（`Tournament.equity`）。一個座位的獎勵加總 = 最終名次獎金 + bounty 現金 − 起始權益，也就是最終結果加一個常數（potential-based shaping，不改變最佳策略） |
+| 跨手 | 預設同一座位的決策跨手連接，只有被淘汰或錦標賽結束才是終點；也可選擇每手結束（`hand_horizon`）。第一輪探測中每手結束明顯較穩定（見 status.md） |
+| 第一個賽制 | 10 BB PKO（65/35，50% bounty、50% 現金） |
+| 對手 | 學習者固定一個座位（依 seed 輪換），其他 5 個座位各有一半機率是模型自己（自我對打），否則從 random、call、tight、aggro、pushfold、hunter 抽一個 |
+| 驗收 | 對混合 Rule Bot 至少 3,000 場（500 seed × 6 座位），ROI 95% 信賴區間下限 > 0，且高於同條件的 `hunter`（−7.3%）與 `HeuristicPushFoldBot`（−10.5%）；換 seed 重跑也成立 |
+
+### 6.2 未納入第一版
+- 其他人頭上尚未收到的 bounty 不算進權益（只有收到才算），避免重複計算。
+- 25/50 BB 與一般錦標賽在 10 BB PKO 有結果後再做。
+- 分散式錦標賽訓練（Actor/Learner Job）與 UI preset 在單機探測有正向結果後再接上。
 
 ## 7. 尚未決定
 
-- T3 使用的演算法與獎勵設計。
-- T3 模型的正式驗收門檻（ROI 需顯著大於 0 的對手組合與場數）；Rule Bot 的變異已在 T1 量測（見 4.7）。
 - 多桌、併桌、late registration 的規則與時程。

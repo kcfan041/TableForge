@@ -351,6 +351,12 @@ class Tournament:
                 records.append(record)
             if self.hand_number > MAX_HANDS:
                 raise RuntimeError(f"tournament did not finish within {MAX_HANDS} hands")
+        return self.finish(tuple(records))
+
+    def finish(self, records: tuple[HandRecord, ...] = ()) -> TournamentResult:
+        """Place the last player standing and return the result (after the final hand)."""
+        if not self.complete:
+            raise AssertionError("tournament is not over yet")
         winner = self.alive[0]
         self.places[winner] = 1
         self.prizes[winner] = self.config.payout_for_place(1)
@@ -360,6 +366,29 @@ class Tournament:
             self.heads[winner] = 0.0
         self.elimination_order.append((winner,))
         return self.result(tuple(records))
+
+    def equity(self, player: int) -> float:
+        """Money this player can expect from here, in buy-ins, for reward shaping.
+
+        Busted players get their prize. Players still in get their ICM share of the
+        remaining prizes, plus bounty cash already collected, plus the bounty on their own
+        head when the winner keeps it and they are the last player left. Other bounties
+        still in play are not valued (they are worth something only when won). The value
+        at the end of the tournament is exactly the player's prize plus bounty cash.
+        """
+        cash = self.bounty_cash[player]
+        if self.stacks[player] == 0:
+            return self.prizes[player] + cash
+        alive = self.alive
+        if len(alive) == 1:
+            own = self.heads[player]
+            bounty = self.config.bounty
+            keeps = bounty is not None and bounty.winner_keeps_own
+            return self.config.payout_for_place(1) + cash + (own if keeps else 0.0)
+        shares = icm_equities(
+            [self.stacks[other] for other in alive], self._remaining_prizes(len(alive))
+        )
+        return shares[alive.index(player)] + cash
 
     def play_hand(
         self, agents: Sequence[TableAgent], runner: TableRunner, record: bool = False

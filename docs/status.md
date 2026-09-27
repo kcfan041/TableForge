@@ -44,9 +44,9 @@
 | P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 進行中 | 找到獎勵縮放問題並修正；已穩定贏 3 種，tight 約打平 |
 | T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 已完成 | `1e603f9`；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
-| T3 | 錦標賽上的學習 | 未開始 | T2 之後，開始前再討論演算法與獎勵 |
+| T3 | 錦標賽上的學習 | 進行中 | 設計已定案；訓練迴圈完成，第一輪探測尚未贏過基準 |
 
-目前測試：511 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：518 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -438,6 +438,33 @@
   - 實際在 `tableforge ui` 跑 `6max-pko-10bb-hunter`：3 個 Worker 15 秒完成 3,000 場，截圖確認結果卡片。
 - **尚未做**：同時淘汰多人時，bounty 各自依所在的 pot 計算；「只能收自己蓋得過的人」以 pot 資格自然滿足，不另外設定。T3 開始前需要決定 v2 輸入的 bounty 欄位怎麼填（目前錦標賽環境已提供資料）。
 
+### T3 錦標賽上的學習（進行中）
+設計見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 6 節（NFSP、ICM 權益變化加 bounty 現金當獎勵、10 BB PKO、一半自我對打、驗收：ROI 顯著 > 0 且贏過基準）。
+- **實作**：
+  - `Tournament.equity(player)`：剩餘獎金的 ICM 份額 + 已拿到的 bounty 現金；結束時剛好等於名次獎金 + bounty 現金。`Tournament.finish()` 從 `run` 拆出，訓練迴圈可以一手一手打。
+  - `NfspAgent` 可以打錦標賽：`begin_hand` 收到每手的盲注與錦標賽狀態，v2 輸入的錦標賽欄位（盲注、ante、等級、剩餘人數、payout、各座位 bounty）因此有值；以當手 BB 計算金額。v1 模型不能打錦標賽。
+  - `learning/tournament_training.py`：學習者固定一個座位（依 seed 輪換），其他座位各 50% 是自己、否則從 6 種 Rule Bot 抽；每手結束給權益變化；可選擇決策跨手連接（預設）或每手結束（`hand_horizon`）。
+  - `NfspConfig.double_q`：Double DQN 目標（預設關閉，舊模型不變）。
+  - `scripts/tournament_probe.py`：單機訓練，每隔一段場數對混合 Rule Bot 跑錦標賽 benchmark。
+  - 測試 7 個：起始權益 = 公平份額；25 組隨機錦標賽（有無 PKO、3 種起始籌碼、3 種自我對打比例）中**每個學習座位的獎勵加總 = 最終結果 − 起始權益**；錦標賽欄位確實有值；`hand_horizon` 與 Double DQN；v1 被拒絕；訓練後的模型能跑 benchmark。
+- **第一輪探測**（10 BB PKO、hidden 128、每手訓練一次、每個設定 2 個 seed、每次評估 3,000 場）：
+
+  | 設定 | 場數 | ROI | Q loss |
+  |---|---|---|---|
+  | 未訓練 | 0 | −7% 至 −13% | |
+  | 跨手連接（預設） | 1 萬 | −16% 至 −17% | 22–28 |
+  | 跨手連接、學習率 3e-4 | 1 萬 | −26% 至 −27% | 約 1 |
+  | 跨手連接、獎勵 ÷ 0.3 | 1 萬 | −11% 至 −13% | 16–29 |
+  | Double DQN、獎勵 ÷ 0.3 | 3,000 | −10% 至 −16% | 2–3 |
+  | 每手結束、獎勵 ÷ 0.3 | 6,000 | −11% | 約 0.6 |
+  | 每手結束 + Double DQN、獎勵 ÷ 0.3 | 6,000 | **−7% 至 −8%** | 約 0.5 |
+
+  - 決策跨手連接時 Q 值不穩定（loss 一直很高），訓練反而讓模型變差。
+  - 改成每手結束後穩定得多。因為 ICM 權益本身就是「之後能拿多少錢」的估計，每手結束等於「以 ICM 為準選擇這手最好的打法」，是 SNG 常見的做法。
+  - **最佳回應（Q 網路本身）比平均策略好**：同一個模型（每手結束 + Double DQN，3,000 場訓練），Q 網路 ROI −0.3%（−8.1% 至 +7.6%），平均策略 −7.2%。NFSP 的平均策略學得比最佳回應慢。
+  - 同一批評估 seed 的 Rule Bot：aggro **+9.6%**（顯著）、call −2.9%、tight −1.7%、`hunter` −3.8%、`HeuristicPushFoldBot` −6.8%、random −35%。這個對手組合對積極打法有利，模型還沒學到。
+- **下一步**：以「每手結束 + Double DQN」為基礎，拉長訓練（2 萬場以上），並測試平均策略學習率與 anticipatory（讓平均策略跟上最佳回應）；同時保留一個以 Q 網路直接出手的評估，作為參考上限。
+
 ### P1-b0 訓練用的 UI
 讓 P1-b 的調參可以在 `tableforge ui` 的「實驗」頁完成，不需要寫腳本。
 - **每輪 Rule Bot benchmark**：新增實驗設定 `benchmark_deals`。大於 0 時，每一輪的升級判定 Job 會讓新模型對 4 種 Rule Bot 各打 `benchmark_deals` 局（每局兩手、交換座位）。`benchmark_deals` 為 0 的舊實驗 payload 完全不變，已存在的實驗不受影響。
@@ -555,6 +582,17 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 - 每個 seed 都顯著贏 random、call、aggro；對 tight 從 −250 至 −350 進步到約打平（−130 至 +93，大多不顯著）。Q loss 從 20–35 降到約 0.04。
 - 把縮放與「每手訓練、較低學習率」合併（F）反而較慢，暫不採用。
 - 目標網路更新間隔與 anticipatory 在這個範圍內沒有明顯差別。
+
+**第四批：50 萬手，一般 buffer 與 4 倍 buffer（RL 20 萬、SL 40 萬）**
+
+| 設定 | random | call | tight | aggro | 顯著贏 |
+|---|---|---|---|---|---|
+| K 預設 buffer | +438 | +411 | −54 | +716 | 9/12 |
+| L 4 倍 buffer | +471 | +425 | **+49** | +777 | 10/12 |
+
+- 較大的 buffer 讓對 tight 由負轉正：L 的 seed 3 在 37.5 萬與 50 萬手都**顯著贏 tight**（+209、+175），其他兩個 seed 在 −62 至 +99 之間。
+- 訓練 50 萬手之後就沒有再明顯進步，瓶頸不是訓練長度。
+- 第五批（100 萬手，buffer 4 倍與 10 倍，對每個 Bot 評估 4,000 局 = 8,000 手）進行中。
 
 **下一步**：tight 只在翻牌前用強牌加注或跟注、翻牌後一律過牌或跟注，需要學會對它加注價值、少詐唬。接著試：更長訓練（50 萬手）、跨輪保留 RL buffer、對 tight 的評估加到 4,000 手以上（驗收標準）；若仍打平，再檢查動作抽象（目前加注只有半池、滿池、all-in）。
 

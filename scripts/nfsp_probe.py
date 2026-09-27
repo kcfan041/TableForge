@@ -26,6 +26,8 @@ def main() -> None:
     parser.add_argument("--target-update", type=int, default=200)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--reward-scale", type=float, default=1.0)
+    parser.add_argument("--rl-capacity", type=int, default=50_000)
+    parser.add_argument("--sl-capacity", type=int, default=100_000)
     parser.add_argument("--tag", default="")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=1)
@@ -47,6 +49,8 @@ def main() -> None:
             epsilon=args.epsilon,
             target_update_steps=args.target_update,
             reward_scale=args.reward_scale,
+            rl_capacity=args.rl_capacity,
+            sl_capacity=args.sl_capacity,
             seed=args.seed,
             observation_schema=args.schema,
         ),
