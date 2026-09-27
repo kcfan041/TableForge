@@ -223,6 +223,7 @@ class IterativeNfspOrchestrator:
                     anticipatory=experiment.config.anticipatory,
                     epsilon=experiment.config.epsilon,
                     target_update_steps=experiment.config.target_update_steps,
+                    reward_scale=experiment.config.reward_scale,
                 ).to_bytes(),
             )
             return False

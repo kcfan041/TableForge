@@ -47,6 +47,7 @@ const SETTING_ORDER = [
   "batch_size",
   "learning_rate",
   "target_update_steps",
+  "reward_scale",
   "anticipatory",
   "epsilon",
   "benchmark_deals",

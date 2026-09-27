@@ -196,6 +196,13 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 
 驗收：bounty 守恆（收到的 bounty 總和 + 剩餘 bounty = 所有人投入的 bounty）的性質測試、Bounty EV 指標、PKO preset（例如 `6max-pko-10bb`）。
 
+實作（T2，已完成）：
+- 設定：`TournamentConfig.bounty = BountyConfig(bounty_share, cash_share, winner_keeps_own)`，預設 0.5、0.5、是。沒有 `bounty` 的設定 JSON 與 T1 完全相同。
+- 誰收 bounty：被淘汰者**有資格爭奪的最高那個 pot** 的贏家。這個 pot 的其他參與者投入的籌碼都不少於被淘汰者，所以贏家一定蓋得過他；平分 pot 時平分 bounty；對手蓋牌時由沒蓋牌的人收。
+- 每手可以看到每個座位頭上的 bounty（`TournamentHandInfo.bounties`，以及 `starting_bounty`），給 v2 輸入的 bounty 欄位與規則 bot 使用。
+- 每手記錄 `bounties_before`、`bounties_after` 與 `knockouts`（被淘汰者、收取者、現金、加到頭上的金額），與 ICM 分開。
+- 參考對手：`HeuristicPushFoldBot(bounty_weight=1.5)`（worker 名稱 `hunter`）：跟注別人的全下時，若自己蓋得過對方，依對方 bounty 相對起始 bounty 的倍數放寬門檻。
+
 ## 6. 錦標賽上的學習（T3）
 
 開始前再討論，至少包含：

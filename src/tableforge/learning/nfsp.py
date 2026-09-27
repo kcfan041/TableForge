@@ -49,6 +49,14 @@ class NfspConfig:
     big_blind: int = 2
     seed: int = 0
     observation_schema: str = DEFAULT_SCHEMA
+    reward_scale: float = 1.0
+    """Rewards (in big blinds) are divided by this before Q learning.
+
+    The Huber loss is linear for errors above 1, which makes Q estimate something close to
+    the median return instead of the mean when rewards are tens of big blinds. Scaling by
+    the stack depth (e.g. 100) keeps errors in the quadratic range. Actions are unchanged
+    because every Q value is scaled the same way.
+    """
 
 
 def _network(inputs: int, hidden: int) -> nn.Sequential:
@@ -68,6 +76,8 @@ def _masked(logits: Tensor, mask: Tensor) -> Tensor:
 
 class NfspAgent:
     def __init__(self, config: NfspConfig, device: str = "cpu") -> None:
+        if config.reward_scale <= 0:
+            raise ValueError("reward_scale must be positive")
         torch.manual_seed(config.seed)
         self.config = config
         self.device = torch.device(device)
@@ -147,7 +157,11 @@ class NfspAgent:
         device = self.device
         states = torch.tensor([item.state for item in batch], dtype=torch.float32, device=device)
         actions = torch.tensor([item.action for item in batch], dtype=torch.int64, device=device)
-        rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32, device=device)
+        rewards = torch.tensor(
+            [item.reward / self.config.reward_scale for item in batch],
+            dtype=torch.float32,
+            device=device,
+        )
         done = torch.tensor(
             [item.next_state is None for item in batch], dtype=torch.bool, device=device
         )
@@ -329,6 +343,7 @@ def _config_from_manifest(manifest: dict[str, Any]) -> NfspConfig:
     """Rebuild the config; checkpoints from before v2 have no schema field and are v1."""
     config = dict(manifest["config"])
     config.setdefault("observation_schema", DEFAULT_SCHEMA)
+    config.setdefault("reward_scale", 1.0)
     if manifest.get("observation_schema", DEFAULT_SCHEMA) != config["observation_schema"]:
         raise ValueError("checkpoint observation schema does not match its config")
     encoder(config["observation_schema"])

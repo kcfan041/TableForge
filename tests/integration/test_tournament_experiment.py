@@ -56,10 +56,11 @@ def test_samples_from_separate_jobs_merge() -> None:
     assert merged.tournaments == 30
 
 
-def test_tournament_experiment_runs_to_a_merged_summary(tmp_path: Path) -> None:
+@pytest.mark.parametrize("preset", ["6max-sng-10bb", "6max-pko-10bb-hunter"])
+def test_tournament_experiment_runs_to_a_merged_summary(tmp_path: Path, preset: str) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     coordinator, experiments = services(tmp_path)
-    created = experiments.create("6max-sng-10bb", now)
+    created = experiments.create(preset, now)
     experiments.start(created.experiment_id, now)
     jobs = coordinator.jobs.list_jobs(created.experiment_id)
     assert len(jobs) == 10
@@ -87,7 +88,10 @@ def test_tournament_experiment_runs_to_a_merged_summary(tmp_path: Path) -> None:
     assert summary is not None
     assert summary["jobs_finished"] == 2
     assert summary["tournaments"] == 2 * 50 * 6
-    assert summary["candidate"] == "pushfold"
+    pko = "pko" in preset
+    assert summary["candidate"] == ("hunter" if pko else "pushfold")
+    assert (summary["bounty"] is not None) == pko
+    assert (summary["bounty_ev"]["mean"] > 0) == pko  # type: ignore[index]
     assert summary["starting_stack_bb"] == 10
     for key in ("prize_ev", "bounty_ev", "total_ev", "roi", "itm", "average_place"):
         assert set(summary[key]) == {"mean", "low", "high"}  # type: ignore[arg-type]

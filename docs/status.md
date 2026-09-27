@@ -40,13 +40,13 @@
 | U3 | 瀏覽器網頁（給只用瀏覽器的人）預設關閉、由建立者在 UI 開啟；文件改成只介紹 `tableforge ui` | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1-a | v2 輸入：牌力特徵、2–6 人通用、錦標賽欄位 | 已完成 | 本階段；R² 0.48 → 0.87–0.89 |
-| P1-b0 | 訓練用的 UI：訓練曲線（每輪 Rule Bot benchmark）、自訂訓練參數、多 seed 並排 | 已完成 | 本階段 |
-| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 未開始 | 下一步，與 T2 平行 |
+| P1-b0 | 訓練用的 UI：訓練曲線（每輪 Rule Bot benchmark）、自訂訓練參數、多 seed 並排 | 已完成 | `23874ff` |
+| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 進行中 | 找到獎勵縮放問題並修正；已穩定贏 3 種，tight 約打平 |
 | T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 已完成 | `1e603f9`；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
-| T2 | PKO bounty 規則與 bounty 指標 | 未開始 | T1 之後 |
+| T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 未開始 | T2 之後，開始前再討論演算法與獎勵 |
 
-目前測試：498 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：509 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -414,6 +414,21 @@
   - 實際在 `tableforge ui` 建立 `6max-sng-10bb`：10 個 Job、3,000 場約 26 秒完成，`HeuristicPushFoldBot` 對混合 Rule Bot 的 ROI 為 +14.6%（95% 信賴區間 +9.5% 至 +19.8%），ITM 44.3%；並截圖確認錦標賽結果卡片。
 - **尚未做**：PKO bounty（T2）；dead button；多桌。
 
+### T2 PKO
+規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 5 節。
+- **設定**：`TournamentConfig.bounty = BountyConfig(bounty_share, cash_share, winner_keeps_own)`，預設 buy-in 的 50% 是起始 bounty、淘汰別人時拿 50% 現金（其餘加到自己頭上）、冠軍拿回自己頭上的 bounty。三個值都可設定（例如 `cash_share=1` 就是一般 knockout）。沒有 bounty 的設定 JSON 與 T1 完全相同，已有實驗不受影響。
+- **誰收 bounty**：被淘汰者有資格爭奪的最高那個 pot 的贏家，這個人一定蓋得過被淘汰者；平分 pot 就平分 bounty；對手蓋牌時由沒蓋牌的人收。
+- **資訊**：每手開始時，每個人都知道各座位頭上的 bounty 與起始 bounty（`TournamentHandInfo.bounties`、`starting_bounty`）。每手記錄 bounty 前後值與淘汰紀錄（被淘汰者、收取者、現金、加到頭上的金額），與 ICM 分開。
+- **參考對手**：`HeuristicPushFoldBot` 新增 `bounty_weight`：跟注別人的全下時，若自己蓋得過對方，依對方 bounty 是起始 bounty 的幾倍放寬門檻。Worker 名稱 `hunter`（`bounty_weight=1.5`）。
+- **Preset**：`6max-pko-10bb`、`6max-pko-25bb`（受測者 `HeuristicPushFoldBot`），以及 `-hunter` 版本（受測者賞金獵人版）；對手都是混合 Rule Bot，3,000 場。錦標賽結果卡片會顯示 PKO 規則。
+- **量測**（10 BB、3,000 場）：`hunter` 的 Bounty EV 0.350（0.321–0.380），一般版 0.331（0.293–0.368）；ROI 分別為 −7.3% 與 −10.5%。PKO 下兩者都輸給混合 Rule Bot（同一個 bot 在一般 SNG 是 +14.6%），因為獎池只剩一半、只會全下的策略收到的 bounty 不足以彌補。放寬跟注有幫助但差距還不顯著；T3 的學習要用這組 preset 當比較基準。
+- 驗收：
+  - 單元與性質測試 9 個：設定驗證與 JSON 來回、沒有 bounty 時 JSON 不變、一般淘汰的現金與累進、side pot 時 bounty 給主池贏家、平分 pot 時平分 bounty、每手的 bounty 資訊，以及 150 組隨機 PKO 錦標賽（2–6 人、3 種起始籌碼、3 種 payout、3 種 bounty 比例、3 種現金比例、冠軍拿或不拿自己的 bounty）的守恆：**任何時刻已付出的現金 + 所有人頭上的 bounty = 所有人投入的 bounty**，被淘汰的人頭上歸零，收取者一定還在場，每個被淘汰的人都恰好被收一次。
+  - 整合測試：PKO preset 從建立到 Worker 執行再到合併結果（Bounty EV 大於 0，結果含 PKO 規則）。
+  - **10 萬場 PKO soak**（`uv run python -m tableforge.poker.tournament_soak --tournaments 100000 --workers 12 --pko`，三種 bounty 設定輪流）零錯誤：50 萬次淘汰，其中 5,823 次 bounty 被平分，116 秒。
+  - 實際在 `tableforge ui` 跑 `6max-pko-10bb-hunter`：3 個 Worker 15 秒完成 3,000 場，截圖確認結果卡片。
+- **尚未做**：同時淘汰多人時，bounty 各自依所在的 pot 計算；「只能收自己蓋得過的人」以 pot 資格自然滿足，不另外設定。T3 開始前需要決定 v2 輸入的 bounty 欄位怎麼填（目前錦標賽環境已提供資料）。
+
 ### P1-b0 訓練用的 UI
 讓 P1-b 的調參可以在 `tableforge ui` 的「實驗」頁完成，不需要寫腳本。
 - **每輪 Rule Bot benchmark**：新增實驗設定 `benchmark_deals`。大於 0 時，每一輪的升級判定 Job 會讓新模型對 4 種 Rule Bot 各打 `benchmark_deals` 局（每局兩手、交換座位）。`benchmark_deals` 為 0 的舊實驗 payload 完全不變，已存在的實驗不受影響。
@@ -503,6 +518,37 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
   - 單元與性質測試 22 個：Chen 分數、成牌與聽牌判斷（含河牌不算聽牌、公牌同花不算自己的同花聽牌）、欄位數與名稱一致、兩人引擎與 6 人引擎在兩人時編碼完全相同、6 人時對手槽位依座位順序、金額以 BB 計（盲注放大 10 倍編碼不變）、錦標賽欄位（cash 為 0）、所有欄位都在小範圍內，以及 150 組隨機牌局的資訊隔離測試（換掉別人的手牌與未發的公牌，編碼不變）。
   - NFSP v2 測試 6 個：v1 仍是預設、v2 訓練與 checkpoint 來回一致、舊 checkpoint 照常載入、checkpoint 格式與設定不一致會被拒絕、shard 記錄並檢查格式、v1 init payload 位元組不變。
 
+### P1-b 進度：找到並修正獎勵縮放問題
+以 `scripts/nfsp_probe.py`（新增 `--target-update`、`--reward-scale`、`--threads`、`--tag`）在 CPU 上平行跑，每個設定 3 個 seed，每隔一段手數對 4 種 Rule Bot 各打 1,000 局（2,000 手）。粗體 = 3 個 seed 平均；「顯著贏」是 12 個 seed×對手中信賴區間下限大於 0 的個數。
+
+**第一批：調整訓練頻率、學習率與網路大小（6 萬手）都沒有用**
+
+| 設定 | random | call | tight | aggro | 顯著贏 |
+|---|---|---|---|---|---|
+| A 預設（每 4 手訓練 1 次） | +336 | −149 | −297 | +27 | 3/12 |
+| B 每手訓練 1 次 | +415 | −203 | −305 | +110 | 4/12 |
+| C 每手 1 次、學習率 3e-4、目標網路 1,000 步 | +418 | −109 | −249 | +311 | 6/12 |
+| D 每 2 手 1 次、hidden/batch 256 | +410 | −149 | −331 | +77 | 4/12 |
+
+**原因**：Q 網路用 Huber loss 學每手的 BB 盈虧。Huber loss 在誤差大於 1 時是線性的，而每手盈虧常是幾十到上百 BB，Q 值因此學到接近「中位數」而不是「期望值」：大多數手牌小輸，少數手牌大贏或大輸，於是 Q 值系統性低估跟注、過度蓋牌（Q loss 一直在 20–35）。
+
+**修正**：`NfspConfig.reward_scale`：Q 學習前把獎勵除以這個值（100 = 起始籌碼 BB 數），讓誤差落在 Huber 的二次區間；所有動作的 Q 值同比例縮放，選擇不變。預設 1.0，舊 checkpoint 與舊實驗不變；UI 的自訂參數可調；`hu-nfsp-v2-train` 預設 100。
+
+**第二、三批：reward_scale = 100**
+
+| 設定 | 手數 | random | call | tight | aggro | 顯著贏 |
+|---|---|---|---|---|---|---|
+| E 預設 + 縮放 | 4.5 萬 | +417 | +384 | −66 | +529 | 9/12 |
+| H 預設 + 縮放 | 15 萬 | +380 | +525 | −1 | +744 | 9/12 |
+| I 目標網路 1,000 步 | 15 萬 | +357 | +385 | −40 | +640 | 9/12 |
+| J anticipatory 0.3 | 15 萬 | +444 | +419 | −49 | +680 | 9/12 |
+
+- 每個 seed 都顯著贏 random、call、aggro；對 tight 從 −250 至 −350 進步到約打平（−130 至 +93，大多不顯著）。Q loss 從 20–35 降到約 0.04。
+- 把縮放與「每手訓練、較低學習率」合併（F）反而較慢，暫不採用。
+- 目標網路更新間隔與 anticipatory 在這個範圍內沒有明顯差別。
+
+**下一步**：tight 只在翻牌前用強牌加注或跟注、翻牌後一律過牌或跟注，需要學會對它加注價值、少詐唬。接著試：更長訓練（50 萬手）、跨輪保留 RL buffer、對 tight 的評估加到 4,000 手以上（驗收標準）；若仍打平，再檢查動作抽象（目前加注只有半池、滿池、all-in）。
+
 ### 已決定
 - 新增輸入格式 `poker-hunlhe-vector-v2`：
   - 牌力特徵：翻牌前加入兩張手牌大小、同花、對子、手牌類別；翻牌後加入目前成牌類型與最大牌、同花聽牌、順子聽牌、公牌結構（公牌成對、三張以上同花）。
@@ -520,7 +566,7 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 ### 下一步
 1. ~~T1~~ 已完成（見上方「T1 6 人錦標賽環境」）。
 2. ~~P1-b0~~ 已完成（見上方「P1-b0 訓練用的 UI」）。
-3. **P1-b**（與 T2 平行，下一個）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
+3. **P1-b**（進行中，見上方「P1-b 進度」）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
 
 ### 驗收條件
 - **P1-a**：v2 的監督式 equity 測試 R² 明顯高於 v1 的 0.46；資訊隔離測試通過；兩人 NFSP 能用 v2 訓練。
@@ -565,7 +611,7 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **P1-b 與 T2/T3（平行，下一個）**：HU cash 長時間訓練；PKO bounty；錦標賽上的學習（演算法與獎勵開始前再討論）。
+1. **P1-b（進行中）與 T3（平行，下一個）**：P1-b 繼續打 tight；T3 錦標賽上的學習（演算法與獎勵開始前再討論）。
 2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。

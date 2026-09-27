@@ -11,6 +11,9 @@ from tableforge.domain.tournament import TOURNAMENT_OUTPUT_SCHEMA, TournamentJob
 from tableforge.poker.table import TableAgent
 from tableforge.poker.tournament_benchmark import collect_samples
 
+HUNTER_BOUNTY_WEIGHT = 1.5
+"""`hunter` calls all-ins with this many Chen points less per starting bounty it could win."""
+
 
 def rule_bot(name: str, seed: int) -> TableAgent:
     if name == "random":
@@ -23,6 +26,8 @@ def rule_bot(name: str, seed: int) -> TableAgent:
         return AggroBot()
     if name == "pushfold":
         return HeuristicPushFoldBot()
+    if name == "hunter":
+        return HeuristicPushFoldBot(bounty_weight=HUNTER_BOUNTY_WEIGHT)
     raise ValueError(f"unknown rule bot: {name}")
 
 

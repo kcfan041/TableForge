@@ -43,6 +43,8 @@ class HeuristicPushFoldBot:
     shove_base: float = 7.0
     behind_step: float = 0.5
     call_margin: float = 2.0
+    bounty_weight: float = 0.0
+    """Chen points subtracted from the calling threshold per starting bounty at stake (PKO)."""
     info: TournamentHandInfo | None = field(default=None, repr=False)
 
     def begin_hand(self, info: TournamentHandInfo) -> None:
@@ -60,7 +62,11 @@ class HeuristicPushFoldBot:
             for action in observation.action_history
         )
         if raised:
-            threshold = self._threshold(stack_bb, behind=0) + self.call_margin
+            threshold = (
+                self._threshold(stack_bb, behind=0)
+                + self.call_margin
+                - self._bounty_discount(observation)
+            )
             if chen >= threshold and legal.call_amount is not None:
                 return Action.call()
             return Action.check() if legal.can_check else Action.fold()
@@ -73,6 +79,27 @@ class HeuristicPushFoldBot:
             # Already committed (the call is all-in anyway): calling is free of decisions.
             return Action.call()
         return Action.fold()
+
+    def _bounty_discount(self, observation: TableObservation) -> float:
+        """How much looser to call an all-in when calling could win the shover's bounty.
+
+        Only in PKO, only when this player covers an all-in opponent, and in proportion to
+        the largest such bounty compared with the starting bounty. Zero for the plain bot.
+        """
+        info = self.info
+        if self.bounty_weight <= 0 or info is None or not info.bounties:
+            return 0.0
+        me = observation.players[observation.observer]
+        my_chips = me.stack + me.total_contribution
+        best = 0.0
+        for seat, player in enumerate(observation.players):
+            if seat == observation.observer or not player.all_in or seat >= len(info.bounties):
+                continue
+            if my_chips >= player.total_contribution:
+                best = max(best, info.bounties[seat])
+        if best <= 0 or info.starting_bounty <= 0:
+            return 0.0
+        return self.bounty_weight * min(best / info.starting_bounty, 3.0)
 
     def _big_blind(self, observation: TableObservation) -> int:
         if self.info is not None:

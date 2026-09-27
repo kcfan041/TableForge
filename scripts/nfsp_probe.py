@@ -23,6 +23,10 @@ def main() -> None:
     parser.add_argument("--train-every", type=int, default=4)
     parser.add_argument("--anticipatory", type=float, default=0.1)
     parser.add_argument("--epsilon", type=float, default=0.06)
+    parser.add_argument("--target-update", type=int, default=200)
+    parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--reward-scale", type=float, default=1.0)
+    parser.add_argument("--tag", default="")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument(
@@ -31,6 +35,8 @@ def main() -> None:
         choices=("poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2"),
     )
     args = parser.parse_args()
+    if args.threads:
+        torch.set_num_threads(args.threads)
 
     agent = NfspAgent(
         NfspConfig(
@@ -39,6 +45,8 @@ def main() -> None:
             learning_rate=args.lr,
             anticipatory=args.anticipatory,
             epsilon=args.epsilon,
+            target_update_steps=args.target_update,
+            reward_scale=args.reward_scale,
             seed=args.seed,
             observation_schema=args.schema,
         ),
@@ -64,6 +72,7 @@ def main() -> None:
             json.dumps(
                 {
                     "schema": args.schema,
+                    "tag": args.tag,
                     "seed": args.seed,
                     "hands": trained,
                     "elapsed_s": round(time.perf_counter() - started),

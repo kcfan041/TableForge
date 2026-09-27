@@ -10,8 +10,8 @@ from tableforge.poker.tournament import TournamentConfig
 TOURNAMENT_PAYLOAD_TYPE = "tableforge.v1.TournamentJobPayload"
 TOURNAMENT_OUTPUT_SCHEMA = "tableforge.tournament-samples.v1"
 
-RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold")
-FIELDS = ("mixed", "call", "tight", "aggro", "pushfold")
+RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold", "hunter")
+FIELDS = ("mixed", "call", "tight", "aggro", "pushfold", "hunter")
 
 
 @dataclass(frozen=True, slots=True)

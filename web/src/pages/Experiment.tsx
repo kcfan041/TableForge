@@ -40,6 +40,13 @@ function TournamentResults({ summary }: { summary: TournamentSummary }) {
           tournaments: formatNumber(summary.tournaments),
           hands: formatNumber(summary.average_hands, 1),
         })}
+        {summary.bounty
+          ? " " +
+            t("tournament.pko", {
+              bounty: `${formatNumber(summary.bounty.starting_bounty * 100, 0)}%`,
+              cash: `${formatNumber(summary.bounty.cash_share * 100, 0)}%`,
+            })
+          : ""}
       </p>
       <table className="metrics">
         <thead>

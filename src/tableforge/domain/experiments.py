@@ -53,6 +53,7 @@ class ExperimentConfig:
     anticipatory: float = 0.1
     epsilon: float = 0.06
     target_update_steps: int = 200
+    reward_scale: float = 1.0
     benchmark_deals: int = 0
     group_id: str = ""
 
@@ -95,6 +96,8 @@ class ExperimentConfig:
             raise ValueError("anticipatory and epsilon must be between 0 and 1")
         if self.target_update_steps < 1:
             raise ValueError("target_update_steps must be positive")
+        if self.reward_scale <= 0:
+            raise ValueError("reward_scale must be positive")
         if self.benchmark_deals < 0 or self.benchmark_deals == 1:
             raise ValueError("benchmark_deals must be 0 (off) or at least 2")
         if len(self.group_id) > 64:
@@ -146,6 +149,7 @@ class ExperimentPreset:
     anticipatory: float = 0.1
     epsilon: float = 0.06
     target_update_steps: int = 200
+    reward_scale: float = 1.0
     benchmark_deals: int = 0
     group_id: str = ""
 
@@ -179,6 +183,7 @@ class ExperimentPreset:
             anticipatory=self.anticipatory,
             epsilon=self.epsilon,
             target_update_steps=self.target_update_steps,
+            reward_scale=self.reward_scale,
             benchmark_deals=self.benchmark_deals,
             group_id=self.group_id,
         )
@@ -244,6 +249,7 @@ BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
         batch_size=128,
         observation_schema="poker-hunlhe-vector-v2",
         benchmark_deals=1_000,
+        reward_scale=100.0,
     ),
     ExperimentPreset(
         "hu-nfsp-cpu-league",
@@ -280,25 +286,44 @@ BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
 )
 
 
-def _tournament_preset(stack_bb: int, payout: str, suffix: str) -> ExperimentPreset:
-    """Push/fold baseline in a mixed rule-bot field: 500 seeds x 6 seats = 3,000 tournaments."""
-    from tableforge.poker.tournament import preset_config
+def _tournament_preset(
+    stack_bb: int, payout: str, suffix: str, pko: bool = False, candidate: str = "pushfold"
+) -> ExperimentPreset:
+    """A rule bot in a mixed rule-bot field: 500 seeds x 6 seats = 3,000 tournaments.
 
+    PKO presets use 50% of the buy-in as bounty, half of each knockout paid in cash.
+    """
+    from tableforge.poker.tournament import BountyConfig, preset_config
+
+    kind = "pko" if pko else "sng"
+    name = f"6max-{kind}-{stack_bb}bb{suffix}"
+    if candidate != "pushfold":
+        name += f"-{candidate}"
     return ExperimentPreset(
-        f"6max-sng-{stack_bb}bb{suffix}",
+        name,
         "1",
         hands=500,
         hands_per_job=50,
         kind=ExperimentKind.TOURNAMENT_BENCHMARK,
         players=6,
-        tournament_json=preset_config(stack_bb, payout).to_json(),
-        candidate="pushfold",
+        tournament_json=preset_config(
+            stack_bb, payout, bounty=BountyConfig() if pko else None
+        ).to_json(),
+        candidate=candidate,
         opponents="mixed",
     )
 
 
-BUILTIN_PRESETS = BUILTIN_PRESETS + tuple(
-    _tournament_preset(stack_bb, payout, suffix)
-    for stack_bb in (10, 25, 50)
-    for payout, suffix in (("65-35", ""), ("50-30-20", "-top3"))
+BUILTIN_PRESETS = (
+    BUILTIN_PRESETS
+    + tuple(
+        _tournament_preset(stack_bb, payout, suffix)
+        for stack_bb in (10, 25, 50)
+        for payout, suffix in (("65-35", ""), ("50-30-20", "-top3"))
+    )
+    + tuple(
+        _tournament_preset(stack_bb, "65-35", "", pko=True, candidate=candidate)
+        for stack_bb in (10, 25)
+        for candidate in ("pushfold", "hunter")
+    )
 )

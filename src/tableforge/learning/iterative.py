@@ -58,6 +58,7 @@ class NfspInitExecutor:
                 anticipatory=payload.anticipatory,
                 epsilon=payload.epsilon,
                 target_update_steps=payload.target_update_steps,
+                reward_scale=payload.reward_scale,
             )
         )
         return agent.to_bundle({"round_index": 0})

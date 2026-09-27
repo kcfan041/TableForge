@@ -12,6 +12,11 @@ Amounts:
 
 Per-hand ICM equity is recorded as telemetry only (see `icm_equities`). It is not a
 reward and is not guaranteed to add up to the final result.
+
+Progressive knockout (PKO) is enabled with `TournamentConfig.bounty` (see `BountyConfig`):
+part of every buy-in becomes the player's starting bounty instead of going to the prize
+pool; eliminating a player pays part of their bounty in cash and adds the rest to the
+eliminator's own bounty. Bounties are tracked separately from ICM.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from dataclasses import asdict, dataclass, field
 from functools import cache, lru_cache
 from typing import Protocol, runtime_checkable
 
-from tableforge.poker.table import TableAgent, TableHand, TableRunner
+from tableforge.poker.table import PotAward, TableAgent, TableHand, TableRunner
 
 CONFIG_SCHEMA = "tableforge.tournament-config.v1"
 MAX_HANDS = 5_000
@@ -45,6 +50,28 @@ class BlindLevel:
 
 
 @dataclass(frozen=True, slots=True)
+class BountyConfig:
+    """Progressive knockout rules; every share is a fraction between 0 and 1.
+
+    * `bounty_share`: part of the buy-in that becomes the starting bounty (the rest goes
+      to the prize pool).
+    * `cash_share`: part of an eliminated player's bounty paid to the eliminator at once;
+      the rest is added to the eliminator's own bounty. 1.0 is a regular knockout.
+    * `winner_keeps_own`: the winner also collects the bounty on their own head.
+    """
+
+    bounty_share: float = 0.5
+    cash_share: float = 0.5
+    winner_keeps_own: bool = True
+
+    def __post_init__(self) -> None:
+        if not 0 < self.bounty_share < 1:
+            raise ValueError("bounty_share must be between 0 and 1 (exclusive)")
+        if not 0 <= self.cash_share <= 1:
+            raise ValueError("cash_share must be between 0 and 1")
+
+
+@dataclass(frozen=True, slots=True)
 class TournamentConfig:
     """Everything that defines a tournament. The last blind level repeats forever."""
 
@@ -55,6 +82,7 @@ class TournamentConfig:
     buy_in: float = 1.0
     placement_resolver: str = "stack_at_hand_start"
     name: str = ""
+    bounty: BountyConfig | None = None
 
     def __post_init__(self) -> None:
         if not 2 <= self.players <= 6:
@@ -79,8 +107,13 @@ class TournamentConfig:
         return round(self.starting_stack_bb * self.blind_levels[0].big_blind)
 
     @property
+    def starting_bounty(self) -> float:
+        """Bounty on every player's head at the start, in buy-ins (0 without PKO)."""
+        return self.buy_in * self.bounty.bounty_share if self.bounty is not None else 0.0
+
+    @property
     def prize_pool(self) -> float:
-        return self.buy_in * self.players
+        return (self.buy_in - self.starting_bounty) * self.players
 
     def level_at(self, hand_index: int) -> tuple[int, BlindLevel, int]:
         """(level number from 1, level, hands left in it) for the hand with this index."""
@@ -97,6 +130,9 @@ class TournamentConfig:
 
     def to_json(self) -> str:
         data = asdict(self)
+        if self.bounty is None:
+            # Configs without PKO keep the exact JSON (and job idempotency) they had before.
+            del data["bounty"]
         data["schema_version"] = CONFIG_SCHEMA
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
@@ -110,6 +146,8 @@ class TournamentConfig:
         try:
             data["blind_levels"] = tuple(BlindLevel(**level) for level in data["blind_levels"])
             data["payout"] = tuple(float(share) for share in data["payout"])
+            if data.get("bounty") is not None:
+                data["bounty"] = BountyConfig(**data["bounty"])
             return cls(**data)
         except (KeyError, TypeError) as error:
             raise ValueError(f"invalid tournament config: {error}") from error
@@ -211,6 +249,9 @@ class TournamentHandInfo:
     seat: int
     player: int
     seat_players: tuple[int, ...]
+    bounties: tuple[float, ...] = ()
+    """Bounty on each seat's head in buy-ins (PKO only; empty otherwise)."""
+    starting_bounty: float = 0.0
 
 
 @runtime_checkable
@@ -235,6 +276,20 @@ class HandRecord:
     busted: tuple[int, ...]
     icm_before: tuple[float, ...]
     icm_after: tuple[float, ...]
+    bounties_before: tuple[float, ...] = ()
+    bounties_after: tuple[float, ...] = ()
+    """Bounty on each seat's head (PKO telemetry, kept apart from ICM)."""
+    knockouts: tuple[Knockout, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Knockout:
+    """One player's share of one eliminated player's bounty."""
+
+    eliminated: int
+    collector: int
+    cash: float
+    added_to_bounty: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +304,7 @@ class TournamentResult:
     final_level: int
     elimination_order: tuple[tuple[int, ...], ...]
     records: tuple[HandRecord, ...] = field(default=())
+    knockouts: tuple[Knockout, ...] = ()
 
 
 # --- engine -----------------------------------------------------------------------------
@@ -261,6 +317,11 @@ class Tournament:
         self.stacks = [config.starting_stack] * config.players
         self.places: list[int | None] = [None] * config.players
         self.prizes = [0.0] * config.players
+        self.heads = [config.starting_bounty] * config.players
+        """Bounty currently on each player's head (PKO)."""
+        self.bounty_cash = [0.0] * config.players
+        """Bounty money each player has received."""
+        self.knockouts: list[Knockout] = []
         self.hand_number = 0
         self.button_player = random.Random(f"{seed}:button").randrange(config.players)
         self.elimination_order: list[tuple[int, ...]] = []
@@ -293,6 +354,10 @@ class Tournament:
         winner = self.alive[0]
         self.places[winner] = 1
         self.prizes[winner] = self.config.payout_for_place(1)
+        bounty = self.config.bounty
+        if bounty is not None and bounty.winner_keeps_own:
+            self.bounty_cash[winner] += self.heads[winner]
+            self.heads[winner] = 0.0
         self.elimination_order.append((winner,))
         return self.result(tuple(records))
 
@@ -311,6 +376,11 @@ class Tournament:
         prizes = self._remaining_prizes(count)
         icm_before = tuple(icm_equities(stacks_before, prizes)) if record else ()
         button_seat = seat_players.index(self.button_player)
+        bounties_before = (
+            tuple(self.heads[player] for player in seat_players)
+            if config.bounty is not None
+            else ()
+        )
         hand = TableHand(
             stacks_before,
             button_seat,
@@ -337,6 +407,8 @@ class Tournament:
                         seat=seat,
                         player=seat_players[seat],
                         seat_players=seat_players,
+                        bounties=bounties_before,
+                        starting_bounty=config.starting_bounty,
                     )
                 )
         result = runner.run(hand, seat_agents)
@@ -349,7 +421,10 @@ class Tournament:
             for seat, player in enumerate(seat_players)
             if self.stacks[player] == 0
         ]
+        knockouts: list[Knockout] = []
         if busted:
+            if config.bounty is not None:
+                knockouts = self._collect_bounties(busted, seat_players, result.pots)
             self._place(busted, count)
         self.hand_number += 1
         if not record:
@@ -376,6 +451,13 @@ class Tournament:
             busted=tuple(bust.player for bust in busted),
             icm_before=icm_before,
             icm_after=icm_after,
+            bounties_before=bounties_before,
+            bounties_after=(
+                tuple(self.heads[player] for player in seat_players)
+                if config.bounty is not None
+                else ()
+            ),
+            knockouts=tuple(knockouts),
         )
 
     def result(self, records: tuple[HandRecord, ...] = ()) -> TournamentResult:
@@ -383,13 +465,16 @@ class Tournament:
             raise AssertionError("tournament is not finished")
         places = tuple(int(place or 0) for place in self.places)
         prizes = tuple(self.prizes)
-        bounties = (0.0,) * self.config.players
+        bounties = tuple(self.bounty_cash)
         results = tuple(
             prize + bounty - self.config.buy_in
             for prize, bounty in zip(prizes, bounties, strict=True)
         )
         if not math.isclose(sum(prizes), self.config.prize_pool, rel_tol=1e-9):
             raise AssertionError("prizes do not add up to the prize pool")
+        paid_in = self.config.starting_bounty * self.config.players
+        if not math.isclose(sum(bounties) + sum(self.heads), paid_in, abs_tol=1e-9):
+            raise AssertionError("bounties paid plus bounties left must equal bounties paid in")
         return TournamentResult(
             places=places,
             prizes=prizes,
@@ -399,7 +484,45 @@ class Tournament:
             final_level=self.config.level_at(max(self.hand_number - 1, 0))[0],
             elimination_order=tuple(self.elimination_order),
             records=records,
+            knockouts=tuple(self.knockouts),
         )
+
+    def _collect_bounties(
+        self,
+        busted: Sequence[Bust],
+        seat_players: Sequence[int],
+        pots: Sequence[PotAward],
+    ) -> list[Knockout]:
+        """Pay each eliminated player's bounty to whoever won the pot they were all in for.
+
+        That is the highest pot the eliminated player was eligible for: everyone else
+        eligible for it put in at least as many chips, so the winner covered them. Tied
+        winners split the bounty. After a fold the player who did not fold collects.
+        """
+        bounty = self.config.bounty
+        if bounty is None:
+            return []
+        knockouts: list[Knockout] = []
+        seat_of = {player: seat for seat, player in enumerate(seat_players)}
+        for bust in busted:
+            seat = seat_of[bust.player]
+            contested = [pot for pot in pots if seat in pot.eligible]
+            collectors = contested[-1].winners if contested else pots[-1].winners
+            winners = [seat_players[index] for index in collectors if index != seat]
+            if not winners:
+                raise AssertionError("an eliminated player's bounty must have a collector")
+            head = self.heads[bust.player]
+            self.heads[bust.player] = 0.0
+            share = head / len(winners)
+            for collector in winners:
+                cash = share * bounty.cash_share
+                added = share - cash
+                self.bounty_cash[collector] += cash
+                self.heads[collector] += added
+                knockout = Knockout(bust.player, collector, cash, added)
+                knockouts.append(knockout)
+                self.knockouts.append(knockout)
+        return knockouts
 
     def _next_alive_after(self, player: int) -> int:
         for offset in range(1, self.config.players + 1):
@@ -492,11 +615,15 @@ def preset_config(
     payout: str = "65-35",
     players: int = 6,
     hands_per_level: int = 10,
+    bounty: BountyConfig | None = None,
 ) -> TournamentConfig:
+    """Common settings; pass `bounty=BountyConfig()` for a 50/50 progressive knockout."""
+    kind = "pko-" if bounty is not None else ""
     return TournamentConfig(
         players=players,
         starting_stack_bb=starting_stack_bb,
         blind_levels=standard_levels(hands_per_level),
         payout=PAYOUTS[payout],
-        name=f"{players}max-{starting_stack_bb:g}bb-{payout}",
+        name=f"{players}max-{kind}{starting_stack_bb:g}bb-{payout}",
+        bounty=bounty,
     )

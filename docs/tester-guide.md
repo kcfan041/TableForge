@@ -109,6 +109,7 @@ uv run tableforge ui
 | `6max-rule-smoke` | 6 人桌 Rule Bot 對戰 1,200 手 | 數秒 |
 | `6max-sng-10bb` | 6 人錦標賽 benchmark，起始 10 BB，獎金 65/35；3,000 場 | 約 30 秒 |
 | `6max-sng-10bb-top3` | 同上，獎金 50/30/20 | 約 30 秒 |
+| `6max-pko-10bb` | 6 人 PKO（賞金）錦標賽，起始 10 BB；另有 `-hunter` 版本 | 約 30 秒 |
 | `hu-nfsp-gpu-iterative` | NFSP 3 輪，Learner 用 GPU | 約 6 分鐘 |
 | `hu-nfsp-cpu-league` | League 4 輪，最後產生對戰矩陣 | 約 1 分鐘 |
 | `hu-nfsp-v2-train` | NFSP 訓練 10 輪，每輪對 4 種 Rule Bot 測一次並畫出訓練曲線 | 數十分鐘（依 Worker 數量） |
@@ -117,7 +118,7 @@ uv run tableforge ui
 
 **調整訓練設定**：選 NFSP 多輪訓練的 preset（例如 `hu-nfsp-v2-train`）時，可以勾選「自訂訓練參數」修改學習率、輪數、隱藏層大小等；改過的欄位會標示出來。「用多個 seed 各建立一個」填入例如 `1, 2, 3`，會以相同設定建立 3 個實驗，只差隨機種子。訓練結果受 seed 影響很大，比較兩組設定時請各用幾個 seed。實驗明細的「訓練曲線」會畫出每一輪對 4 種 Rule Bot 的 bb/100（色帶是 95% 信賴區間，0 線以上代表贏），同一組的其他 seed 以虛線並排。
 
-錦標賽 benchmark 的結果以 buy-in 為單位：ROI、Total EV（總盈虧）、Prize EV（名次獎金）、Bounty EV（賞金，PKO 才有）、ITM（拿到獎金的比例）、平均名次與各名次比例，都附 95% 信賴區間。另有 25 BB、50 BB 版本（`6max-sng-25bb`、`6max-sng-50bb` 與各自的 `-top3`）。
+錦標賽 benchmark 的結果以 buy-in 為單位：ROI、Total EV（總盈虧）、Prize EV（名次獎金）、Bounty EV（賞金，PKO 才有）、ITM（拿到獎金的比例）、平均名次與各名次比例，都附 95% 信賴區間。另有 25 BB、50 BB 版本（`6max-sng-25bb`、`6max-sng-50bb` 與各自的 `-top3`）。PKO 版本（`6max-pko-10bb`、`6max-pko-25bb`）每人 buy-in 的一半是頭上的 bounty，淘汰別人時拿一半現金、另一半加到自己頭上；Bounty EV 就是平均拿到的賞金。
 
 ## 6. 給只用瀏覽器的人（選用）
 

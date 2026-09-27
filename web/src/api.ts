@@ -134,6 +134,7 @@ export interface TournamentSummary {
   jobs_finished: number;
   prize_ev: Interval;
   bounty_ev: Interval;
+  bounty?: { starting_bounty: number; cash_share: number; winner_keeps_own: boolean } | null;
   total_ev: Interval;
   roi: Interval;
   average_place: Interval;

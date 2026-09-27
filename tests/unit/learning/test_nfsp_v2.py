@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -62,15 +63,32 @@ def test_checkpoints_from_before_v2_still_load() -> None:
     entries = unpack_entries(agent.to_bundle(), frozenset(_all_entries()))
     manifest = json.loads(entries[MANIFEST])
     del manifest["config"]["observation_schema"]
+    del manifest["config"]["reward_scale"]
     entries[MANIFEST] = json_bytes(manifest)
 
     restored = NfspAgent.from_bundle(pack_entries(entries))
 
     assert restored.encoder.schema == v1.SCHEMA
+    assert restored.config.reward_scale == 1.0
     for left, right in zip(
         agent.policy_network.parameters(), restored.policy_network.parameters(), strict=True
     ):
         assert torch.equal(left, right)
+
+
+def test_reward_scale_divides_q_targets_and_round_trips() -> None:
+    scaled = NfspAgent(replace(config(v2.SCHEMA), reward_scale=100.0))
+    plain = NfspAgent(config(v2.SCHEMA))
+    for agent in (scaled, plain):
+        self_play_train(agent, 150, seed_start=0, train_every=2)
+    restored = NfspAgent.from_bundle(scaled.to_bundle())
+
+    assert restored.config.reward_scale == 100.0
+    # Same seed and data: with rewards 100x smaller, Q values stay much smaller.
+    state = torch.zeros((1, v2.FEATURE_SIZE))
+    assert scaled.q_network(state).abs().max() < plain.q_network(state).abs().max()
+    with pytest.raises(ValueError):
+        NfspAgent(replace(config(v2.SCHEMA), reward_scale=0))
 
 
 def test_manifest_and_config_schema_must_agree() -> None:

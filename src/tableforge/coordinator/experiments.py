@@ -250,6 +250,15 @@ class ExperimentService:
                 "opponents": experiment.config.opponents,
                 "starting_stack_bb": config.starting_stack_bb,
                 "payout": list(config.payout),
+                "bounty": (
+                    {
+                        "starting_bounty": config.starting_bounty,
+                        "cash_share": config.bounty.cash_share,
+                        "winner_keeps_own": config.bounty.winner_keeps_own,
+                    }
+                    if config.bounty is not None
+                    else None
+                ),
                 "jobs_finished": finished,
             }
         )
@@ -401,6 +410,7 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "anticipatory": float,
     "epsilon": float,
     "target_update_steps": int,
+    "reward_scale": float,
     "observation_schema": str,
     "benchmark_deals": int,
     "evaluation_deals": int,
@@ -416,6 +426,7 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "hidden_size": (8, 4_096),
     "batch_size": (8, 262_144),
     "target_update_steps": (1, 1_000_000),
+    "reward_scale": (0.01, 10_000),
     "benchmark_deals": (0, 100_000),
     "evaluation_deals": (2, 100_000),
     "max_evaluation_deals": (2, 1_000_000),

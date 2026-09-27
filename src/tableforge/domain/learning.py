@@ -92,6 +92,7 @@ _INIT_DEFAULTS: dict[str, object] = {
     "anticipatory": 0.1,
     "epsilon": 0.06,
     "target_update_steps": 200,
+    "reward_scale": 1.0,
 }
 
 
@@ -106,10 +107,13 @@ class NfspInitPayload:
     anticipatory: float = 0.1
     epsilon: float = 0.06
     target_update_steps: int = 200
+    reward_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported init payload schema")
+        if self.reward_scale <= 0:
+            raise ValueError("reward_scale must be positive")
         if self.hidden_size < 1 or self.batch_size < 1:
             raise ValueError("init payload values must be positive")
         if not 0 < self.learning_rate <= 1 or self.target_update_steps < 1:

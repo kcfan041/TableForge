@@ -64,9 +64,12 @@ def test_payloads_of_existing_presets_are_byte_identical() -> None:
         "hidden_size",
         "schema_version",
     }
-    tuned = NfspInitPayload("1.0", 0, learning_rate=0.0005, target_update_steps=50)
+    tuned = NfspInitPayload(
+        "1.0", 0, learning_rate=0.0005, target_update_steps=50, reward_scale=100.0
+    )
     decoded = NfspInitPayload.from_bytes(tuned.to_bytes())
     assert (decoded.learning_rate, decoded.target_update_steps) == (0.0005, 50)
+    assert decoded.reward_scale == 100.0
     # Match payloads of presets without a benchmark keep the old reference evaluation.
     assert NfspMatchPayload.__dataclass_fields__["reference_deals"].default == 200
 
