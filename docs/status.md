@@ -40,13 +40,13 @@
 | U3 | 瀏覽器網頁（給只用瀏覽器的人）預設關閉、由建立者在 UI 開啟；文件改成只介紹 `tableforge ui` | 已完成 | 本階段 |
 | O0–O7 | 對手建模研究線 | 未開始 | M5 之後 |
 | P1-a | v2 輸入：牌力特徵、2–6 人通用、錦標賽欄位 | 已完成 | 本階段；R² 0.48 → 0.87–0.89 |
-| P1-b0 | 訓練用的 UI：訓練曲線（每輪 Rule Bot benchmark）、自訂訓練參數、多 seed 並排 | 未開始 | T1 之後、P1-b 之前 |
-| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 未開始 | P1-b0 之後，與 T2 平行 |
-| T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 已完成 | 本階段；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
+| P1-b0 | 訓練用的 UI：訓練曲線（每輪 Rule Bot benchmark）、自訂訓練參數、多 seed 並排 | 已完成 | 本階段 |
+| P1-b | HU cash 長時間訓練，穩定贏 4 種 Rule Bot | 未開始 | 下一步，與 T2 平行 |
+| T1 | 6 人錦標賽環境、可設定 payout 與名次判定、`HeuristicPushFoldBot`、tournament benchmark | 已完成 | `1e603f9`；設計見 [architecture/08-tournament.md](architecture/08-tournament.md) |
 | T2 | PKO bounty 規則與 bounty 指標 | 未開始 | T1 之後 |
 | T3 | 錦標賽上的學習 | 未開始 | T2 之後，開始前再討論演算法與獎勵 |
 
-目前測試：493 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：498 個測試全部通過（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -414,6 +414,21 @@
   - 實際在 `tableforge ui` 建立 `6max-sng-10bb`：10 個 Job、3,000 場約 26 秒完成，`HeuristicPushFoldBot` 對混合 Rule Bot 的 ROI 為 +14.6%（95% 信賴區間 +9.5% 至 +19.8%），ITM 44.3%；並截圖確認錦標賽結果卡片。
 - **尚未做**：PKO bounty（T2）；dead button；多桌。
 
+### P1-b0 訓練用的 UI
+讓 P1-b 的調參可以在 `tableforge ui` 的「實驗」頁完成，不需要寫腳本。
+- **每輪 Rule Bot benchmark**：新增實驗設定 `benchmark_deals`。大於 0 時，每一輪的升級判定 Job 會讓新模型對 4 種 Rule Bot 各打 `benchmark_deals` 局（每局兩手、交換座位）。`benchmark_deals` 為 0 的舊實驗 payload 完全不變，已存在的實驗不受影響。
+- **訓練曲線**：NFSP 多輪訓練的實驗明細新增「訓練曲線」卡片，畫出每一輪對 4 種 Rule Bot 的 bb/100 與 95% 信賴區間色帶（SVG，不新增前端套件）。
+- **自訂訓練參數**：建立實驗時勾選「自訂訓練參數」，可修改輸入格式、輪數、每輪 Actor 數、每個 Actor 手數、每輪訓練步數、隱藏層、batch、學習率、目標網路更新間隔、anticipatory、ε、benchmark 局數、升級判定局數。
+  - 只開放給 NFSP 多輪訓練的 preset；Coordinator 會檢查欄位名稱、型別與範圍，不合法時回 400 並說明原因。
+  - 學習率、anticipatory、ε、目標網路更新間隔會傳到 Worker 端的 NFSP agent（之前固定為預設值）。等於預設值時不寫入 payload，舊實驗的 Job 內容與 idempotency 不變。
+- **多 seed 群組**：填入「1, 2, 3」會以相同設定建立 3 個實驗（最多 16 個），彼此只差 seed，共用群組 ID。實驗列表新增「群組」欄；群組內任一實驗的明細都會並排畫出所有 seed 的曲線（目前這個是實線、其他是虛線），下方表格列出各 seed 最新一輪對每個 Rule Bot 的 bb/100，信賴區間不含 0 時以顏色標示。
+- **新 preset `hu-nfsp-v2-train`**：v2 輸入、10 輪 × 4 個 Actor × 2,000 手、每輪 2,000 步、hidden 128、batch 128，每輪對每個 Rule Bot 1,000 局 benchmark。作為 P1-b 的起點。
+- API：`GET /api/training-options`（各 preset 可調欄位、預設值與範圍）；`POST /api/experiments` 新增 `settings` 與 `seeds`；`ControlService` 的 `training_options` 查詢與 `create_experiment` 指令同樣支援。
+- 驗收：
+  - 整合測試 5 個：參數驗證（範圍、型別、未知欄位、非 NFSP preset）、舊 payload 位元組不變、群組建立、實際跑 2 輪訓練並確認每輪都有對 4 種 Rule Bot 的 benchmark、控制 API 的群組建立與可調欄位。
+  - 實際在 `tableforge ui` 以縮小的 `hu-nfsp-v2-train`（4 輪 × 2 個 Actor × 1,500 手、每輪 1,500 步、benchmark 500 局）建立 3 個 seed 的群組，3 個 Worker 共 164 秒完成，並截圖確認訓練曲線、各 seed 表格與實驗列表的群組欄。這麼短的訓練還贏不了 Rule Bot，而且 seed 之間差異很大（例如第 4 輪對 random 從 −83 到 +208 bb/100），再次確認 P1-b 需要多 seed 比較。
+- 節點測速與輸入格式 R² 診斷仍留在腳本（`scripts/nfsp_speed.py`、`scripts/encoding_r2.py`）。
+
 ## P1 模型強度
 
 之前為了先完善平台而暫停，停在「已找到主要瓶頸、尚未修正」的狀態。現在與錦標賽路線一起重新排定（見下方「路線」）。
@@ -504,12 +519,8 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 
 ### 下一步
 1. ~~T1~~ 已完成（見上方「T1 6 人錦標賽環境」）。
-2. **P1-b0**：訓練用的 UI，讓 P1-b 的調參在 `tableforge ui` 上進行：
-   - NFSP 實驗每一輪自動對 4 種 Rule Bot 跑 benchmark，實驗明細畫出 bb/100 與信賴區間的訓練曲線。
-   - 建立實驗時可自訂訓練參數（學習率、每幾手訓練一次、hidden size、batch、輸入格式、seed、輪數），不只選 preset。
-   - 建立時可選「用 N 個 seed 各建立一個」，實驗列表把同一組放在一起、並排顯示曲線。
-   - 節點測速與輸入格式 R² 診斷留在腳本（`scripts/nfsp_speed.py`、`scripts/encoding_r2.py`），不做進 UI。
-3. **P1-b**（與 T2 平行）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
+2. ~~P1-b0~~ 已完成（見上方「P1-b0 訓練用的 UI」）。
+3. **P1-b**（與 T2 平行，下一個）：以 v2 為基礎調整訓練設定（每手訓練次數、Q 網路學習率與目標網路更新頻率、跨輪保留 RL buffer），長時間訓練並用不同 seed 重跑。自我對打在 CPU 較快，可以多個 seed 平行。
 
 ### 驗收條件
 - **P1-a**：v2 的監督式 equity 測試 R² 明顯高於 v1 的 0.46；資訊隔離測試通過；兩人 NFSP 能用 v2 訓練。
@@ -554,13 +565,12 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **P1-b0：訓練用的 UI（下一個）**：訓練曲線、自訂參數、多 seed。
-2. **P1-b 與 T2/T3（平行）**：HU cash 長時間訓練；PKO bounty；錦標賽上的學習（演算法與獎勵開始前再討論）。
-3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-5. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-6. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-7. **CUDA Worker 容器**（需要 WSL2 後端）。
-8. **O0–O7 對手建模**。
+1. **P1-b 與 T2/T3（平行，下一個）**：HU cash 長時間訓練；PKO bounty；錦標賽上的學習（演算法與獎勵開始前再討論）。
+2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+5. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+6. **CUDA Worker 容器**（需要 WSL2 後端）。
+7. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

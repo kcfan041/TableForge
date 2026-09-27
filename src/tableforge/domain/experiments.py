@@ -49,6 +49,12 @@ class ExperimentConfig:
     tournament_json: str = ""
     candidate: str = ""
     opponents: str = ""
+    learning_rate: float = 1e-3
+    anticipatory: float = 0.1
+    epsilon: float = 0.06
+    target_update_steps: int = 200
+    benchmark_deals: int = 0
+    group_id: str = ""
 
     def __post_init__(self) -> None:
         if self.learner_runtime not in ("cpu", "cuda"):
@@ -83,6 +89,16 @@ class ExperimentConfig:
                 raise ValueError("target_ci_width cannot be negative")
             if self.league and (self.historical_limit < 1 or self.matrix_deals < 2):
                 raise ValueError("league requires historical_limit and matrix_deals")
+        if not 0 < self.learning_rate <= 1:
+            raise ValueError("learning_rate must be in (0, 1]")
+        if not 0 <= self.anticipatory <= 1 or not 0 <= self.epsilon <= 1:
+            raise ValueError("anticipatory and epsilon must be between 0 and 1")
+        if self.target_update_steps < 1:
+            raise ValueError("target_update_steps must be positive")
+        if self.benchmark_deals < 0 or self.benchmark_deals == 1:
+            raise ValueError("benchmark_deals must be 0 (off) or at least 2")
+        if len(self.group_id) > 64:
+            raise ValueError("group_id is too long")
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +142,12 @@ class ExperimentPreset:
     tournament_json: str = ""
     candidate: str = ""
     opponents: str = ""
+    learning_rate: float = 1e-3
+    anticipatory: float = 0.1
+    epsilon: float = 0.06
+    target_update_steps: int = 200
+    benchmark_deals: int = 0
+    group_id: str = ""
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -153,6 +175,12 @@ class ExperimentPreset:
             tournament_json=self.tournament_json,
             candidate=self.candidate,
             opponents=self.opponents,
+            learning_rate=self.learning_rate,
+            anticipatory=self.anticipatory,
+            epsilon=self.epsilon,
+            target_update_steps=self.target_update_steps,
+            benchmark_deals=self.benchmark_deals,
+            group_id=self.group_id,
         )
 
 
@@ -196,6 +224,26 @@ BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
         max_evaluation_deals=1_000,
         target_ci_width=150.0,
         observation_schema="poker-hunlhe-vector-v2",
+        benchmark_deals=200,
+    ),
+    ExperimentPreset(
+        # Training preset for P1-b: 10 rounds x 4 actors x 2,000 hands = 80,000 self-play
+        # hands, with a 1,000-deal benchmark against every rule bot after each round.
+        "hu-nfsp-v2-train",
+        "1",
+        hands=2_000,
+        hands_per_job=2_000,
+        kind=ExperimentKind.NFSP_ITERATIVE,
+        evaluation_deals=500,
+        rounds=10,
+        actors_per_round=4,
+        train_steps_per_round=2_000,
+        max_evaluation_deals=2_000,
+        target_ci_width=100.0,
+        hidden_size=128,
+        batch_size=128,
+        observation_schema="poker-hunlhe-vector-v2",
+        benchmark_deals=1_000,
     ),
     ExperimentPreset(
         "hu-nfsp-cpu-league",

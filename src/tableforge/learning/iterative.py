@@ -54,6 +54,10 @@ class NfspInitExecutor:
                 batch_size=payload.batch_size,
                 seed=payload.agent_seed,
                 observation_schema=payload.observation_schema,
+                learning_rate=payload.learning_rate,
+                anticipatory=payload.anticipatory,
+                epsilon=payload.epsilon,
+                target_update_steps=payload.target_update_steps,
             )
         )
         return agent.to_bundle({"round_index": 0})

@@ -94,6 +94,8 @@ class LoginRequest(BaseModel):
 
 class CreateExperimentRequest(BaseModel):
     preset: str = Field(min_length=1, max_length=200)
+    settings: dict[str, float | int | str] = Field(default_factory=dict)
+    seeds: list[int] | None = Field(default=None, max_length=16)
 
 
 class CreateInviteRequest(BaseModel):
@@ -252,6 +254,10 @@ def create_app(context: WebContext) -> FastAPI:
     def presets(current: Caller = viewer) -> Any:
         return query("presets", "", current)
 
+    @app.get("/api/training-options")
+    def training_options(current: Caller = viewer) -> Any:
+        return query("training_options", "", current)
+
     @app.get("/api/experiments")
     def experiments(current: Caller = viewer) -> Any:
         return query("experiments", "", current)
@@ -262,7 +268,7 @@ def create_app(context: WebContext) -> FastAPI:
 
     @app.post("/api/experiments")
     def create_experiment(body: CreateExperimentRequest, current: Caller = viewer) -> Any:
-        return command("create_experiment", {"preset": body.preset}, current)
+        return command("create_experiment", body.model_dump(exclude_none=True), current)
 
     @app.post("/api/experiments/{experiment_id}/start")
     def start_experiment(experiment_id: str, current: Caller = viewer) -> Any:

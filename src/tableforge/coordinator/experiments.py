@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Any
 
 from tableforge.application.ports import CheckpointRepository, ExperimentRepository
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
@@ -15,6 +17,7 @@ from tableforge.domain.capabilities import WorkloadProfile
 from tableforge.domain.experiments import (
     BUILTIN_PRESETS,
     Experiment,
+    ExperimentConfig,
     ExperimentKind,
     ExperimentPreset,
     ExperimentStatus,
@@ -70,9 +73,75 @@ class ExperimentService:
                     advanced += 1
         return advanced
 
-    def create(self, preset_key: str, now: datetime) -> Experiment:
-        preset = _preset(preset_key)
-        return self.experiments.create(new_experiment_id(), preset.config(), now)
+    def create(
+        self,
+        preset_key: str,
+        now: datetime,
+        overrides: Mapping[str, object] | None = None,
+    ) -> Experiment:
+        """Create an experiment from a preset, optionally changing training settings."""
+        config = apply_overrides(_preset(preset_key).config(), overrides or {})
+        return self.experiments.create(new_experiment_id(), config, now)
+
+    def create_group(
+        self,
+        preset_key: str,
+        seeds: Sequence[int],
+        now: datetime,
+        overrides: Mapping[str, object] | None = None,
+    ) -> list[Experiment]:
+        """One experiment per seed, sharing a group id so they can be compared side by side."""
+        if not 1 <= len(seeds) <= 16 or len(set(seeds)) != len(seeds):
+            raise ValueError("a group needs 1 to 16 different seeds")
+        group_id = str(new_experiment_id())
+        base = apply_overrides(_preset(preset_key).config(), overrides or {})
+        return [
+            self.experiments.create(
+                new_experiment_id(),
+                replace(base, seed_start=int(seed), group_id=group_id),
+                now,
+            )
+            for seed in seeds
+        ]
+
+    def training_curve(self, experiment_id: ExperimentId) -> list[dict[str, object]]:
+        """Per-round evaluation of an iterative NFSP experiment, in round order."""
+        experiment = self.experiments.get(experiment_id)
+        if experiment.config.kind is not ExperimentKind.NFSP_ITERATIVE:
+            return []
+        rounds: list[dict[str, object]] = []
+        prefix = f"experiment:{experiment_id}:round:"
+        for job in self.coordinator.jobs.list_jobs(experiment_id):
+            key = job.spec.idempotency_key
+            if not (key.startswith(prefix) and key.endswith(":match")):
+                continue
+            if job.status is not JobStatus.SUCCEEDED:
+                continue
+            outputs = self.coordinator.job_outputs(job.spec.job_id)
+            if not outputs:
+                continue
+            result = json.loads(
+                self.coordinator.read_artifact(str(outputs[0].artifact.descriptor.artifact_id))
+            )
+            round_index = int(key[len(prefix) :].split(":", 1)[0])
+            references = result.get("references", {})
+            rounds.append(
+                {
+                    "round": round_index,
+                    "train_steps": result.get("candidate_train_steps"),
+                    "head_to_head": result.get("head_to_head"),
+                    "benchmark": {
+                        name: {
+                            "bb_per_100": values["bb_per_100"],
+                            "low": values["confidence_low"],
+                            "high": values["confidence_high"],
+                            "hands": values["hands"],
+                        }
+                        for name, values in references.items()
+                    },
+                }
+            )
+        return sorted(rounds, key=lambda item: int(item["round"]))  # type: ignore[call-overload]
 
     def start(self, experiment_id: ExperimentId, now: datetime) -> Experiment:
         experiment = self.experiments.get(experiment_id)
@@ -318,6 +387,65 @@ class ExperimentService:
                         raise ValueError("evaluation result must be a JSON object")
                     return result
         return None
+
+
+TRAINING_OVERRIDES: dict[str, type] = {
+    "seed_start": int,
+    "rounds": int,
+    "actors_per_round": int,
+    "hands_per_job": int,
+    "train_steps_per_round": int,
+    "hidden_size": int,
+    "batch_size": int,
+    "learning_rate": float,
+    "anticipatory": float,
+    "epsilon": float,
+    "target_update_steps": int,
+    "observation_schema": str,
+    "benchmark_deals": int,
+    "evaluation_deals": int,
+    "max_evaluation_deals": int,
+}
+"""Settings a user may change when creating an iterative NFSP experiment."""
+
+OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
+    "rounds": (1, 200),
+    "actors_per_round": (1, 64),
+    "hands_per_job": (100, 1_000_000),
+    "train_steps_per_round": (1, 1_000_000),
+    "hidden_size": (8, 4_096),
+    "batch_size": (8, 262_144),
+    "target_update_steps": (1, 1_000_000),
+    "benchmark_deals": (0, 100_000),
+    "evaluation_deals": (2, 100_000),
+    "max_evaluation_deals": (2, 1_000_000),
+}
+
+
+def apply_overrides(config: ExperimentConfig, overrides: Mapping[str, object]) -> ExperimentConfig:
+    """Return `config` with user-chosen training settings; unknown or out-of-range values fail."""
+    if not overrides:
+        return config
+    if config.kind is not ExperimentKind.NFSP_ITERATIVE:
+        raise ValueError("custom settings are only available for iterative NFSP presets")
+    unknown = set(overrides) - set(TRAINING_OVERRIDES)
+    if unknown:
+        raise ValueError(f"these settings cannot be changed: {', '.join(sorted(unknown))}")
+    changes: dict[str, Any] = {}
+    for name, value in overrides.items():
+        kind = TRAINING_OVERRIDES[name]
+        try:
+            converted = kind(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{name} must be a {kind.__name__}") from error
+        limits = OVERRIDE_LIMITS.get(name)
+        if limits is not None and not limits[0] <= converted <= limits[1]:
+            raise ValueError(f"{name} must be between {limits[0]:g} and {limits[1]:g}")
+        changes[name] = converted
+    updated = replace(config, **changes)
+    if updated.max_evaluation_deals < updated.evaluation_deals:
+        updated = replace(updated, max_evaluation_deals=updated.evaluation_deals)
+    return updated
 
 
 def _preset(key: str) -> ExperimentPreset:

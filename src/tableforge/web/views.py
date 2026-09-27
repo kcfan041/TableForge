@@ -41,6 +41,7 @@ QUERY_ROLES: dict[str, OperatorRole] = {
     "overview": OperatorRole.VIEWER,
     "nodes": OperatorRole.VIEWER,
     "presets": OperatorRole.VIEWER,
+    "training_options": OperatorRole.VIEWER,
     "experiments": OperatorRole.VIEWER,
     "experiment": OperatorRole.VIEWER,
     "matrix": OperatorRole.VIEWER,
@@ -76,6 +77,8 @@ class ClusterViews:
             return self.nodes()
         if resource == "presets":
             return self.presets()
+        if resource == "training_options":
+            return self.training_options()
         if resource == "experiments":
             return self.experiments()
         if resource == "experiment":
@@ -312,7 +315,7 @@ class ClusterViews:
         experiments = self.services.experiments
         auth = self.services.repositories.auth
         if action == "create_experiment":
-            return self._experiment_view(experiments.create(str(arguments["preset"]), now))
+            return self.create_experiment(arguments, now)
         if action == "start_experiment":
             started = experiments.start(ExperimentId(str(arguments["experiment_id"])), now)
             return self._experiment_view(started)
@@ -335,6 +338,56 @@ class ClusterViews:
         if action == "revoke_node":
             return {"revoked_sessions": auth.revoke_node(NodeId(str(arguments["node_id"])))}
         raise ViewError(404, f"unknown action: {action}")
+
+    def create_experiment(self, arguments: dict[str, Any], now: datetime) -> object:
+        """Create one experiment, or a group of experiments with the given seeds.
+
+        ``settings`` changes training settings of iterative NFSP presets; ``seeds`` (a list)
+        creates one experiment per seed that share a group id.
+        """
+        preset = str(arguments["preset"])
+        settings = arguments.get("settings") or {}
+        if not isinstance(settings, dict):
+            raise ViewError(400, "settings must be an object")
+        seeds = arguments.get("seeds")
+        experiments = self.services.experiments
+        try:
+            if seeds:
+                if not isinstance(seeds, list):
+                    raise ViewError(400, "seeds must be a list of numbers")
+                created = experiments.create_group(
+                    preset, [int(seed) for seed in seeds], now, settings
+                )
+                return {"group": [self._experiment_view(item) for item in created]}
+            return self._experiment_view(experiments.create(preset, now, settings))
+        except (TypeError, ValueError) as error:
+            raise ViewError(400, str(error)) from error
+
+    def training_options(self) -> dict[str, object]:
+        """Settings that can be changed for each iterative NFSP preset, with their defaults."""
+        from dataclasses import asdict
+
+        from tableforge.coordinator.experiments import OVERRIDE_LIMITS, TRAINING_OVERRIDES
+        from tableforge.domain.experiments import ExperimentKind
+
+        presets = {}
+        for preset in BUILTIN_PRESETS:
+            if preset.kind is not ExperimentKind.NFSP_ITERATIVE:
+                continue
+            config = asdict(preset.config())
+            presets[preset.key] = {name: config[name] for name in TRAINING_OVERRIDES}
+        return {
+            "fields": {
+                name: {
+                    "type": kind.__name__,
+                    "min": OVERRIDE_LIMITS.get(name, (None, None))[0],
+                    "max": OVERRIDE_LIMITS.get(name, (None, None))[1],
+                }
+                for name, kind in TRAINING_OVERRIDES.items()
+            },
+            "observation_schemas": ["poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2"],
+            "presets": presets,
+        }
 
     def create_invite(self, arguments: dict[str, Any]) -> dict[str, object]:
         from tableforge.transport.invite_issue import InviteIssueError
@@ -387,6 +440,8 @@ class ClusterViews:
             "updated_at": _iso(experiment.updated_at),
             "job_counts": dict(Counter(job.status.value for job in jobs)),
             "league": experiment.config.league,
+            "group_id": experiment.config.group_id or None,
+            "seed": experiment.config.seed_start,
         }
         if detailed:
             view["config"] = {
@@ -410,6 +465,7 @@ class ClusterViews:
             view["tournament"] = self.services.experiments.tournament_result(
                 experiment.experiment_id
             )
+            view["curve"] = self.services.experiments.training_curve(experiment.experiment_id)
         return view
 
     def _simulation_results(self, jobs: Any) -> dict[str, object] | None:

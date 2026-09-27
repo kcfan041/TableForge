@@ -188,7 +188,7 @@ def test_errors_are_reported_as_json(web: Web) -> None:
     missing = web.client.get("/api/experiments/01a0dd5a-0000-7000-8000-000000000000")
     unknown_path = web.client.get("/api/does-not-exist")
 
-    assert unknown_preset.status_code == 409 and "unknown preset" in unknown_preset.json()["detail"]
+    assert unknown_preset.status_code == 400 and "unknown preset" in unknown_preset.json()["detail"]
     assert missing.status_code == 404
     assert unknown_path.status_code == 404
 

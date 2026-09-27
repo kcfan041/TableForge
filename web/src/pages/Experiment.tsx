@@ -12,6 +12,7 @@ import {
 import { Card, Counts, LoadState, Page, ShortId, StatusBadge } from "../components";
 import { useI18n, type MessageKey } from "../i18n";
 import { useLiveData } from "../live";
+import { LatestBenchmark, TrainingCurve } from "./Curve";
 import { canOperate, KindLabel } from "./Experiments";
 import { MatrixHeatmap } from "./Matrix";
 
@@ -122,6 +123,35 @@ function Results({ results, players }: { results: NonNullable<ExperimentDetail["
   );
 }
 
+function GroupCurve({ groupId, current }: { groupId: string; current: string }) {
+  const { t } = useI18n();
+  const group = useLiveData(async () => {
+    const all = await api.experiments();
+    const members = all.filter((item) => item.group_id === groupId);
+    const details = await Promise.all(members.map((item) => api.experiment(item.experiment_id)));
+    return details.sort((a, b) => (a.seed ?? 0) - (b.seed ?? 0));
+  }, [groupId]);
+  return (
+    <LoadState state={group}>
+      {(details) => {
+        const series = details.map((item) => ({
+          label: `seed ${item.seed ?? "?"}${item.experiment_id === current ? ` (${t("curve.this")})` : ""}`,
+          points: item.curve ?? [],
+          dashed: item.experiment_id !== current,
+        }));
+        return (
+          <>
+            <p className="muted small">{t("curve.group", { count: details.length })}</p>
+            <TrainingCurve series={series} />
+            <h3>{t("curve.latest")}</h3>
+            <LatestBenchmark series={series} />
+          </>
+        );
+      }}
+    </LoadState>
+  );
+}
+
 export function ExperimentPage({ session }: { session: Session }) {
   const { id = "" } = useParams();
   const { t, formatDate } = useI18n();
@@ -200,6 +230,15 @@ export function ExperimentPage({ session }: { session: Session }) {
               <pre className="config">{JSON.stringify(data.config, null, 2)}</pre>
             </Card>
           </div>
+          {data.kind === "nfsp_iterative" ? (
+            <Card title={t("curve.title")}>
+              {data.group_id ? (
+                <GroupCurve groupId={data.group_id} current={data.experiment_id} />
+              ) : (
+                <TrainingCurve series={[{ label: `seed ${data.seed ?? ""}`, points: data.curve ?? [] }]} />
+              )}
+            </Card>
+          ) : null}
           {data.tournament ? (
             <Card title={t("tournament.title")}>
               <TournamentResults summary={data.tournament} />

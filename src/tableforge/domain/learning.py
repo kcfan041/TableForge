@@ -86,6 +86,15 @@ def _require_sha(value: str) -> None:
 V1_OBSERVATION_SCHEMA = "poker-hunlhe-vector-v1"
 
 
+_INIT_DEFAULTS: dict[str, object] = {
+    "observation_schema": V1_OBSERVATION_SCHEMA,
+    "learning_rate": 1e-3,
+    "anticipatory": 0.1,
+    "epsilon": 0.06,
+    "target_update_steps": 200,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class NfspInitPayload:
     schema_version: str
@@ -93,18 +102,28 @@ class NfspInitPayload:
     hidden_size: int = 64
     batch_size: int = 64
     observation_schema: str = V1_OBSERVATION_SCHEMA
+    learning_rate: float = 1e-3
+    anticipatory: float = 0.1
+    epsilon: float = 0.06
+    target_update_steps: int = 200
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported init payload schema")
         if self.hidden_size < 1 or self.batch_size < 1:
             raise ValueError("init payload values must be positive")
+        if not 0 < self.learning_rate <= 1 or self.target_update_steps < 1:
+            raise ValueError("invalid learning settings")
+        if not 0 <= self.anticipatory <= 1 or not 0 <= self.epsilon <= 1:
+            raise ValueError("anticipatory and epsilon must be between 0 and 1")
 
     def to_bytes(self) -> bytes:
         data = asdict(self)
-        if self.observation_schema == V1_OBSERVATION_SCHEMA:
-            # Keep the exact bytes (and idempotency keys) of payloads written before v2.
-            del data["observation_schema"]
+        # Fields added later are written only when they differ from their defaults, so
+        # payloads (and idempotency keys) of existing experiments stay byte-identical.
+        for name, default in _INIT_DEFAULTS.items():
+            if data[name] == default:
+                del data[name]
         return _dump(data)
 
     @classmethod

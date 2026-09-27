@@ -5,13 +5,14 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from tableforge.application.ports import CheckpointRepository
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.artifacts import Artifact, ArtifactDescriptor, ArtifactKind
 from tableforge.domain.capabilities import WorkloadProfile
 from tableforge.domain.checkpoints import Checkpoint, CheckpointStatus
-from tableforge.domain.experiments import Experiment
+from tableforge.domain.experiments import Experiment, ExperimentConfig
 from tableforge.domain.ids import (
     AgentId,
     ArtifactId,
@@ -50,6 +51,21 @@ from tableforge.domain.nfsp_pipeline import (
 
 class PipelineFailedError(Exception):
     pass
+
+
+def _match_payload(config: ExperimentConfig, **fields: Any) -> NfspMatchPayload:
+    """The round's match job, with the Rule Bot benchmark used for the training curve.
+
+    Experiments created before the curve existed (``benchmark_deals == 0``) keep the old
+    reference evaluation so their job payloads, and idempotency, are unchanged.
+    """
+    if config.benchmark_deals > 0:
+        return NfspMatchPayload(
+            **fields,
+            reference_opponents=RULE_BOTS,
+            reference_deals=config.benchmark_deals,
+        )
+    return NfspMatchPayload(**fields)
 
 
 def agent_id_for(experiment: Experiment) -> AgentId:
@@ -203,6 +219,10 @@ class IterativeNfspOrchestrator:
                     hidden_size=experiment.config.hidden_size,
                     batch_size=experiment.config.batch_size,
                     observation_schema=experiment.config.observation_schema,
+                    learning_rate=experiment.config.learning_rate,
+                    anticipatory=experiment.config.anticipatory,
+                    epsilon=experiment.config.epsilon,
+                    target_update_steps=experiment.config.target_update_steps,
                 ).to_bytes(),
             )
             return False
@@ -298,12 +318,13 @@ class IterativeNfspOrchestrator:
                 match_key,
                 JobType.EVALUATION,
                 MATCH_PAYLOAD_TYPE,
-                NfspMatchPayload(
-                    "1.0",
-                    str(candidate.artifact_id),
-                    candidate.sha256,
-                    str(base.artifact_id),
-                    base.sha256,
+                _match_payload(
+                    config,
+                    schema_version="1.0",
+                    candidate_artifact_id=str(candidate.artifact_id),
+                    candidate_sha256=candidate.sha256,
+                    baseline_artifact_id=str(base.artifact_id),
+                    baseline_sha256=base.sha256,
                     seed_start=config.seed_start + 50_000_000 + round_index * 1_000_000,
                     min_deals=config.evaluation_deals,
                     max_deals=config.max_evaluation_deals,

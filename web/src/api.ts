@@ -61,6 +61,8 @@ export interface Preset {
 }
 
 export interface ExperimentSummary {
+  group_id?: string | null;
+  seed?: number;
   experiment_id: string;
   preset: string;
   kind: string;
@@ -93,6 +95,26 @@ export interface ExperimentDetail extends ExperimentSummary {
     winnings: number[];
   } | null;
   tournament?: TournamentSummary | null;
+  curve?: CurvePoint[];
+}
+
+export interface CurvePoint {
+  round: number;
+  train_steps: number | null;
+  head_to_head: { bb_per_100: number; confidence_low: number; confidence_high: number; hands: number } | null;
+  benchmark: Record<string, { bb_per_100: number; low: number; high: number; hands: number }>;
+}
+
+export interface TrainingOptions {
+  fields: Record<string, { type: string; min: number | null; max: number | null }>;
+  observation_schemas: string[];
+  presets: Record<string, Record<string, number | string>>;
+}
+
+export interface CreateExperimentBody {
+  preset: string;
+  settings?: Record<string, number | string>;
+  seeds?: number[];
 }
 
 export interface Interval {
@@ -283,8 +305,9 @@ const coordinatorApi = {
   experiments: () => request<ExperimentSummary[]>("GET", "/api/experiments"),
   experiment: (id: string) =>
     request<ExperimentDetail>("GET", `/api/experiments/${encodeURIComponent(id)}`),
-  createExperiment: (preset: string) =>
-    request<ExperimentSummary>("POST", "/api/experiments", { preset }),
+  trainingOptions: () => request<TrainingOptions>("GET", "/api/training-options"),
+  createExperiment: (body: CreateExperimentBody) =>
+    request<ExperimentSummary | { group: ExperimentSummary[] }>("POST", "/api/experiments", body),
   startExperiment: (id: string) =>
     request<ExperimentSummary>("POST", `/api/experiments/${encodeURIComponent(id)}/start`),
   stopExperiment: (id: string) =>
@@ -320,7 +343,9 @@ const localApi: typeof coordinatorApi = {
   presets: () => query<Preset[]>("presets"),
   experiments: () => query<ExperimentSummary[]>("experiments"),
   experiment: (id) => query<ExperimentDetail>("experiment", id),
-  createExperiment: (preset) => command<ExperimentSummary>("create_experiment", { preset }),
+  trainingOptions: () => query<TrainingOptions>("training_options"),
+  createExperiment: (body) =>
+    command<ExperimentSummary | { group: ExperimentSummary[] }>("create_experiment", body),
   startExperiment: (id) => command<ExperimentSummary>("start_experiment", { experiment_id: id }),
   stopExperiment: (id) => command<ExperimentSummary>("stop_experiment", { experiment_id: id }),
   matrix: (id) => query<Matrix>("matrix", id),
