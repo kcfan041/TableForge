@@ -43,6 +43,8 @@ def main() -> None:
     parser.add_argument("--reward-scale", type=float, default=1.0)
     parser.add_argument("--self-play", type=float, default=0.5)
     parser.add_argument("--double-q", action="store_true")
+    parser.add_argument("--rl-capacity", type=int, default=50_000)
+    parser.add_argument("--sl-capacity", type=int, default=100_000)
     parser.add_argument("--hand-horizon", action="store_true")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--threads", type=int, default=0)
@@ -61,6 +63,8 @@ def main() -> None:
             target_update_steps=args.target_update,
             reward_scale=args.reward_scale,
             double_q=args.double_q,
+            rl_capacity=args.rl_capacity,
+            sl_capacity=args.sl_capacity,
             seed=args.seed,
             observation_schema="poker-hunlhe-vector-v2",
         )
