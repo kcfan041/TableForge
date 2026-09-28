@@ -74,6 +74,11 @@ class Layout:
         return self.home / "operator"
 
     @property
+    def models(self) -> Path:
+        """Trained models kept on this computer (see `tableforge.models`)."""
+        return self.home / "models"
+
+    @property
     def service_file(self) -> Path:
         return self.coordinator / SERVICE_FILE
 

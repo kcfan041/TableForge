@@ -36,6 +36,35 @@ uv run tableforge league matrix <experiment-id>
 - `hu-nfsp-gpu-iterative` 使用較大的網路並在 GPU 上訓練，GPU 記憶體不夠時自動改用較小的 batch。只想用 CPU 的 Worker 加上 `--no-gpu`。
 - 6 人桌 Rule Bot simulation：`6max-rule-smoke`（1,200 手）、`6max-rule-soak`（100 萬手）。
 
+## 本機模型庫
+
+訓練好的模型放在 TableForge 資料位置的 `models\`（Windows 為 `%LOCALAPPDATA%\TableForge\models`），不進 repo。每個模型一個資料夾：`checkpoint.zip` 與 `model.json`（演算法、遊戲、訓練設定、評估結果、sha256）；讀取時會檢查 sha256。
+
+```
+uv run tableforge models list
+uv run tableforge models add <模型 ID> <checkpoint.zip> --game 6max-pko-10bb --info info.json
+uv run tableforge models remove <模型 ID>
+```
+
+`--info` 是含 `training` 與 `evaluation` 兩個物件的 JSON（選填）。`tableforge ui` 的重播與策略表會從這裡選模型。
+
+## 研究用：參數掃描
+
+`scripts/sweep.py` 在背景同時跑多組訓練設定與 seed，用於調參；每組是一個 `scripts/nfsp_probe.py`（HU 現金桌）或 `scripts/tournament_probe.py`（錦標賽）程序。
+
+```
+uv run python scripts/sweep.py start runs/p1b sweep.json --seeds 1,2,3 --size 1000000
+uv run python scripts/sweep.py start runs/t3 t3.json --probe tournament --size 60000 --evaluation 1000
+uv run python scripts/sweep.py status runs/p1b
+uv run python scripts/sweep.py summary runs/p1b
+uv run python scripts/sweep.py stop runs/p1b
+```
+
+- `sweep.json` 是「名稱 → 額外的 probe 參數」，例如 `{"bigbuf": ["--reward-scale", "100", "--rl-capacity", "500000"]}`；參數中的 `{tag}` 會換成該次執行的路徑（例如 `--save {tag}.zip`）。
+- 每個程序單執行緒、不開視窗、以「低於一般」優先權執行。
+- 有多個 CCD 的 CPU（例如 Ryzen 9 9950X3D）上，程序會輪流綁到各 CCD，避免熱集中在同一個 CCD。
+- 預設最多同時 16 個程序（`--max-runs`）。
+
 ## 用指令建立與加入叢集
 
 在建立者的電腦：
@@ -219,6 +248,7 @@ endpoint = "host"
 | `ui [--home DIR] [--port N] [--no-gpu] [--no-browser]` | 本機介面：建立或加入叢集、Worker、叢集管理 |
 | `doctor [--json] [--coordinator]` | 偵測硬體並列出可執行的 workload；`--coordinator` 另外逐層檢查到叢集的連線 |
 | `join <邀請碼>` | 用邀請碼加入叢集 |
+| `models list/add/remove [--home DIR]` | 本機模型庫：列出、匯入、刪除訓練好的模型 |
 | `remote whoami/presets/nodes/checkpoints/matrix` | 用操作憑證遠端查看叢集 |
 | `remote experiment list/create/start/stop/status` | 遠端管理實驗 |
 | `coordinator init/admin/serve` | 建立憑證、產生管理者憑證、執行叢集服務 |

@@ -174,6 +174,22 @@ def main() -> None:
         help="where TableForge keeps this machine's data (default: per-user app data folder)",
     )
 
+    models = subparsers.add_parser(
+        "models", help="trained models kept on this computer (outside the repository)"
+    )
+    models.add_argument("--home", type=Path, help="TableForge data folder")
+    models_subparsers = models.add_subparsers(dest="models_command", required=True)
+    models_subparsers.add_parser("list")
+    models_add = models_subparsers.add_parser("add", help="import a checkpoint file")
+    models_add.add_argument("model_id")
+    models_add.add_argument("checkpoint", type=Path)
+    models_add.add_argument("--game", required=True, help="e.g. 6max-pko-10bb")
+    models_add.add_argument("--algorithm", default="nfsp")
+    models_add.add_argument("--description", default="")
+    models_add.add_argument("--info", type=Path, help="JSON with training and evaluation")
+    models_add.add_argument("--replace", action="store_true")
+    models_subparsers.add_parser("remove").add_argument("model_id")
+
     remote = subparsers.add_parser(
         "remote", help="control a cluster remotely with the credential from `join`"
     )
@@ -290,6 +306,9 @@ def main() -> None:
         return
     if args.command == "ui":
         _local_ui(args, settings)
+        return
+    if args.command == "models":
+        _models(args)
         return
     if args.command == "remote":
         _remote(args)
@@ -557,6 +576,44 @@ def _learning_executors(
     from tableforge.learning.registry import learning_executors
 
     return learning_executors(service.read_artifact)
+
+
+def _models(args: argparse.Namespace) -> None:
+    from tableforge.models import ModelLibrary
+    from tableforge.web.cluster import Layout, default_home
+
+    library = ModelLibrary(Layout(args.home or default_home()).models)
+    if args.models_command == "list":
+        models = library.list()
+        if not models:
+            print(f"no models in {library.root}")
+        for info in models:
+            print(
+                f"{info.model_id:<28} {info.algorithm:<6} {info.game:<18} "
+                f"{info.size_bytes / 1e6:6.1f} MB  {info.description}"
+            )
+        return
+    if args.models_command == "add":
+        extra = json.loads(args.info.read_text(encoding="utf-8")) if args.info else {}
+        if args.algorithm == "nfsp":
+            from tableforge.learning.nfsp import checkpoint_manifest
+
+            checkpoint_manifest(args.checkpoint.read_bytes())
+        info = library.add(
+            args.model_id,
+            args.checkpoint.read_bytes(),
+            args.algorithm,
+            args.game,
+            description=args.description,
+            training=extra.get("training", {}),
+            evaluation=extra.get("evaluation", {}),
+            source=str(args.checkpoint),
+            replace=args.replace,
+        )
+        print(f"added {info.model_id} ({info.sha256[:12]}) to {library.root}")
+        return
+    library.remove(args.model_id)
+    print(f"removed {args.model_id}")
 
 
 def _stop_event() -> threading.Event:

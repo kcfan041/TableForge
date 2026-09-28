@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：519 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：521 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -422,6 +422,14 @@
   - 實測比較：用舊旗標啟動 `.venv\Scripts\python.exe` 出現 1 個新視窗，新旗標 0 個。
   - 在 `tableforge ui` 建立叢集、開 2 個 Worker、停止 Worker、停止叢集服務，全程監看新出現的視窗：0 個；Worker 都以結束碼 0 停止。
   - 新增測試 2 個（旗標不含 `DETACHED_PROCESS`、停止檔會讓 Worker 停止）；三個端對端腳本（`local_ui_e2e`、`create_cluster_e2e`、`cluster_ui_e2e`）通過。
+
+### R1 研究工具整理與本機模型庫
+- **`capability/cpu_topology.py`**：依 L3 快取群組找出各 CCD（Windows `GetLogicalProcessorInformationEx`），提供 `spread_masks()` 與設定／讀取處理器相依性；其他系統回傳單一群組、不做任何事。
+- **`scripts/sweep.py`**：研究用參數掃描，取代先前放在暫存資料夾的啟動器與彙整腳本。`start` 在背景啟動多組設定 × seed（不開視窗、低於一般優先權、輪流綁到各 CCD，連同 `.venv` 轉接程式啟動的真正 Python 一起設定），`status`、`summary`（HU 與錦標賽兩種格式，標示每個 seed 是否都顯著）、`stop`。實測兩個程序分別在 CCD0 與 CCD1、沒有視窗，彙整結果與先前的報告一致。
+- **本機模型庫**（`tableforge/models.py`、`tableforge models list/add/remove`）：放在資料位置的 `models\`，每個模型含 `checkpoint.zip` 與 `model.json`（演算法、遊戲、訓練設定、評估結果、sha256），讀取時檢查 sha256。已匯入 T3 驗收的 5 個模型 `pko-10bb-nfsp-s1`、`-s11` 到 `-s14`（各約 21 MB，附完整訓練設定、6,000 場評估結果與訓練曲線）。
+- `scripts/nfsp_probe.py` 新增 `--rl-capacity`、`--sl-capacity`；`scripts/tournament_probe.py` 新增 `--eval-seed-start`、`--greedy`、`--save`。
+- 研究期間的暫存檔由約 320 MB 清到 0.2 MB，只保留各批次的結果記錄。
+- 測試 2 個（模型庫的新增、列出、讀取、損壞偵測、ID 驗證、取代與刪除）。
 
 ### T2 PKO
 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 5 節。
