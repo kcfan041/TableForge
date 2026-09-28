@@ -253,6 +253,16 @@ function Workers({ status, refresh }: { status: LocalStatus; refresh: () => void
           <span className="muted">{t("local.runningCount", { count: running.length })}</span>
         ) : null}
       </div>
+      {status.cpu.available ? (
+        <label className="checkbox small">
+          <input
+            type="checkbox"
+            checked={status.cpu.spread}
+            onChange={(event) => void act(() => local.setSpread(event.target.checked))}
+          />
+          {t("local.spread", { groups: status.cpu.groups })}
+        </label>
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
       {status.workers.length > 0 ? (
         <table>
@@ -282,7 +292,12 @@ function Workers({ status, refresh }: { status: LocalStatus; refresh: () => void
                       <span className="muted small"> exit {worker.exit_code}</span>
                     ) : null}
                   </td>
-                  <td>{worker.jobs}</td>
+                  <td>
+                    {worker.jobs}
+                    {worker.cpu_group !== null ? (
+                      <span className="muted small"> · CCD{worker.cpu_group}</span>
+                    ) : null}
+                  </td>
                   <td className="small warning">{worker.last_error}</td>
                   <td>
                     {worker.running ? (

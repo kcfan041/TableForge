@@ -350,6 +350,8 @@ export const zhHant = {
   "local.workersHelpGpu":
     "Worker 會向叢集領取工作並用這台電腦運算，可以使用 GPU。只有一張 GPU 時建議只開一個。關閉 TableForge 時，Worker 也會一起停止。",
   "local.workersHelpCpu": "Worker 會向叢集領取工作並用這台電腦運算（這次設定為不使用 GPU）。關閉 TableForge 時，Worker 也會一起停止。",
+  "local.spread":
+    "把 Worker 平均分到 {groups} 個 CCD（這顆 CPU 有多個 L3 快取群組；避免熱集中在同一個 CCD）。只影響之後啟動的 Worker。",
   "local.startWorker": "啟動 Worker",
   "local.stopWorker": "停止",
   "local.runningCount": "{count} 個執行中",

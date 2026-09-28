@@ -22,6 +22,7 @@ export interface WorkerView {
   stopped_at: string | null;
   exit_code: number | null;
   last_error: string;
+  cpu_group: number | null;
 }
 
 export interface LocalStatus {
@@ -37,6 +38,7 @@ export interface LocalStatus {
   operator: { cluster_id: string; role: string; address: string } | null;
   hosting: HostingStatus;
   use_gpu: boolean;
+  cpu: { groups: number; spread: boolean; available: boolean };
   workers: WorkerView[];
 }
 
@@ -95,6 +97,7 @@ export const local = {
     call<{ report: Record<string, unknown>; status: LocalStatus }>("POST", "/api/join", { invite }),
   doctor: () => call<DoctorReport>("POST", "/api/doctor"),
   startWorker: () => call<WorkerView>("POST", "/api/workers"),
+  setSpread: (enabled: boolean) => call<LocalStatus>("POST", "/api/workers/spread", { enabled }),
   stopWorker: (worker: number) => call<WorkerView>("POST", `/api/workers/${worker}/stop`),
   log: (worker: number) =>
     call<{ worker: WorkerView; lines: LogLine[] }>("GET", `/api/workers/${worker}/log`),

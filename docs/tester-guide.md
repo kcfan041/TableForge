@@ -185,4 +185,5 @@ uv sync --extra learning --extra gpu
 
 - 目前所有持有操作者權限的人權限相同，可以停止彼此的實驗；使用者、專案與隔離屬於完整版（`docs/architecture/07-multi-party-and-trust.md` S1–S5）。
 - 同一台電腦的多個 Worker 還不會自動分配到不同的 GPU。
+- CPU 有多個 CCD（例如 Ryzen 9 9950X3D）時，Worker 會自動平均分到各 CCD，避免熱集中在同一邊；可在 Worker 卡片關閉。
 - 透過 Tailscale 的兩台實體電腦驗收尚未完成；目前在一台電腦上以多個 TableForge 驗證建立、加入與管理流程。

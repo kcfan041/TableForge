@@ -64,6 +64,46 @@ def set_affinity(pid: int, mask: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def child_processes(pid: int) -> list[int]:
+    """Process ids whose parent is `pid` (Windows only; a Toolhelp snapshot, no console)."""
+    if sys.platform != "win32":
+        return []
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+    if snapshot in (0, ctypes.c_void_p(-1).value):
+        return []
+    try:
+        entry = _ProcessEntry32()
+        entry.dwSize = ctypes.sizeof(_ProcessEntry32)
+        found: list[int] = []
+        more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            if entry.th32ParentProcessID == pid:
+                found.append(int(entry.th32ProcessID))
+            more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        return found
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+_TH32CS_SNAPPROCESS = 0x00000002
+
+
+class _ProcessEntry32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.c_ulong),
+        ("cntUsage", ctypes.c_ulong),
+        ("th32ProcessID", ctypes.c_ulong),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_ulong),
+        ("cntThreads", ctypes.c_ulong),
+        ("th32ParentProcessID", ctypes.c_ulong),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_ulong),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
 def affinity(pid: int) -> int | None:
     """The affinity mask of a process, or None when it cannot be read."""
     if sys.platform != "win32":

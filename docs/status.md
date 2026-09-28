@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：521 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：523 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -431,6 +431,14 @@
 - 研究期間的暫存檔由約 320 MB 清到 0.2 MB，只保留各批次的結果記錄。
 - 測試 2 個（模型庫的新增、列出、讀取、損壞偵測、ID 驗證、取代與刪除）。
 
+### R2 Worker 平均分配到各 CCD
+- **問題**：在多 CCD 的 Windows 電腦（例如 Ryzen 9 9950X3D）上，Windows 會把少數幾個忙碌的單執行緒程序集中排在同一個 CCD，造成局部高溫（使用者以 HWiNFO 觀察到單一 CCD 約 98°C、另一個 70–80°C；平均分散時總功耗較高但最高溫較低）。
+- **做法**：`tableforge ui` 啟動 Worker 時，若 CPU 有多個 L3 快取群組，就把 Worker 綁到目前執行中 Worker 最少的那個 CCD（`cpu_topology.spread_masks`）。`.venv\Scripts\python.exe` 是轉接程式，真正的 Python 是它的子程序，因此兩者都會設定（以 Toolhelp 快照找子程序，不開視窗）。
+- 「這台電腦」頁的 Worker 卡片有開關（預設開啟，設定存在資料位置），Worker 列表顯示每個 Worker 在哪個 CCD；只有一個 L3 群組的 CPU 與非 Windows 系統不顯示、不做任何事。
+- 驗收：
+  - 測試 2 個（以假的 CPU 群組執行，Linux CI 也會跑）：依序分配 0、1、0；停止一個後新 Worker 補到較空的群組；關閉後不再綁定且設定會保存；單一群組時開關不可用。
+  - 實機：在 `tableforge ui` 建立叢集並開 4 個 Worker，每個 Worker 的轉接程式與 Python 程序都綁在指定的 CCD（CCD0、CCD1、CCD0、CCD1）。
+
 ### T2 PKO
 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 5 節。
 - **設定**：`TournamentConfig.bounty = BountyConfig(bounty_share, cash_share, winner_keeps_own)`，預設 buy-in 的 50% 是起始 bounty、淘汰別人時拿 50% 現金（其餘加到自己頭上）、冠軍拿回自己頭上的 bounty。三個值都可設定（例如 `cash_share=1` 就是一般 knockout）。沒有 bounty 的設定 JSON 與 T1 完全相同，已有實驗不受影響。
@@ -725,13 +733,12 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **T3（進行中）**：錦標賽上的學習。P1-b 已達驗收，見上方「P1-b 進度」。
-2. **Worker 平均分散到各 CCD（T3 之後）**：在多 CCD 的 Windows 電腦（例如 Ryzen 9 9950X3D）上，`tableforge ui` 開的 Worker 會被 Windows 集中排在同一個 CCD，造成局部高溫（使用者以 HWiNFO 觀察到單一 CCD 約 98°C、另一個 70–80°C；平均分散時總功耗較高但最高溫較低）。做法：依 L3 快取群組（`GetLogicalProcessorInformationEx`）找出各 CCD，Worker 輪流設定處理器相依性到各 CCD，並以「低於一般」優先權執行；只在偵測到多個 L3 群組的 Windows 生效，UI 可關閉。已在研究用的背景訓練上實測：兩個 CCD 負載由集中在一邊變為 3.4 對 3.8 個執行緒。
-3. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-4. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-5. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-6. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-7. **CUDA Worker 容器**（需要 WSL2 後端）。
-8. **O0–O7 對手建模**。
+1. **錦標賽訓練接上平台、重播、策略表（進行中）**：T3 第一版與 P1-b 已達驗收。
+2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
+3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
+4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
+5. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
+6. **CUDA Worker 容器**（需要 WSL2 後端）。
+7. **O0–O7 對手建模**。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from tableforge.capability.cpu_topology import child_processes, set_affinity, spread_masks
 from tableforge.processes import STOP_FILE_ENV, background_process_flags
 from tableforge.transport.control_client import ControlError, RemoteControl
 from tableforge.transport.credentials import RemoteCredentials
@@ -66,6 +67,8 @@ class WorkerProcess:
     state: str = "starting"
     last_error: str = ""
     stop_file: Path | None = None
+    cpu_group: int | None = None
+    """Index of the L3 cache group (CCD) the worker is pinned to, when spreading."""
 
     def view(self) -> dict[str, object]:
         return {
@@ -78,6 +81,7 @@ class WorkerProcess:
             "stopped_at": self.stopped_at,
             "exit_code": self.exit_code,
             "last_error": self.last_error,
+            "cpu_group": self.cpu_group,
         }
 
 
@@ -100,11 +104,15 @@ class WorkerManager:
         command_prefix: list[str],
         use_gpu: bool = True,
         environment: dict[str, str] | None = None,
+        cpu_groups: list[int] | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.command_prefix = command_prefix
         self.use_gpu = use_gpu
         self.environment = environment
+        self.cpu_groups = spread_masks() if cpu_groups is None else cpu_groups
+        """Affinity masks, one per CCD; empty when the CPU has a single L3 group."""
+        self.spread = bool(self.cpu_groups) and _load_spread(data_dir)
         self._workers: list[WorkerProcess] = []
         self._lock = threading.Lock()
         self._counter = 0
@@ -154,11 +162,37 @@ class WorkerManager:
             start_new_session=os.name != "nt",
         )
         worker = WorkerProcess(number, command, process, stop_file=stop_file)
+        if self.spread and self.cpu_groups:
+            worker.cpu_group = self._least_used_group()
+            threading.Thread(
+                target=_pin, args=(process.pid, self.cpu_groups[worker.cpu_group]), daemon=True
+            ).start()
         with self._lock:
             self._workers.append(worker)
             self._workers = self._workers[-20:]
         threading.Thread(target=self._pump, args=(worker,), daemon=True).start()
         return worker
+
+    def _least_used_group(self) -> int:
+        counts = [0] * len(self.cpu_groups)
+        for worker in self.running():
+            if worker.cpu_group is not None and worker.cpu_group < len(counts):
+                counts[worker.cpu_group] += 1
+        return counts.index(min(counts))
+
+    def set_spread(self, enabled: bool) -> None:
+        """Turn spreading on or off for workers started from now on (and remember it)."""
+        if enabled and not self.cpu_groups:
+            raise HTTPException(409, "this CPU has a single L3 cache group")
+        self.spread = enabled
+        _save_spread(self.data_dir, enabled)
+
+    def cpu_view(self) -> dict[str, object]:
+        return {
+            "groups": len(self.cpu_groups),
+            "spread": self.spread,
+            "available": bool(self.cpu_groups),
+        }
 
     def stop(self, number: int, timeout: float = 15.0) -> WorkerProcess:
         worker = next((item for item in self.workers() if item.worker_number == number), None)
@@ -227,6 +261,40 @@ def _interrupt(worker: WorkerProcess) -> None:
             process.send_signal(signal.SIGINT)
     except (OSError, ValueError):
         process.terminate()
+
+
+_SPREAD_FILE = "spread-workers.json"
+
+
+def _load_spread(data_dir: Path) -> bool:
+    path = data_dir / _SPREAD_FILE
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")).get("enabled", True))
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def _save_spread(data_dir: Path, enabled: bool) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / _SPREAD_FILE).write_text(json.dumps({"enabled": enabled}), encoding="utf-8")
+
+
+def _pin(pid: int, mask: int, wait: float = 15.0) -> None:
+    """Pin a worker and, once it exists, the interpreter its launcher starts.
+
+    ``.venv\\Scripts\\python.exe`` is a small launcher that starts the real Python as a
+    child; the child takes the affinity the launcher has when it starts, so the launcher
+    is pinned first and the child is pinned again when it appears.
+    """
+    set_affinity(pid, mask)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        found = child_processes(pid)
+        if found:
+            for child in found:
+                set_affinity(child, mask)
+            return
+        time.sleep(0.2)
 
 
 def default_command_prefix() -> list[str]:
@@ -329,6 +397,7 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             "operator": operator,
             "hosting": hosting,
             "use_gpu": context.manager.use_gpu,
+            "cpu": context.manager.cpu_view(),
             "workers": [worker.view() for worker in context.manager.workers()],
         }
 
@@ -454,6 +523,11 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
         if len(context.manager.running()) >= 8:
             raise HTTPException(409, "at most 8 workers can run from this page")
         return context.manager.start().view()
+
+    @app.post("/api/workers/spread")
+    def spread_workers(body: WebToggleRequest) -> dict[str, object]:
+        context.manager.set_spread(body.enabled)
+        return status()
 
     @app.post("/api/workers/{number}/stop")
     def stop_worker(number: int) -> dict[str, object]:

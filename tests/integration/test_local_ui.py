@@ -66,7 +66,7 @@ def panel(tmp_path: Path) -> Iterator[Panel]:
     static.mkdir()
     (static / "local.html").write_text("<html><head></head><body>local</body></html>", "utf-8")
     (static / "index.html").write_text("<html>coordinator</html>", "utf-8")
-    manager = WorkerManager(tmp_path / "node", [sys.executable, str(script)])
+    manager = WorkerManager(tmp_path / "node", [sys.executable, str(script)], cpu_groups=[])
     context = LocalUiContext(
         data_dir=tmp_path / "node",
         operator_dir=tmp_path / "operators",
@@ -193,3 +193,45 @@ def test_unknown_worker(panel: Panel) -> None:
     status, _ = panel.post("/api/workers/99/stop")
 
     assert status == 404
+
+
+def test_workers_spread_over_cpu_groups(panel: Panel, monkeypatch: pytest.MonkeyPatch) -> None:
+    pinned: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "tableforge.web.local._pin", lambda pid, mask: pinned.append((pid, mask))
+    )
+    manager = panel.context.manager
+    manager.cpu_groups = [0x0F, 0xF0]
+    manager.spread = True
+    joined(panel)
+
+    groups = [panel.post("/api/workers")[1]["cpu_group"] for _ in range(3)]  # type: ignore[index]
+    deadline = time.monotonic() + 5
+    while len(pinned) < 3 and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert groups == [0, 1, 0]
+    assert sorted(mask for _, mask in pinned) == [0x0F, 0x0F, 0xF0]
+    status = panel.get("/api/status")
+    assert isinstance(status, dict)
+    assert status["cpu"] == {"groups": 2, "spread": True, "available": True}
+
+    # Stopping a worker frees its group: the next one goes where fewer are running.
+    panel.post(f"/api/workers/{manager.running()[1].worker_number}/stop")
+    assert panel.post("/api/workers")[1]["cpu_group"] == 1  # type: ignore[index]
+
+    code, body = panel.post("/api/workers/spread", {"enabled": False})
+    assert code == 200 and body["cpu"]["spread"] is False  # type: ignore[index]
+    assert panel.post("/api/workers")[1]["cpu_group"] is None  # type: ignore[index]
+    assert (panel.context.data_dir / "spread-workers.json").is_file()
+
+
+def test_spread_is_unavailable_on_a_single_group(panel: Panel) -> None:
+    panel.context.manager.cpu_groups = []
+    panel.context.manager.spread = False
+
+    code, _ = panel.post("/api/workers/spread", {"enabled": True})
+
+    assert code == 409
+    status = panel.get("/api/status")
+    assert isinstance(status, dict) and status["cpu"]["available"] is False
