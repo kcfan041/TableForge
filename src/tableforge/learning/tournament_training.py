@@ -241,6 +241,27 @@ class FrozenTournamentPlayer:
         return self.agent.act(observation, legal)
 
 
+@dataclass
+class GreedyTournamentPlayer:
+    """A trained agent's best response: acts greedily with its Q network, no exploration.
+
+    NFSP plays the average policy by default; in a fixed field of opponents the best
+    response it has learned can be stronger, so benchmarks may report both.
+    """
+
+    agent: NfspAgent
+
+    def __post_init__(self) -> None:
+        self.agent.training = False
+
+    def begin_hand(self, info: TournamentHandInfo) -> None:
+        self.agent.begin_hand(info)
+
+    def act(self, observation: TableObservation, legal: LegalActions) -> Action:
+        self.agent.best_response_mode = True
+        return self.agent.act(observation, legal)
+
+
 def frozen_player(bundle: bytes) -> FrozenTournamentPlayer:
     """Load the average policy of a checkpoint for tournament benchmarks."""
     return FrozenTournamentPlayer(NfspAgent.from_bundle(bundle, inference_only=True))

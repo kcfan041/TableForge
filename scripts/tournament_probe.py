@@ -13,12 +13,14 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 import torch
 
 from tableforge.learning.nfsp import NfspAgent, NfspConfig
 from tableforge.learning.tournament_training import (
     FrozenTournamentPlayer,
+    GreedyTournamentPlayer,
     tournament_self_play_train,
 )
 from tableforge.poker.tournament import BountyConfig, preset_config
@@ -44,6 +46,9 @@ def main() -> None:
     parser.add_argument("--self-play", type=float, default=0.5)
     parser.add_argument("--double-q", action="store_true")
     parser.add_argument("--rl-capacity", type=int, default=50_000)
+    parser.add_argument("--eval-seed-start", type=int, default=900_000_000)
+    parser.add_argument("--greedy", action="store_true", help="also benchmark the Q network")
+    parser.add_argument("--save", default="", help="write the final checkpoint here")
     parser.add_argument("--sl-capacity", type=int, default=100_000)
     parser.add_argument("--hand-horizon", action="store_true")
     parser.add_argument("--seed", type=int, default=1)
@@ -88,14 +93,26 @@ def main() -> None:
             trained += per_stage
             hands += report.hands
             losses = report.last_metrics
-        frozen = NfspAgent.from_bundle(agent.to_bundle(), inference_only=True)
+        bundle = agent.to_bundle()
+        frozen = NfspAgent.from_bundle(bundle, inference_only=True)
         benchmark = evaluate_tournament(
             lambda frozen=frozen: FrozenTournamentPlayer(frozen),
             field_factory("mixed"),
             config,
             seeds=args.seeds,
-            seed_start=900_000_000,
+            seed_start=args.eval_seed_start,
         ).summary()
+        greedy: dict[str, object] = {}
+        if args.greedy and stage:
+            q_agent = NfspAgent.from_bundle(bundle)
+            q_agent.training = False
+            greedy = evaluate_tournament(
+                lambda q_agent=q_agent: GreedyTournamentPlayer(q_agent),
+                field_factory("mixed"),
+                config,
+                seeds=args.seeds,
+                seed_start=args.eval_seed_start,
+            ).summary()
         print(
             json.dumps(
                 {
@@ -110,11 +127,20 @@ def main() -> None:
                         key: benchmark[key]
                         for key in ("roi", "prize_ev", "bounty_ev", "itm", "average_place")
                     },
+                    "greedy": {
+                        key: greedy[key]
+                        for key in ("roi", "prize_ev", "bounty_ev", "itm", "average_place")
+                    }
+                    if greedy
+                    else None,
                 },
                 sort_keys=True,
             ),
             flush=True,
         )
+    if args.save:
+        Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.save).write_bytes(agent.to_bundle())
     sys.exit(0)
 
 

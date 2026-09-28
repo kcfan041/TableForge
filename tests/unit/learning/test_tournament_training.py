@@ -140,6 +140,21 @@ def test_double_q_trains() -> None:
     assert NfspAgent.from_bundle(learner.to_bundle()).config.double_q is True
 
 
+def test_greedy_player_uses_the_q_network_deterministically() -> None:
+    from tableforge.learning.tournament_training import GreedyTournamentPlayer
+    from tableforge.poker.tournament import run_tournament
+
+    learner = agent()
+    tournament_self_play_train(learner, pko(), tournaments=2, seed_start=0)
+    bundle = learner.to_bundle()
+
+    def play() -> tuple[float, ...]:
+        players = [GreedyTournamentPlayer(NfspAgent.from_bundle(bundle)) for _ in range(6)]
+        return run_tournament(pko(), 11, players).results
+
+    assert play() == play()
+
+
 def test_v1_agents_cannot_play_tournaments() -> None:
     with pytest.raises(ValueError):
         play_training_tournament(agent(schema="poker-hunlhe-vector-v1"), pko(), 1, print)

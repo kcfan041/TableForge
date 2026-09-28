@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 進行中 | 設計已定案；訓練迴圈完成，第一輪探測尚未贏過基準 |
 
-目前測試：518 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：519 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -472,7 +472,16 @@
 
   - 1 萬場後穩定在 −3% 至 −6%，比 `HeuristicPushFoldBot`（−6.8%）好、與 `hunter`（−3.8%）相近，但還沒顯著大於 0；1 萬場之後不再進步。
   - anticipatory 0.3 沒有幫助。
-- **第三輪（進行中）**：套用 P1-b 的發現（大 buffer：RL 20 萬、SL 100 萬），並比較自我對打比例 50% 與 75%，3 萬場、3 個 seed。
+- **第三輪：大 buffer（RL 20 萬、SL 100 萬），3 萬場，3 個 seed**（評估 3,000 場；粗體 = 顯著大於 0）：
+
+  | 自我對打比例 | seed 1 | seed 2 | seed 3 | 平均 |
+  |---|---|---|---|---|
+  | 50% | **+10.4%** | +2.4% | +5.9% | +5.6% |
+  | 75% | **+10.4%** | **+9.9%** | +4.5% | **+8.3%** |
+
+  - 大 buffer 是關鍵：6 個 seed 在 3 萬場時全部為正，都贏過 `hunter`（−3.8%）與 `HeuristicPushFoldBot`（−6.8%）。Bounty EV 與 Prize EV 同時上升。
+  - 75% 自我對打較好，且多數 seed 到 3 萬場仍在上升。
+- **確認實驗（進行中）**：75% 自我對打 + 大 buffer，6 萬場；seed 1 與 4 個新 seed（11–14）；評估 1,000 seed × 6 座位 = 6,000 場，使用未用過的評估 seed；同時評估平均策略與 Q 網路（`GreedyTournamentPlayer`，直接用最佳回應出手）；保存最終 checkpoint。
 - 背景訓練改為平均分配到兩個 CCD、以「低於一般」優先權執行（見「下一步候選」第 2 項）。
 
 ### P1-b0 訓練用的 UI
