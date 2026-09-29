@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import secrets
@@ -458,7 +459,16 @@ class GrpcCoordinatorClient:
         if not path.exists():
             temporary = cache_dir / f"{artifact.sha256}.{secrets.token_hex(6)}.part"
             temporary.write_bytes(body)
-            os.replace(temporary, path)
+            try:
+                os.replace(temporary, path)
+            except PermissionError:
+                # Several workers on one computer share the cache. On Windows, replacing a
+                # file another worker has just written and still has open fails; the file
+                # is named by its sha256, so the copy already there has the same content.
+                temporary.unlink(missing_ok=True)
+                if not path.exists():
+                    raise
         else:
-            os.utime(path)
+            with contextlib.suppress(PermissionError):
+                os.utime(path)
         return path
