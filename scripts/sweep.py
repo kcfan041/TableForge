@@ -83,6 +83,57 @@ def _alive(pid: int) -> bool:
     return True
 
 
+BASE_BYTES = 1_000_000_000
+"""PyTorch, the networks and the Python process itself (measured: about 0.6-1 GB)."""
+BYTES_PER_ITEM = 406 * 4 + 64
+"""One stored transition or policy sample (float32 state, mask, action, reward)."""
+
+
+def _option(extra: list[str], name: str, default: int) -> int:
+    if name in extra:
+        return int(extra[extra.index(name) + 1])
+    return default
+
+
+def estimate_bytes(extra: list[str]) -> int:
+    """Peak memory of one run: base cost plus full replay buffers (and a copy while
+    checkpoints are written)."""
+    rl = _option(extra, "--rl-capacity", 50_000)
+    sl = _option(extra, "--sl-capacity", 100_000)
+    next_states = 1 if "--hand-horizon" in extra else 2
+    return BASE_BYTES + rl * BYTES_PER_ITEM * next_states + sl * BYTES_PER_ITEM * 2
+
+
+def available_memory() -> int:
+    """Physical memory currently available, in bytes (0 when unknown)."""
+    if sys.platform == "win32":
+        import ctypes
+
+        class Status(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = Status()
+        status.dwLength = ctypes.sizeof(Status)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.ullAvailPhys)
+        return 0
+    try:
+        pages = os.sysconf("SC_AVPHYS_PAGES")
+        return int(pages * os.sysconf("SC_PAGE_SIZE"))
+    except (ValueError, OSError, AttributeError):
+        return 0
+
+
 def start(args: argparse.Namespace) -> None:
     folder = Path(args.folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -91,6 +142,20 @@ def start(args: argparse.Namespace) -> None:
     runs = [(name, extra, seed) for name, extra in configs.items() for seed in seeds]
     if len(runs) > args.max_runs:
         raise SystemExit(f"{len(runs)} runs requested; the limit is {args.max_runs}")
+    estimates = [estimate_bytes(extra) for _, extra, _ in runs]
+    available = available_memory()
+    budget = available * args.memory_share if available else 0
+    print(
+        f"estimated peak memory {sum(estimates) / 1e9:.1f} GB for {len(runs)} runs"
+        + (f"; available {available / 1e9:.1f} GB" if available else "")
+    )
+    if budget and sum(estimates) > budget and not args.force:
+        raise SystemExit(
+            f"the runs would need about {sum(estimates) / 1e9:.1f} GB, more than "
+            f"{args.memory_share:.0%} of the {available / 1e9:.1f} GB available; run fewer "
+            "configurations or seeds at a time, lower --rl-capacity/--sl-capacity, or pass "
+            "--force"
+        )
     probe = ROOT / "scripts" / PROBES[args.probe]
     common = (
         [
@@ -292,6 +357,13 @@ def main() -> None:
         "--evaluation", type=int, default=1000, help="deals per bot, or benchmark seeds"
     )
     start_parser.add_argument("--max-runs", type=int, default=MAX_RUNS)
+    start_parser.add_argument(
+        "--memory-share",
+        type=float,
+        default=0.7,
+        help="refuse to start when the runs would need more than this share of free memory",
+    )
+    start_parser.add_argument("--force", action="store_true", help="skip the memory check")
     start_parser.set_defaults(handler=start)
     for name, handler in (("status", status), ("summary", summary), ("stop", stop)):
         sub = commands.add_parser(name)

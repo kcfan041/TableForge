@@ -175,8 +175,7 @@ def learn_from_experience(
         if batch_size_limit < 1:
             raise ValueError("batch_size_limit must be positive")
         agent.batch_size = min(agent.config.batch_size, batch_size_limit)
-    agent.rl_buffer.items.clear()
-    agent.rl_buffer.position = 0
+    agent.rl_buffer.clear()
     for transition in transitions:
         agent.rl_buffer.add(transition)
     for sample in samples:
@@ -186,8 +185,7 @@ def learn_from_experience(
         metrics = agent.train_step() or metrics
         if on_progress is not None and (step + 1) % 100 == 0:
             on_progress(step + 1)
-    agent.rl_buffer.items.clear()
-    agent.rl_buffer.position = 0
+    agent.rl_buffer.clear()
     return TrainingReport(
         hands=0,
         train_steps=agent.train_steps,

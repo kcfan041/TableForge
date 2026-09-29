@@ -85,7 +85,7 @@ def main() -> None:
                     frozen = NfspAgent.from_bundle(bundle, inference_only=True)
                     agent = FrozenTournamentPlayer(frozen)
                 else:
-                    agent = GreedyTournamentPlayer(NfspAgent.from_bundle(bundle))
+                    agent = GreedyTournamentPlayer(NfspAgent.from_actor_bundle(bundle))
                 candidates.append((f"{model_id}:{mode}", lambda agent=agent: agent))
 
     results: dict[str, dict[str, object]] = {}

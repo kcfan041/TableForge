@@ -113,7 +113,7 @@ def main() -> None:
         ).summary()
         greedy: dict[str, object] = {}
         if args.greedy and stage:
-            q_agent = NfspAgent.from_bundle(bundle)
+            q_agent = NfspAgent.from_actor_bundle(bundle)
             q_agent.training = False
             greedy = evaluate_tournament(
                 lambda q_agent=q_agent: GreedyTournamentPlayer(q_agent),

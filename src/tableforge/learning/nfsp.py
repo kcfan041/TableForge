@@ -15,12 +15,7 @@ from torch import Tensor, nn
 
 from tableforge.learning.actions import ACTION_COUNT, AbstractAction, ActionTranslator
 from tableforge.learning.actions import SCHEMA as ACTION_SCHEMA
-from tableforge.learning.buffers import (
-    CircularBuffer,
-    PolicySample,
-    ReservoirBuffer,
-    Transition,
-)
+from tableforge.learning.buffers import PolicySample
 from tableforge.learning.bundle import (
     array_bytes,
     array_from_bytes,
@@ -30,6 +25,7 @@ from tableforge.learning.bundle import (
 )
 from tableforge.learning.encoders import DEFAULT_SCHEMA, Encoder, encoder
 from tableforge.learning.encoding_v2 import TournamentContext
+from tableforge.learning.memory import PolicyReservoir, TransitionMemory
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.observation import Observation
 from tableforge.poker.table import TableObservation
@@ -49,6 +45,7 @@ def tournament_context(info: TournamentHandInfo) -> TournamentContext:
         payout=info.payout,
         bounties=tuple(value / scale for value in info.bounties),
     )
+
 
 MASKED = -1e9
 
@@ -91,6 +88,10 @@ def _network(inputs: int, hidden: int) -> nn.Sequential:
     )
 
 
+def _device(values: Any, device: torch.device) -> Tensor:
+    return torch.from_numpy(np.ascontiguousarray(values)).to(device)
+
+
 def _tensor(values: Sequence[Any], dtype: type, device: torch.device) -> Tensor:
     """A tensor from Python values, built through NumPy (much faster than torch.tensor)."""
     return torch.from_numpy(np.asarray(values, dtype=dtype)).to(device)
@@ -122,8 +123,8 @@ class NfspAgent:
         self.policy_optimizer = torch.optim.Adam(
             self.policy_network.parameters(), config.learning_rate
         )
-        self.rl_buffer: CircularBuffer[Transition] = CircularBuffer(config.rl_capacity)
-        self.sl_buffer: ReservoirBuffer[PolicySample] = ReservoirBuffer(config.sl_capacity)
+        self.rl_buffer = TransitionMemory(config.rl_capacity, inputs, ACTION_COUNT)
+        self.sl_buffer = PolicyReservoir(config.sl_capacity, inputs, ACTION_COUNT)
         self.translator = ActionTranslator()
         self.training = True
         self.best_response_mode = False
@@ -203,15 +204,13 @@ class NfspAgent:
     def _train_q(self) -> float:
         batch = self.rl_buffer.sample(self.batch_size, self.rng)
         device = self.device
-        states = _floats([item.state for item in batch], device)
-        actions = _tensor([item.action for item in batch], np.int64, device)
-        rewards = _floats([item.reward / self.config.reward_scale for item in batch], device)
-        done = _tensor([item.next_state is None for item in batch], np.bool_, device)
-        zero_state = (0.0,) * self.encoder.feature_size
-        next_states = _floats([item.next_state or zero_state for item in batch], device)
-        next_masks = _tensor(
-            [item.next_mask or (True,) * ACTION_COUNT for item in batch], np.bool_, device
-        )
+        states = _device(batch.states, device)
+        actions = _device(batch.actions, device)
+        # Divide in float64 before converting, exactly as with Python floats.
+        rewards = _device((batch.rewards / self.config.reward_scale).astype(np.float32), device)
+        done = _device(batch.done, device)
+        next_states = _device(batch.next_states, device)
+        next_masks = _device(batch.next_masks, device)
         with torch.no_grad():
             target_values = _masked(self.target_network(next_states), next_masks)
             if self.config.double_q:
@@ -231,9 +230,9 @@ class NfspAgent:
     def _train_policy(self) -> float:
         batch = self.sl_buffer.sample(self.batch_size, self.rng)
         device = self.device
-        states = _floats([item.state for item in batch], device)
-        masks = _tensor([item.mask for item in batch], np.bool_, device)
-        actions = _tensor([item.action for item in batch], np.int64, device)
+        states = _device(batch.states, device)
+        masks = _device(batch.masks, device)
+        actions = _device(batch.actions, device)
         logits = _masked(self.policy_network(states), masks)
         loss = nn.functional.cross_entropy(logits, actions)
         self.policy_optimizer.zero_grad()
@@ -242,6 +241,7 @@ class NfspAgent:
         return float(loss.item())
 
     def to_bundle(self, metadata: dict[str, object] | None = None) -> bytes:
+        reservoir_states, reservoir_masks, reservoir_actions = self.sl_buffer.arrays()
         entries = {
             MANIFEST: json_bytes(
                 {
@@ -276,17 +276,9 @@ class NfspAgent:
                     "rng_state": _rng_state(self.rng),
                 }
             ),
-            RESERVOIR_STATES: array_bytes(
-                np.asarray([item.state for item in self.sl_buffer.items], dtype=np.float32)
-                .reshape(len(self.sl_buffer), self.encoder.feature_size)
-            ),
-            RESERVOIR_MASKS: array_bytes(
-                np.asarray([item.mask for item in self.sl_buffer.items], dtype=np.bool_)
-                .reshape(len(self.sl_buffer), ACTION_COUNT)
-            ),
-            RESERVOIR_ACTIONS: array_bytes(
-                np.asarray([item.action for item in self.sl_buffer.items], dtype=np.int8)
-            ),
+            RESERVOIR_STATES: array_bytes(np.ascontiguousarray(reservoir_states)),
+            RESERVOIR_MASKS: array_bytes(np.ascontiguousarray(reservoir_masks)),
+            RESERVOIR_ACTIONS: array_bytes(reservoir_actions.astype(np.int8)),
         }
         return pack_entries(entries)
 
@@ -317,21 +309,11 @@ class NfspAgent:
         agent.target_network.load_state_dict(_unprefixed("target", training))
         state = json.loads(entries[TRAINING_STATE])
         _load_optimizer(agent.q_optimizer, "q_opt", training, state["q_opt_groups"])
-        _load_optimizer(
-            agent.policy_optimizer, "policy_opt", training, state["policy_opt_groups"]
-        )
+        _load_optimizer(agent.policy_optimizer, "policy_opt", training, state["policy_opt_groups"])
         states = array_from_bytes(entries[RESERVOIR_STATES])
         masks = array_from_bytes(entries[RESERVOIR_MASKS])
         actions = array_from_bytes(entries[RESERVOIR_ACTIONS])
-        agent.sl_buffer.items = [
-            PolicySample(
-                tuple(float(value) for value in states[index]),
-                tuple(bool(value) for value in masks[index]),
-                int(actions[index]),
-            )
-            for index in range(len(actions))
-        ]
-        agent.sl_buffer.seen = int(state["reservoir_seen"])
+        agent.sl_buffer.load(states, masks, actions, int(state["reservoir_seen"]))
         agent.rng.setstate(_restore_rng_state(state["rng_state"]))
         return agent
 
@@ -406,9 +388,7 @@ def _optimizer_tensors(prefix: str, optimizer: torch.optim.Optimizer) -> dict[st
     for index, values in optimizer.state_dict()["state"].items():
         for name, value in values.items():
             if isinstance(value, Tensor):
-                tensors[f"{prefix}.{index}.{name}"] = (
-                    value.detach().to("cpu").clone().contiguous()
-                )
+                tensors[f"{prefix}.{index}.{name}"] = value.detach().to("cpu").clone().contiguous()
     return tensors
 
 
@@ -467,7 +447,5 @@ def _prefixed(prefix: str, state: dict[str, Any]) -> dict[str, Tensor]:
 def _unprefixed(prefix: str, state: dict[str, Tensor]) -> dict[str, Tensor]:
     marker = f"{prefix}."
     return {
-        key.removeprefix(marker): value
-        for key, value in state.items()
-        if key.startswith(marker)
+        key.removeprefix(marker): value for key, value in state.items() if key.startswith(marker)
     }
