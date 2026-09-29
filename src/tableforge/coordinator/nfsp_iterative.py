@@ -59,6 +59,12 @@ def _match_payload(config: ExperimentConfig, **fields: Any) -> NfspMatchPayload:
     Experiments created before the curve existed (``benchmark_deals == 0``) keep the old
     reference evaluation so their job payloads, and idempotency, are unchanged.
     """
+    if config.tournament_json:
+        return NfspMatchPayload(
+            **fields,
+            tournament_json=config.tournament_json,
+            tournament_field=config.opponents or "mixed",
+        )
     if config.benchmark_deals > 0:
         return NfspMatchPayload(
             **fields,
@@ -134,9 +140,7 @@ class IterativeNfspOrchestrator:
             return None
         return build_matrix(tuple(member.name for member in members), results)
 
-    def _advance_matrix(
-        self, experiment: Experiment, jobs: dict[str, Job], agent: AgentId
-    ) -> bool:
+    def _advance_matrix(self, experiment: Experiment, jobs: dict[str, Job], agent: AgentId) -> bool:
         del agent
         members = self.matrix_members(experiment)
         pending = False
@@ -224,6 +228,9 @@ class IterativeNfspOrchestrator:
                     epsilon=experiment.config.epsilon,
                     target_update_steps=experiment.config.target_update_steps,
                     reward_scale=experiment.config.reward_scale,
+                    double_q=experiment.config.double_q,
+                    rl_capacity=experiment.config.rl_capacity,
+                    sl_capacity=experiment.config.sl_capacity,
                 ).to_bytes(),
             )
             return False
@@ -245,8 +252,7 @@ class IterativeNfspOrchestrator:
         config = experiment.config
         prefix = f"round:{round_index}"
         actor_keys = [
-            _key(experiment, f"{prefix}:actor:{index}")
-            for index in range(config.actors_per_round)
+            _key(experiment, f"{prefix}:actor:{index}") for index in range(config.actors_per_round)
         ]
         if actor_keys[0] not in jobs:
             base = self.checkpoints.active(agent)
@@ -273,6 +279,9 @@ class IterativeNfspOrchestrator:
                             str(population.descriptor.artifact_id) if population else ""
                         ),
                         population_sha256=population.sha256 if population else "",
+                        tournament_json=config.tournament_json,
+                        self_play_share=config.self_play_share,
+                        hand_horizon=config.hand_horizon,
                     ).to_bytes(),
                     inputs=(population,) if population else (),
                 )
@@ -308,9 +317,7 @@ class IterativeNfspOrchestrator:
             return False
         if learner.status is not JobStatus.SUCCEEDED:
             return False
-        candidate = self._register(
-            experiment, agent, round_index, base, self._output(learner), now
-        )
+        candidate = self._register(experiment, agent, round_index, base, self._output(learner), now)
         match_key = _key(experiment, f"{prefix}:match")
         match = jobs.get(match_key)
         if match is None:
@@ -326,7 +333,11 @@ class IterativeNfspOrchestrator:
                     candidate_sha256=candidate.sha256,
                     baseline_artifact_id=str(base.artifact_id),
                     baseline_sha256=base.sha256,
-                    seed_start=config.seed_start + 50_000_000 + round_index * 1_000_000,
+                    # Tournaments use the same benchmark seeds every round, so the
+                    # training curve compares rounds on identical tournaments.
+                    seed_start=config.seed_start
+                    + 50_000_000
+                    + (0 if config.tournament_json else round_index * 1_000_000),
                     min_deals=config.evaluation_deals,
                     max_deals=config.max_evaluation_deals,
                     batch_deals=config.evaluation_deals,

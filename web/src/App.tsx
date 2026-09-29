@@ -5,6 +5,9 @@ import { api, localMode, setCsrfToken, setUnauthorizedHandler, type Session } fr
 import { useI18n, type Locale, type MessageKey } from "./i18n";
 import { LiveProvider, useLive } from "./live";
 import { Checkpoints } from "./pages/Checkpoints";
+import { Models } from "./pages/Models";
+import { ReplayPage } from "./pages/Replay";
+import { StrategyPage } from "./pages/Strategy";
 import { Diagnostics } from "./pages/Diagnostics";
 import { Events } from "./pages/Events";
 import { ExperimentPage } from "./pages/Experiment";
@@ -44,7 +47,10 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
       [machinePage ? "/overview" : "/", "nav.overview"],
       ["/nodes", "nav.nodes"],
       ["/experiments", "nav.experiments"],
-      ["/checkpoints", "nav.checkpoints"],
+      ["/models", "nav.models"],
+    ["/replay", "nav.replay"],
+    ["/strategy", "nav.strategy"],
+    ["/checkpoints", "nav.checkpoints"],
       ["/events", "nav.events"],
     );
     if (session.role === "admin") links.push(["/invites", "nav.invites"]);
@@ -99,6 +105,9 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
               <Route path="/experiments" element={<Experiments session={session} />} />
               <Route path="/experiments/:id" element={<ExperimentPage session={session} />} />
               <Route path="/checkpoints" element={<Checkpoints />} />
+        <Route path="/models" element={<Models session={session} />} />
+        <Route path="/replay" element={<ReplayPage session={session} />} />
+        <Route path="/strategy" element={<StrategyPage session={session} />} />
               <Route path="/events" element={<Events />} />
               <Route path="/invites" element={<Invites session={session} />} />
               <Route path="/diagnostics" element={<Diagnostics />} />

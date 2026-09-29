@@ -15,6 +15,7 @@ import { useLiveData } from "../live";
 import { LatestBenchmark, TrainingCurve } from "./Curve";
 import { canOperate, KindLabel } from "./Experiments";
 import { MatrixHeatmap } from "./Matrix";
+import { SaveModel } from "./Models";
 
 function TournamentResults({ summary }: { summary: TournamentSummary }) {
   const { t, formatNumber } = useI18n();
@@ -237,6 +238,12 @@ export function ExperimentPage({ session }: { session: Session }) {
               <pre className="config">{JSON.stringify(data.config, null, 2)}</pre>
             </Card>
           </div>
+          {data.kind === "nfsp_iterative" && data.status === "completed" && canOperate(session) ? (
+            <SaveModel
+              experimentId={data.experiment_id}
+              defaultId={`${data.preset.replace(/-train$/, "")}-s${data.seed ?? 0}`}
+            />
+          ) : null}
           {data.kind === "nfsp_iterative" ? (
             <Card title={t("curve.title")}>
               {data.group_id ? (

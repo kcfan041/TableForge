@@ -100,6 +100,8 @@ export interface ExperimentDetail extends ExperimentSummary {
 
 export interface CurvePoint {
   round: number;
+  unit?: "bb_per_100" | "roi_percent";
+  tournament?: Record<string, TournamentMetrics> | null;
   train_steps: number | null;
   head_to_head: { bb_per_100: number; confidence_low: number; confidence_high: number; hands: number } | null;
   benchmark: Record<string, { bb_per_100: number; low: number; high: number; hands: number }>;
@@ -115,6 +117,35 @@ export interface CreateExperimentBody {
   preset: string;
   settings?: Record<string, number | string>;
   seeds?: number[];
+}
+
+export interface TournamentMetrics {
+  roi: Interval;
+  prize_ev: Interval;
+  bounty_ev: Interval;
+  itm: Interval;
+  average_place: Interval;
+  tournaments: number;
+}
+
+export interface PlayModeView {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface ModelView {
+  model_id: string;
+  algorithm: string;
+  game: string;
+  sha256: string;
+  size_bytes: number;
+  created_at: string;
+  description: string;
+  training: Record<string, unknown>;
+  evaluation: Record<string, unknown>;
+  source: string;
+  play_modes: PlayModeView[];
 }
 
 export interface Interval {
@@ -296,7 +327,18 @@ function command<T>(action: string, body: object): Promise<T> {
   return request<T>("POST", `/api/cluster/command/${action}`, body);
 }
 
+function coordinatorQuery<T>(resource: string, argument = ""): Promise<T> {
+  const suffix = argument ? `?argument=${encodeURIComponent(argument)}` : "";
+  return request<T>("GET", `/api/query/${resource}${suffix}`);
+}
+
+function coordinatorCommand<T>(action: string, body: object): Promise<T> {
+  return request<T>("POST", `/api/command/${action}`, body);
+}
+
 const coordinatorApi = {
+  query: coordinatorQuery,
+  command: coordinatorCommand,
   session: () => request<Session>("GET", "/api/session"),
   login: (credential: string) => request<Session>("POST", "/api/session", { credential }),
   logout: () => request<{ ok: boolean }>("DELETE", "/api/session"),
@@ -336,6 +378,8 @@ const coordinatorApi = {
 };
 
 const localApi: typeof coordinatorApi = {
+  query,
+  command,
   session: () => request<Session>("GET", "/api/cluster/session"),
   login: () => Promise.reject(new ApiError(400, "not used in local mode")),
   logout: () => Promise.resolve({ ok: true }),

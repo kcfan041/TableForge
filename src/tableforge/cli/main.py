@@ -551,6 +551,29 @@ def _learning_available() -> bool:
     return all(importlib.util.find_spec(name) is not None for name in ("torch", "safetensors"))
 
 
+WORKER_THREADS_ENV = "TABLEFORGE_WORKER_THREADS"
+
+
+def _limit_torch_threads() -> None:
+    """One CPU thread per worker for PyTorch (override with TABLEFORGE_WORKER_THREADS).
+
+    Workers run small networks one decision at a time, where extra threads only add
+    overhead; by default PyTorch starts a thread per core in every worker, so several
+    workers on one computer compete for the same cores. Scale by running more workers.
+    """
+    if not _learning_available():
+        return
+    import os
+
+    import torch
+
+    try:
+        threads = int(os.environ.get(WORKER_THREADS_ENV, "1"))
+    except ValueError:
+        threads = 1
+    torch.set_num_threads(max(1, threads))
+
+
 def _worker_roles() -> tuple[str, ...]:
     if _learning_available():
         return ("simulation", "evaluation", "nfsp_learner", "nfsp_actor")
@@ -656,6 +679,7 @@ def _run_worker(
     def interruptible_sleep(seconds: float) -> None:
         stop.wait(seconds)
 
+    _limit_torch_threads()
     runtime = _local_worker(coordinator, settings)
     context: dict[str, object] = {"component": "worker", "node_id": str(runtime.node_id)}
     before_iteration: Callable[[], None] | None = None

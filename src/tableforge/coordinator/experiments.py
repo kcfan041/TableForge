@@ -128,6 +128,8 @@ class ExperimentService:
             rounds.append(
                 {
                     "round": round_index,
+                    "unit": result.get("reference_unit", "bb_per_100"),
+                    "tournament": result.get("tournament"),
                     "train_steps": result.get("candidate_train_steps"),
                     "head_to_head": result.get("head_to_head"),
                     "benchmark": {
@@ -411,6 +413,9 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "epsilon": float,
     "target_update_steps": int,
     "reward_scale": float,
+    "self_play_share": float,
+    "rl_capacity": int,
+    "sl_capacity": int,
     "observation_schema": str,
     "benchmark_deals": int,
     "evaluation_deals": int,
@@ -427,6 +432,9 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "batch_size": (8, 262_144),
     "target_update_steps": (1, 1_000_000),
     "reward_scale": (0.01, 10_000),
+    "self_play_share": (0, 1),
+    "rl_capacity": (1_000, 5_000_000),
+    "sl_capacity": (1_000, 5_000_000),
     "benchmark_deals": (0, 100_000),
     "evaluation_deals": (2, 100_000),
     "max_evaluation_deals": (2, 1_000_000),

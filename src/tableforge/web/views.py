@@ -51,6 +51,8 @@ QUERY_ROLES: dict[str, OperatorRole] = {
     "diagnostics": OperatorRole.VIEWER,
     "invites": OperatorRole.ADMIN,
     "operators": OperatorRole.ADMIN,
+    "models": OperatorRole.VIEWER,
+    "analysis": OperatorRole.VIEWER,
 }
 COMMAND_ROLES: dict[str, OperatorRole] = {
     "create_experiment": OperatorRole.OPERATOR,
@@ -60,6 +62,10 @@ COMMAND_ROLES: dict[str, OperatorRole] = {
     "revoke_invite": OperatorRole.ADMIN,
     "revoke_operator": OperatorRole.ADMIN,
     "revoke_node": OperatorRole.ADMIN,
+    "save_model": OperatorRole.OPERATOR,
+    "remove_model": OperatorRole.OPERATOR,
+    "request_replay": OperatorRole.OPERATOR,
+    "request_strategy": OperatorRole.OPERATOR,
 }
 
 
@@ -100,6 +106,20 @@ class ClusterViews:
             return self.invites()
         if resource == "operators":
             return self.operators(caller)
+        if resource == "models":
+            from tableforge.coordinator.models import library, model_view
+
+            return [model_view(info) for info in library(self.services).list()]
+        if resource == "analysis":
+            from tableforge.application.ports import JobNotFoundError
+            from tableforge.coordinator.analysis import AnalysisError, analysis_result
+
+            try:
+                return analysis_result(self.services, argument).as_dict()
+            except (JobNotFoundError, KeyError) as error:
+                raise ViewError(404, "no such analysis job") from error
+            except AnalysisError as error:
+                raise ViewError(400, str(error)) from error
         raise ViewError(404, f"unknown resource: {resource}")
 
     def overview(self) -> dict[str, object]:
@@ -337,7 +357,45 @@ class ClusterViews:
             return {"ok": True}
         if action == "revoke_node":
             return {"revoked_sessions": auth.revoke_node(NodeId(str(arguments["node_id"])))}
+        if action in ("save_model", "remove_model"):
+            return self.model_command(action, arguments)
+        if action in ("request_replay", "request_strategy"):
+            from tableforge.coordinator.analysis import (
+                AnalysisError,
+                request_replay,
+                request_strategy,
+            )
+
+            handler = request_replay if action == "request_replay" else request_strategy
+            try:
+                return handler(self.services, arguments)
+            except KeyError as error:
+                raise ViewError(404, f"no such model: {error}") from error
+            except (AnalysisError, ValueError, TypeError) as error:
+                raise ViewError(400, str(error)) from error
         raise ViewError(404, f"unknown action: {action}")
+
+    def model_command(self, action: str, arguments: dict[str, Any]) -> object:
+        from tableforge.coordinator.models import library, model_view, save_experiment_model
+
+        model_id = str(arguments.get("model_id", "")).strip()
+        try:
+            if action == "remove_model":
+                library(self.services).remove(model_id)
+                return {"ok": True}
+            info = save_experiment_model(
+                self.services,
+                str(arguments["experiment_id"]),
+                model_id,
+                str(arguments.get("description", ""))[:300],
+            )
+        except KeyError as error:
+            raise ViewError(404, f"no such model or experiment: {error}") from error
+        except FileExistsError as error:
+            raise ViewError(409, str(error)) from error
+        except ValueError as error:
+            raise ViewError(400, str(error)) from error
+        return model_view(info)
 
     def create_experiment(self, arguments: dict[str, Any], now: datetime) -> object:
         """Create one experiment, or a group of experiments with the given seeds.

@@ -59,6 +59,9 @@ class NfspInitExecutor:
                 epsilon=payload.epsilon,
                 target_update_steps=payload.target_update_steps,
                 reward_scale=payload.reward_scale,
+                double_q=payload.double_q,
+                rl_capacity=payload.rl_capacity,
+                sl_capacity=payload.sl_capacity,
             )
         )
         return agent.to_bundle({"round_index": 0})
@@ -80,6 +83,8 @@ class NfspActorExecutor:
         )
         agent = NfspAgent.from_actor_bundle(content)
         agent.rng.seed(payload.actor_seed)
+        if payload.tournament_json:
+            return _tournament_shard(agent, payload, on_progress)
         picker = None
         if payload.population_artifact_id:
             from tableforge.domain.league import LeaguePopulation
@@ -186,6 +191,8 @@ class NfspMatchExecutor:
         self, payload_bytes: bytes, on_progress: Callable[[int], None] | None = None
     ) -> bytes:
         payload = NfspMatchPayload.from_bytes(payload_bytes)
+        if payload.tournament_json:
+            return _tournament_match(self.fetch_artifact, payload, on_progress)
         candidate_content = verified(
             self.fetch_artifact(payload.candidate_artifact_id), payload.candidate_sha256
         )
@@ -222,9 +229,7 @@ class NfspMatchExecutor:
             {
                 "baseline_sha256": payload.baseline_sha256,
                 "candidate_sha256": payload.candidate_sha256,
-                "candidate_train_steps": int(
-                    checkpoint_manifest(candidate_content)["train_steps"]
-                ),
+                "candidate_train_steps": int(checkpoint_manifest(candidate_content)["train_steps"]),
                 "head_to_head": {
                     "bb_per_100": _rounded(head_to_head.bb_per_100),
                     "confidence_high": _rounded(head_to_head.confidence_high),
@@ -238,6 +243,131 @@ class NfspMatchExecutor:
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
+
+
+def _tournament_shard(
+    agent: NfspAgent,
+    payload: NfspActorPayload,
+    on_progress: Callable[[int], None] | None,
+) -> bytes:
+    """Play `payload.hands` training tournaments and return their experience."""
+    from tableforge.learning.tournament_training import play_training_tournament
+    from tableforge.poker.tournament import TournamentConfig
+
+    config = TournamentConfig.from_json(payload.tournament_json)
+    transitions: list[Transition] = []
+    samples: list[PolicySample] = []
+    agent.policy_sink = samples.append
+    try:
+        for index in range(payload.hands):
+            play_training_tournament(
+                agent,
+                config,
+                payload.seed_start + index,
+                transitions.append,
+                payload.self_play_share,
+                hand_horizon=payload.hand_horizon,
+            )
+            if on_progress is not None and (index + 1) % 10 == 0:
+                on_progress(index + 1)
+    finally:
+        agent.policy_sink = None
+    return ExperienceShard(
+        checkpoint_sha256=payload.checkpoint_sha256,
+        seed_start=payload.seed_start,
+        hands=payload.hands,
+        transitions=tuple(transitions),
+        policy_samples=tuple(samples),
+        observation_schema=agent.encoder.schema,
+    ).to_bytes()
+
+
+def _tournament_match(
+    fetch: Fetch, payload: NfspMatchPayload, on_progress: Callable[[int], None] | None
+) -> bytes:
+    """Benchmark candidate and baseline on the same tournaments against a rule-bot field.
+
+    ``head_to_head`` is the paired ROI difference (candidate minus baseline, in ROI
+    percentage points) so the usual promotion rule applies: a candidate is rejected only
+    when it is significantly worse.
+    """
+    from tableforge.learning.tournament_training import (
+        FrozenTournamentPlayer,
+        GreedyTournamentPlayer,
+    )
+    from tableforge.poker.tournament import TournamentConfig
+    from tableforge.poker.tournament_benchmark import (
+        Estimate,
+        TournamentBenchmark,
+        collect_samples,
+    )
+    from tableforge.worker.tournament import field_factory
+
+    config = TournamentConfig.from_json(payload.tournament_json)
+    candidate_content = verified(fetch(payload.candidate_artifact_id), payload.candidate_sha256)
+    baseline_content = verified(fetch(payload.baseline_artifact_id), payload.baseline_sha256)
+    candidate = NfspAgent.from_bundle(candidate_content, inference_only=True)
+    baseline = NfspAgent.from_bundle(baseline_content, inference_only=True)
+    greedy = NfspAgent.from_actor_bundle(candidate_content)
+    field = field_factory(payload.tournament_field)
+    seeds = payload.min_deals
+    samples = {
+        name: collect_samples(
+            factory,
+            field,
+            config,
+            seeds,
+            payload.seed_start,
+            True,
+            on_progress if name == "average" else None,
+        )
+        for name, factory in (
+            ("average", lambda: FrozenTournamentPlayer(candidate)),
+            ("best_response", lambda: GreedyTournamentPlayer(greedy)),
+            ("baseline", lambda: FrozenTournamentPlayer(baseline)),
+        )
+    }
+    difference = Estimate.of(
+        [
+            (new - old) / config.buy_in * 100
+            for new, old in zip(samples["average"].total, samples["baseline"].total, strict=True)
+        ]
+    )
+
+    def roi(name: str) -> dict[str, float | int]:
+        summary = TournamentBenchmark.from_samples(samples[name], config.name)
+        return {
+            "bb_per_100": _rounded(summary.roi.mean * 100),
+            "confidence_low": _rounded(summary.roi.low * 100),
+            "confidence_high": _rounded(summary.roi.high * 100),
+            "hands": summary.tournaments,
+        }
+
+    summaries = {
+        name: TournamentBenchmark.from_samples(samples[name], config.name).summary()
+        for name in samples
+    }
+    return json.dumps(
+        {
+            "baseline_sha256": payload.baseline_sha256,
+            "candidate_sha256": payload.candidate_sha256,
+            "candidate_train_steps": int(checkpoint_manifest(candidate_content)["train_steps"]),
+            "head_to_head": {
+                "bb_per_100": _rounded(difference.mean),
+                "confidence_high": _rounded(difference.high),
+                "confidence_low": _rounded(difference.low),
+                "hands": samples["average"].tournaments,
+                "standard_error": _rounded((difference.high - difference.low) / 3.92),
+                "unit": "roi_points",
+            },
+            "references": {"average": roi("average"), "best_response": roi("best_response")},
+            "reference_unit": "roi_percent",
+            "tournament": summaries,
+            "schema_version": MATCH_SCHEMA,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
 
 
 __all__ = [

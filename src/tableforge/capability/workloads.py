@@ -101,6 +101,12 @@ BUILTIN_WORKLOADS = (
     _cpu_profile(
         "hu-league-matchup", "LeagueMatchupJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)
     ),
+    _cpu_profile(
+        "tournament-replay", "TournamentReplayJobPayload", "evaluation", (1, 1, 1), (1, 2, 1)
+    ),
+    _cpu_profile(
+        "strategy-table", "StrategyTableJobPayload", "evaluation", (1, 1, 1), (1, 2, 1)
+    ),
     WorkloadProfile(
         schema_version="1.0",
         key="tournament-rule-benchmark",

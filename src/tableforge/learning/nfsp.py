@@ -91,6 +91,15 @@ def _network(inputs: int, hidden: int) -> nn.Sequential:
     )
 
 
+def _tensor(values: Sequence[Any], dtype: type, device: torch.device) -> Tensor:
+    """A tensor from Python values, built through NumPy (much faster than torch.tensor)."""
+    return torch.from_numpy(np.asarray(values, dtype=dtype)).to(device)
+
+
+def _floats(values: Sequence[Any], device: torch.device) -> Tensor:
+    return _tensor(values, np.float32, device)
+
+
 def _masked(logits: Tensor, mask: Tensor) -> Tensor:
     return logits.masked_fill(~mask, MASKED)
 
@@ -194,25 +203,14 @@ class NfspAgent:
     def _train_q(self) -> float:
         batch = self.rl_buffer.sample(self.batch_size, self.rng)
         device = self.device
-        states = torch.tensor([item.state for item in batch], dtype=torch.float32, device=device)
-        actions = torch.tensor([item.action for item in batch], dtype=torch.int64, device=device)
-        rewards = torch.tensor(
-            [item.reward / self.config.reward_scale for item in batch],
-            dtype=torch.float32,
-            device=device,
-        )
-        done = torch.tensor(
-            [item.next_state is None for item in batch], dtype=torch.bool, device=device
-        )
-        next_states = torch.tensor(
-            [item.next_state or (0.0,) * self.encoder.feature_size for item in batch],
-            dtype=torch.float32,
-            device=device,
-        )
-        next_masks = torch.tensor(
-            [item.next_mask or (True,) * ACTION_COUNT for item in batch],
-            dtype=torch.bool,
-            device=device,
+        states = _floats([item.state for item in batch], device)
+        actions = _tensor([item.action for item in batch], np.int64, device)
+        rewards = _floats([item.reward / self.config.reward_scale for item in batch], device)
+        done = _tensor([item.next_state is None for item in batch], np.bool_, device)
+        zero_state = (0.0,) * self.encoder.feature_size
+        next_states = _floats([item.next_state or zero_state for item in batch], device)
+        next_masks = _tensor(
+            [item.next_mask or (True,) * ACTION_COUNT for item in batch], np.bool_, device
         )
         with torch.no_grad():
             target_values = _masked(self.target_network(next_states), next_masks)
@@ -233,9 +231,9 @@ class NfspAgent:
     def _train_policy(self) -> float:
         batch = self.sl_buffer.sample(self.batch_size, self.rng)
         device = self.device
-        states = torch.tensor([item.state for item in batch], dtype=torch.float32, device=device)
-        masks = torch.tensor([item.mask for item in batch], dtype=torch.bool, device=device)
-        actions = torch.tensor([item.action for item in batch], dtype=torch.int64, device=device)
+        states = _floats([item.state for item in batch], device)
+        masks = _tensor([item.mask for item in batch], np.bool_, device)
+        actions = _tensor([item.action for item in batch], np.int64, device)
         logits = _masked(self.policy_network(states), masks)
         loss = nn.functional.cross_entropy(logits, actions)
         self.policy_optimizer.zero_grad()

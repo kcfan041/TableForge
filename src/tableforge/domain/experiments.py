@@ -56,6 +56,11 @@ class ExperimentConfig:
     reward_scale: float = 1.0
     benchmark_deals: int = 0
     group_id: str = ""
+    self_play_share: float = 0.5
+    hand_horizon: bool = False
+    double_q: bool = False
+    rl_capacity: int = 50_000
+    sl_capacity: int = 100_000
 
     def __post_init__(self) -> None:
         if self.learner_runtime not in ("cpu", "cuda"):
@@ -66,11 +71,31 @@ class ExperimentConfig:
             raise ValueError(f"unknown observation schema: {self.observation_schema}")
         if not 2 <= self.players <= 6:
             raise ValueError("players must be between 2 and 6")
-        if self.players != 2 and self.kind not in (
-            ExperimentKind.RULE_SIMULATION,
-            ExperimentKind.TOURNAMENT_BENCHMARK,
+        tournament_training = self.kind is ExperimentKind.NFSP_ITERATIVE and bool(
+            self.tournament_json
+        )
+        if (
+            self.players != 2
+            and not tournament_training
+            and self.kind
+            not in (
+                ExperimentKind.RULE_SIMULATION,
+                ExperimentKind.TOURNAMENT_BENCHMARK,
+            )
         ):
             raise ValueError("only rule simulations and tournaments support more than two players")
+        if tournament_training:
+            from tableforge.poker.tournament import TournamentConfig
+
+            tournament = TournamentConfig.from_json(self.tournament_json)
+            if tournament.players != self.players:
+                raise ValueError("players must match the tournament")
+            if self.observation_schema == "poker-hunlhe-vector-v1":
+                raise ValueError("tournament training needs the v2 observation schema")
+        if not 0 <= self.self_play_share <= 1:
+            raise ValueError("self_play_share must be between 0 and 1")
+        if self.rl_capacity < 1 or self.sl_capacity < 1:
+            raise ValueError("buffer capacities must be positive")
         if self.kind is ExperimentKind.TOURNAMENT_BENCHMARK:
             from tableforge.domain.tournament import TournamentJobPayload
 
@@ -152,6 +177,11 @@ class ExperimentPreset:
     reward_scale: float = 1.0
     benchmark_deals: int = 0
     group_id: str = ""
+    self_play_share: float = 0.5
+    hand_horizon: bool = False
+    double_q: bool = False
+    rl_capacity: int = 50_000
+    sl_capacity: int = 100_000
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -186,6 +216,11 @@ class ExperimentPreset:
             reward_scale=self.reward_scale,
             benchmark_deals=self.benchmark_deals,
             group_id=self.group_id,
+            self_play_share=self.self_play_share,
+            hand_horizon=self.hand_horizon,
+            double_q=self.double_q,
+            rl_capacity=self.rl_capacity,
+            sl_capacity=self.sl_capacity,
         )
 
 
@@ -286,6 +321,43 @@ BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
 )
 
 
+
+def _tournament_training_preset(key: str, **overrides: object) -> ExperimentPreset:
+    """NFSP on 6-max 10 BB PKO with the settings accepted in T3 (see docs/status.md).
+
+    Each round: `actors_per_round` actors play `hands_per_job` training tournaments with the
+    current checkpoint, one learner trains `train_steps_per_round` steps on them, then the
+    new checkpoint is benchmarked on `evaluation_deals` x 6 tournaments against a mixed
+    rule-bot field (average policy, best response and the previous checkpoint).
+    """
+    from tableforge.poker.tournament import BountyConfig, preset_config
+
+    settings: dict[str, object] = {
+        "hands": 750,
+        "hands_per_job": 750,
+        "kind": ExperimentKind.NFSP_ITERATIVE,
+        "players": 6,
+        "tournament_json": preset_config(10, bounty=BountyConfig()).to_json(),
+        "opponents": "mixed",
+        "rounds": 20,
+        "actors_per_round": 4,
+        "train_steps_per_round": 31_000,
+        "evaluation_deals": 300,
+        "max_evaluation_deals": 300,
+        "hidden_size": 128,
+        "batch_size": 128,
+        "observation_schema": "poker-hunlhe-vector-v2",
+        "reward_scale": 0.3,
+        "double_q": True,
+        "hand_horizon": True,
+        "rl_capacity": 200_000,
+        "sl_capacity": 1_000_000,
+        "self_play_share": 0.75,
+    }
+    settings.update(overrides)
+    return ExperimentPreset(key, "1", **settings)  # type: ignore[arg-type]
+
+
 def _tournament_preset(
     stack_bb: int, payout: str, suffix: str, pko: bool = False, candidate: str = "pushfold"
 ) -> ExperimentPreset:
@@ -316,6 +388,23 @@ def _tournament_preset(
 
 BUILTIN_PRESETS = (
     BUILTIN_PRESETS
+    + (
+        _tournament_training_preset("6max-pko-10bb-train"),
+        _tournament_training_preset(
+            "6max-pko-10bb-smoke",
+            hands=20,
+            hands_per_job=20,
+            rounds=2,
+            actors_per_round=2,
+            train_steps_per_round=100,
+            evaluation_deals=10,
+            max_evaluation_deals=10,
+            hidden_size=32,
+            batch_size=32,
+            rl_capacity=20_000,
+            sl_capacity=20_000,
+        ),
+    )
     + tuple(
         _tournament_preset(stack_bb, payout, suffix)
         for stack_bb in (10, 25, 50)

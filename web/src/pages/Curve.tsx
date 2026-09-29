@@ -1,13 +1,26 @@
 import type { CurvePoint } from "../api";
-import { useI18n } from "../i18n";
+import { useI18n, type MessageKey } from "../i18n";
 
 const COLORS: Record<string, string> = {
   random: "#6b7280",
   call: "#2563eb",
   tight: "#dc2626",
   aggro: "#d97706",
+  average: "#059669",
+  best_response: "#7c3aed",
 };
 const ORDER = ["random", "call", "tight", "aggro"];
+const TOURNAMENT_ORDER = ["average", "best_response"];
+
+/** Series names in a curve: rule bots (bb/100) or tournament play modes (ROI %). */
+export function curveSeries(points: CurvePoint[]): string[] {
+  const tournament = points.some((point) => point.unit === "roi_percent");
+  return tournament ? TOURNAMENT_ORDER : ORDER;
+}
+
+function isTournament(points: CurvePoint[]): boolean {
+  return points.some((point) => point.unit === "roi_percent");
+}
 
 export interface Series {
   label: string;
@@ -16,9 +29,12 @@ export interface Series {
 }
 
 /** bb/100 against each rule bot after every round, with 95% interval bands. */
-export function TrainingCurve({ series, opponents = ORDER }: { series: Series[]; opponents?: string[] }) {
+export function TrainingCurve({ series, opponents }: { series: Series[]; opponents?: string[] }) {
   const { t, formatNumber } = useI18n();
   const all = series.flatMap((item) => item.points);
+  const tournament = isTournament(all);
+  opponents = opponents ?? curveSeries(all);
+  const label = (name: string) => (tournament ? t(`curve.mode.${name}` as MessageKey) : name);
   if (all.length === 0) return <p className="muted">{t("curve.empty")}</p>;
   const rounds = all.map((point) => point.round);
   const values = all.flatMap((point) =>
@@ -97,9 +113,9 @@ export function TrainingCurve({ series, opponents = ORDER }: { series: Series[];
                 {points.map((point) => (
                   <circle key={point.round} cx={x(point.round)} cy={y(point.benchmark[name]!.bb_per_100)} r={3} fill={color}>
                     <title>
-                      {t("curve.pointTitle", {
+                      {t(tournament ? "curve.pointTitleRoi" : "curve.pointTitle", {
                         label: item.label,
-                        opponent: name,
+                        opponent: label(name),
                         round: point.round,
                         value: formatNumber(point.benchmark[name]!.bb_per_100),
                         low: formatNumber(point.benchmark[name]!.low),
@@ -116,7 +132,7 @@ export function TrainingCurve({ series, opponents = ORDER }: { series: Series[];
       <div className="legend">
         {opponents.map((name) => (
           <span key={name}>
-            <span className="swatch" style={{ background: COLORS[name] ?? "#10b981" }} /> {name}
+            <span className="swatch" style={{ background: COLORS[name] ?? "#10b981" }} /> {label(name)}
           </span>
         ))}
         {series.length > 1
@@ -127,7 +143,7 @@ export function TrainingCurve({ series, opponents = ORDER }: { series: Series[];
             ))
           : null}
       </div>
-      <p className="muted small">{t("curve.help")}</p>
+      <p className="muted small">{t(tournament ? "curve.helpRoi" : "curve.help")}</p>
     </div>
   );
 }
@@ -144,8 +160,12 @@ function niceTicks(low: number, high: number, count: number): number[] {
 }
 
 /** Summary table for the latest round of several experiments (e.g. one per seed). */
-export function LatestBenchmark({ series, opponents = ORDER }: { series: Series[]; opponents?: string[] }) {
+export function LatestBenchmark({ series, opponents }: { series: Series[]; opponents?: string[] }) {
   const { t, formatNumber } = useI18n();
+  const all = series.flatMap((item) => item.points);
+  const tournament = isTournament(all);
+  opponents = opponents ?? curveSeries(all);
+  if (tournament) return <LatestTournament series={series} />;
   return (
     <table className="metrics">
       <thead>
@@ -178,6 +198,62 @@ export function LatestBenchmark({ series, opponents = ORDER }: { series: Series[
                   </td>
                 );
               })}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function LatestTournament({ series }: { series: Series[] }) {
+  const { t, formatNumber } = useI18n();
+  const percent = (value: number) => `${formatNumber(value * 100, 1)}%`;
+  const cell = (interval: { mean: number; low: number; high: number } | undefined, format: (value: number) => string) => {
+    if (!interval) return <td>–</td>;
+    const significant = interval.low > 0 || interval.high < 0;
+    return (
+      <td
+        className={significant ? (interval.mean > 0 ? "positive-text" : "negative-text") : ""}
+        title={`${format(interval.low)} – ${format(interval.high)}`}
+      >
+        {format(interval.mean)}
+      </td>
+    );
+  };
+  return (
+    <table className="metrics">
+      <thead>
+        <tr>
+          <th />
+          <th>{t("curve.round")}</th>
+          <th>{t("curve.roiAverage")}</th>
+          <th>{t("curve.roiBest")}</th>
+          <th>{t("tournament.bountyEv")}</th>
+          <th>{t("tournament.itm")}</th>
+          <th>{t("curve.vsPrevious")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {series.map((item) => {
+          const last = item.points.slice().sort((a, b) => b.round - a.round)[0];
+          const average = last?.tournament?.average;
+          const best = last?.tournament?.best_response;
+          const head = last?.head_to_head;
+          return (
+            <tr key={item.label}>
+              <th>{item.label}</th>
+              <td>{last ? last.round : "–"}</td>
+              {cell(average?.roi, percent)}
+              {cell(best?.roi, percent)}
+              {cell(average?.bounty_ev, (value) => formatNumber(value, 3))}
+              {cell(average?.itm, percent)}
+              {head
+                ? cell(
+                    { mean: head.bb_per_100 / 100, low: head.confidence_low / 100, high: head.confidence_high / 100 },
+                    percent,
+                  )
+                : <td>–</td>}
             </tr>
           );
         })}

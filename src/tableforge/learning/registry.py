@@ -21,6 +21,8 @@ from tableforge.learning.iterative import (
     NfspMatchExecutor,
 )
 from tableforge.learning.league import LeagueMatchupExecutor
+from tableforge.learning.replay import REPLAY_PAYLOAD_TYPE, ReplayExecutor
+from tableforge.learning.strategy import STRATEGY_PAYLOAD_TYPE, StrategyTableExecutor
 from tableforge.worker.runtime import OutputSpec, RegisteredExecutor
 
 
@@ -48,6 +50,8 @@ def learning_executors(fetch: Callable[[str], bytes]) -> dict[str, RegisteredExe
         LEARNER_PAYLOAD_TYPE: NfspLearnerExecutor(fetch),
         MATCH_PAYLOAD_TYPE: NfspMatchExecutor(fetch),
         MATCHUP_PAYLOAD_TYPE: LeagueMatchupExecutor(fetch),
+        REPLAY_PAYLOAD_TYPE: ReplayExecutor(fetch),
+        STRATEGY_PAYLOAD_TYPE: StrategyTableExecutor(fetch),
     }
     return {
         payload_type: RegisteredExecutor(

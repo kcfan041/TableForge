@@ -29,6 +29,7 @@ def promotion_decision(result: dict[str, object]) -> tuple[bool, str]:
         raise ValueError("match result is missing head_to_head")
     high = float(head["confidence_high"])
     mean = float(head["bb_per_100"])
+    unit = "ROI points" if head.get("unit") == "roi_points" else "bb/100"
     if high < 0:
-        return False, f"significantly worse than active: {mean:.1f} bb/100, CI high {high:.1f}"
-    return True, f"not significantly worse than active: {mean:.1f} bb/100, CI high {high:.1f}"
+        return False, f"significantly worse than active: {mean:.1f} {unit}, CI high {high:.1f}"
+    return True, f"not significantly worse than active: {mean:.1f} {unit}, CI high {high:.1f}"

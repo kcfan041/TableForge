@@ -286,6 +286,26 @@ def create_app(context: WebContext) -> FastAPI:
     def checkpoints(agent: str = "", current: Caller = viewer) -> Any:
         return query("checkpoints", agent, current)
 
+    @app.get("/api/query/{resource}")
+    def generic_query(resource: str, argument: str = "", current: Caller = viewer) -> Any:
+        """Any query from the role table (the same ones ControlService offers)."""
+        if resource not in QUERY_ROLES:
+            raise HTTPException(404, f"unknown resource: {resource}")
+        return query(resource, argument, current)
+
+    @app.post("/api/command/{action}")
+    async def generic_command(action: str, request: Request, current: Caller = viewer) -> Any:
+        """Any command from the role table (the same ones ControlService offers)."""
+        if action not in COMMAND_ROLES:
+            raise HTTPException(404, f"unknown action: {action}")
+        try:
+            arguments = json.loads(await request.body() or b"{}")
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "arguments must be JSON") from error
+        if not isinstance(arguments, dict):
+            raise HTTPException(400, "arguments must be an object")
+        return await asyncio.to_thread(command, action, arguments, current)
+
     @app.get("/api/events")
     def events(limit: int = 100, current: Caller = viewer) -> Any:
         return query("events", str(limit), current)

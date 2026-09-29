@@ -828,3 +828,181 @@ table.metrics th {
   border-radius: 2px;
   vertical-align: -1px;
 }
+
+.danger-text {
+  color: var(--danger, #b91c1c);
+}
+
+input.narrow {
+  width: 7rem;
+}
+
+.replay-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.hand-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  max-height: 640px;
+  overflow-y: auto;
+  font-size: 0.9em;
+}
+
+.hand-list button.active {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.table-felt {
+  background: #0f5132;
+  border-radius: 16px;
+  padding: 1rem;
+  margin: 0.75rem 0;
+  color: #f8fafc;
+}
+
+.table-felt .board {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  margin-bottom: 0.75rem;
+}
+
+.table-felt .pot {
+  margin-left: 1rem;
+  font-weight: 600;
+}
+
+.seats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+}
+
+.seat {
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 0.5rem;
+  font-size: 0.9em;
+}
+
+.seat.model {
+  border-color: #34d399;
+}
+
+.seat.acting {
+  background: rgba(250, 204, 21, 0.25);
+}
+
+.seat.folded {
+  opacity: 0.45;
+}
+
+.seat .small.muted {
+  color: #cbd5e1;
+}
+
+.seat-name {
+  font-weight: 600;
+}
+
+.seat-cards {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.25rem 0;
+}
+
+.seat-action {
+  font-weight: 600;
+  margin-top: 0.2rem;
+}
+
+.dealer {
+  display: inline-block;
+  background: #f8fafc;
+  color: #111827;
+  border-radius: 50%;
+  width: 1.2em;
+  height: 1.2em;
+  line-height: 1.2em;
+  text-align: center;
+  font-size: 0.8em;
+  margin-right: 0.3em;
+}
+
+.playing-card {
+  display: inline-block;
+  min-width: 2.1em;
+  padding: 0.2em 0.25em;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #111827;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.playing-card.red {
+  color: #dc2626;
+}
+
+.playing-card.back {
+  background: repeating-linear-gradient(45deg, #1e3a8a, #1e3a8a 4px, #2563eb 4px, #2563eb 8px);
+  height: 1.5em;
+}
+
+.decision td.chosen {
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.prob-bar {
+  display: inline-block;
+  height: 0.6em;
+  background: var(--accent);
+  margin-right: 0.35em;
+  vertical-align: middle;
+  border-radius: 2px;
+}
+
+.strategy-layout {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-top: 0.75rem;
+}
+
+.range-grid {
+  display: grid;
+  grid-template-columns: repeat(13, 44px);
+  grid-auto-rows: 36px;
+  gap: 2px;
+}
+
+.range-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 3px;
+  cursor: default;
+  user-select: none;
+}
+
+.range-cell.hovered {
+  outline: 2px solid #111827;
+}
+
+.range-detail {
+  min-width: 240px;
+}

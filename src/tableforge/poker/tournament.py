@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass, field
 from functools import cache, lru_cache
 from typing import Protocol, runtime_checkable
 
-from tableforge.poker.table import PotAward, TableAgent, TableHand, TableRunner
+from tableforge.poker.table import PotAward, TableAgent, TableHand, TableResult, TableRunner
 
 CONFIG_SCHEMA = "tableforge.tournament-config.v1"
 MAX_HANDS = 5_000
@@ -254,6 +254,12 @@ class TournamentHandInfo:
     starting_bounty: float = 0.0
 
 
+class HandRunner(Protocol):
+    """Plays one hand to the end (`TableRunner`, or a wrapper that records it)."""
+
+    def run(self, hand: TableHand, agents: Sequence[TableAgent]) -> TableResult: ...
+
+
 @runtime_checkable
 class TournamentAware(Protocol):
     def begin_hand(self, info: TournamentHandInfo) -> None: ...
@@ -338,7 +344,7 @@ class Tournament:
         self,
         agents: Sequence[TableAgent],
         record_hands: bool = False,
-        runner: TableRunner | None = None,
+        runner: HandRunner | None = None,
     ) -> TournamentResult:
         """Play until one player has all the chips. `agents[i]` plays player id i."""
         if len(agents) != self.config.players:
@@ -391,7 +397,7 @@ class Tournament:
         return shares[alive.index(player)] + cash
 
     def play_hand(
-        self, agents: Sequence[TableAgent], runner: TableRunner, record: bool = False
+        self, agents: Sequence[TableAgent], runner: HandRunner, record: bool = False
     ) -> HandRecord | None:
         config = self.config
         seat_players = tuple(self.alive)

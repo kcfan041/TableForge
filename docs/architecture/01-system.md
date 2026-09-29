@@ -195,6 +195,24 @@ class Learner(Protocol):
 
 CheckpointBundle 至少包含 model、optimizer、algorithm state、schema version、code version、parent checkpoint、training counters 與 manifest。推論程序只需 model 與 manifest；不得被迫下載 optimizer state。
 
+### 6.1 決策說明介面（重播與策略表共用）
+
+重播、策略表等分析功能只透過 `DecisionExplainer`（`learning/explain.py`）詢問模型，不依賴任何演算法的內部結構；新增演算法時實作這個介面即可，畫面不需要修改。
+
+```python
+class DecisionExplainer(Protocol):
+    play_modes: tuple[PlayMode, ...]          # 模型可用的打法，第一個是預設
+    def begin_hand(self, info: TournamentHandInfo) -> None: ...
+    def explain(self, observation, legal, mode) -> DecisionExplanation: ...
+    def act(self, observation, legal, mode) -> Action: ...
+```
+
+- `DecisionExplanation.probabilities`（必填）：四個統一動作 `fold`、`check_call`、`raise`、`all_in` 的機率，加總為 1。隨機策略給分布；確定性策略與 Rule Bot 給選中的動作 1.0。有多種加注尺寸的演算法把總和放在 `raise`，細分放在 `raise_sizes`。
+- `details`（選填）：演算法特有的數值，各自帶名稱與單位，可以是每個動作一個值或整個局面一個值（例如 NFSP 的 Q 值、PPO 的局面價值、Deep CFR 的 regret）。UI 以通用表格顯示。
+- `explain` 不得改變模型，且必須能回答沒有在實際對局中出現的局面（策略表會自行構造局面）。
+- 目前的實作：`NfspExplainer`（打法：平均策略、最佳回應；details 為各動作 Q 值，錦標賽單位是 buy-in）、`RuleBotExplainer`。
+- 分析 Job：`TournamentReplayJobPayload`（一整場錦標賽的完整牌譜與模型座位的決策說明）、`StrategyTableJobPayload`（翻牌前 169 種起手牌在各位置、籌碼深度與 bounty 倍數下的打法）。兩者不屬於任何實驗，以內容做冪等，同一個請求只算一次。
+
 ## 7. 擴展邊界
 
 - 新演算法：新增 executor、AgentManifest schema extension、artifact type，不改 Job lifecycle。

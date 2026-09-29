@@ -93,7 +93,18 @@ _INIT_DEFAULTS: dict[str, object] = {
     "epsilon": 0.06,
     "target_update_steps": 200,
     "reward_scale": 1.0,
+    "double_q": False,
+    "rl_capacity": 50_000,
+    "sl_capacity": 100_000,
 }
+
+
+def _without_defaults(data: dict[str, object], defaults: dict[str, object]) -> dict[str, object]:
+    """Drop fields that still have their default, so payloads written before a field
+    existed stay byte-identical (and keep their idempotency keys)."""
+    return {
+        key: value for key, value in data.items() if key not in defaults or value != defaults[key]
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +119,15 @@ class NfspInitPayload:
     epsilon: float = 0.06
     target_update_steps: int = 200
     reward_scale: float = 1.0
+    double_q: bool = False
+    rl_capacity: int = 50_000
+    sl_capacity: int = 100_000
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported init payload schema")
+        if self.rl_capacity < 1 or self.sl_capacity < 1:
+            raise ValueError("buffer capacities must be positive")
         if self.reward_scale <= 0:
             raise ValueError("reward_scale must be positive")
         if self.hidden_size < 1 or self.batch_size < 1:
@@ -122,13 +138,7 @@ class NfspInitPayload:
             raise ValueError("anticipatory and epsilon must be between 0 and 1")
 
     def to_bytes(self) -> bytes:
-        data = asdict(self)
-        # Fields added later are written only when they differ from their defaults, so
-        # payloads (and idempotency keys) of existing experiments stay byte-identical.
-        for name, default in _INIT_DEFAULTS.items():
-            if data[name] == default:
-                del data[name]
-        return _dump(data)
+        return _dump(_without_defaults(asdict(self), _INIT_DEFAULTS))
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> NfspInitPayload:
@@ -145,12 +155,22 @@ class NfspActorPayload:
     actor_seed: int
     population_artifact_id: str = ""
     population_sha256: str = ""
+    tournament_json: str = ""
+    """When set, the actor plays whole tournaments; `hands` is then the tournament count."""
+    self_play_share: float = 0.5
+    hand_horizon: bool = False
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported actor payload schema")
         if self.hands < 1:
             raise ValueError("actor hands must be positive")
+        if not 0 <= self.self_play_share <= 1:
+            raise ValueError("self_play_share must be between 0 and 1")
+        if self.tournament_json:
+            from tableforge.poker.tournament import TournamentConfig
+
+            TournamentConfig.from_json(self.tournament_json)
         _require_sha(self.checkpoint_sha256)
         if self.population_artifact_id or self.population_sha256:
             if not self.population_artifact_id:
@@ -158,7 +178,7 @@ class NfspActorPayload:
             _require_sha(self.population_sha256)
 
     def to_bytes(self) -> bytes:
-        return _dump(asdict(self))
+        return _dump(_without_defaults(asdict(self), _TOURNAMENT_ACTOR_DEFAULTS))
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> NfspActorPayload:
@@ -205,10 +225,18 @@ class NfspMatchPayload:
     target_width: float
     reference_opponents: tuple[str, ...] = ("call", "random")
     reference_deals: int = 200
+    tournament_json: str = ""
+    """When set, the match is a tournament benchmark against a rule-bot field; `min_deals`
+    is then the number of tournament seeds (each played once per seat)."""
+    tournament_field: str = "mixed"
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported match payload schema")
+        if self.tournament_json:
+            from tableforge.poker.tournament import TournamentConfig
+
+            TournamentConfig.from_json(self.tournament_json)
         _require_sha(self.candidate_sha256)
         _require_sha(self.baseline_sha256)
         if self.min_deals < 2 or self.max_deals < self.min_deals or self.batch_deals < 1:
@@ -220,7 +248,7 @@ class NfspMatchPayload:
             raise ValueError(f"unknown opponents: {sorted(unknown)}")
 
     def to_bytes(self) -> bytes:
-        data = asdict(self)
+        data = _without_defaults(asdict(self), _TOURNAMENT_MATCH_DEFAULTS)
         data["reference_opponents"] = list(self.reference_opponents)
         return _dump(data)
 
@@ -229,3 +257,14 @@ class NfspMatchPayload:
         data = json.loads(payload)
         data["reference_opponents"] = tuple(data["reference_opponents"])
         return cls(**data)
+
+
+_TOURNAMENT_ACTOR_DEFAULTS: dict[str, object] = {
+    "tournament_json": "",
+    "self_play_share": 0.5,
+    "hand_horizon": False,
+}
+_TOURNAMENT_MATCH_DEFAULTS: dict[str, object] = {
+    "tournament_json": "",
+    "tournament_field": "mixed",
+}

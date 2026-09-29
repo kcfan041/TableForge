@@ -44,6 +44,11 @@ class ClusterSetupError(Exception):
     """A step of creating or starting the cluster failed; the message says what to do."""
 
 
+def model_library_root(coordinator_data_dir: Path) -> Path:
+    """Where a cluster keeps named models: next to its metadata, on the cluster host."""
+    return coordinator_data_dir / "models"
+
+
 def default_home() -> Path:
     override = os.environ.get("TABLEFORGE_HOME")
     if override:
@@ -75,8 +80,8 @@ class Layout:
 
     @property
     def models(self) -> Path:
-        """Trained models kept on this computer (see `tableforge.models`)."""
-        return self.home / "models"
+        """Trained models of the cluster this computer hosts (see `tableforge.models`)."""
+        return model_library_root(self.coordinator)
 
     @property
     def service_file(self) -> Path:
