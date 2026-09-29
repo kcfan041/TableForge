@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：531 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：558 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -438,6 +438,27 @@
 - 驗收：
   - 測試 2 個（以假的 CPU 群組執行，Linux CI 也會跑）：依序分配 0、1、0；停止一個後新 Worker 補到較空的群組；關閉後不再綁定且設定會保存；單一群組時開關不可用。
   - 實機：在 `tableforge ui` 建立叢集並開 4 個 Worker，每個 Worker 的轉接程式與 Python 程序都綁在指定的 CCD（CCD0、CCD1、CCD0、CCD1）。
+
+### B1 錦標賽規格參數化（進行中）
+- **原則**：不把任何網站的賽制寫死。Natural8 等網站的 PKO 起始籌碼、桌子人數與盲注結構依賽事而不同；預設只取常見值（6 人、65/35、50/50 漸進式 bounty），模擬某場實際賽事時再依 lobby 的結構建立 preset。
+- **錦標賽規格**（`poker/tournament_spec.py`，`TournamentSpec`）：人數（2–6）、起始籌碼（BB）、每級手數、BB ante、獎金分配（65/35、50/30/20、贏家全拿，或任意比例如「40/25/15/12/8」）、是否 PKO、bounty 比例、淘汰時現金比例、冠軍是否拿回自己的 bounty、buy-in，以及自訂盲注表（每級小盲、大盲、ante、手數，例如照 lobby 填入）。可以存成 JSON；轉成引擎的 `TournamentConfig`。9 人桌留待之後（需要擴充引擎與 v2 輸入）。
+- **實驗可以換錦標賽**：建立任何錦標賽 preset（benchmark 或 NFSP 錦標賽訓練）時，可以用 `settings.tournament`（規格物件）與 `settings.opponents` 指定錦標賽與對手；UI「建立實驗」卡片新增「自訂錦標賽規格」表單。錦標賽設定存在實驗與模型中，模型的遊戲以存下的完整規格為準，名稱只拿來顯示。
+- **同一套評估設定**（`EvaluationProtocol`）：錦標賽設定、對手組合、seed、座位輪換包成一個物件，模型與每個基準都用它評估，並記錄設定的 sha256。`scripts/tournament_compare.py` 用同一個設定一次評估多個模型與 Rule Bot，輸出 ROI、Bounty EV、ITM。
+- **策略表跟著錦標賽走**：位置依人數產生（2–6 人，heads-up 時 SB 是按鈕）；可以選盲注等級；籌碼深度預設為起始籌碼的 0.3–2 倍（10 BB：3、5、8、10、15、20；25 BB：8、12、20、25、38、50；50 BB：15、25、40、50、75、100）；新增「面對開局加注」情境（對方加注到 2.5 BB，可以蓋牌、跟注、再加注、全下），6 人桌共 35 種情境。
+- **Preset**：`6max-pko-25bb-train`、`6max-pko-50bb-train`、`6max-pko-25bb-top3-train`（50/30/20），以及 50 BB 的 PKO benchmark。`6max-pko-10bb-train` 的錦標賽設定與之前完全相同（已驗證 JSON 一致）。
+- **基準**（同一套評估設定：6 人 PKO、65/35、50/50 bounty、混合 Rule Bot、500 seed × 6 座位 = 3,000 場）：
+
+  | 受測者 | 25 BB ROI | 50 BB ROI |
+  |---|---|---|
+  | Tight bot | **+12.5%**（+6.6 至 +18.4） | **+16.0%**（+10.3 至 +21.7） |
+  | Aggro bot | +2.5% | −4.1% |
+  | Call bot | +0.7% | −0.1% |
+  | Random bot | −6.6%（顯著） | −9.4%（顯著） |
+  | `hunter` | −13.9%（顯著） | −9.9%（顯著） |
+  | `HeuristicPushFoldBot` | −14.9%（顯著） | −10.7%（顯著） |
+
+  深籌碼時只會全下或蓋牌的 bot 大幅輸錢，最強的基準變成 Tight bot。25/50 BB 的模型驗收以 Tight bot 為比較對象。
+- **訓練（進行中）**：25/50 BB 各 3 個 seed，照 T3 的設定訓練 6 萬場。25 BB 在 1.5 萬場時平均策略已 +6.0% 至 +7.9%（2 個 seed 顯著），最佳回應 +32% 至 +42%。
 
 ### A 在叢集上完整跑一次正式訓練（通過）
 - **設定**：獨立的 `tableforge ui`（暫存資料位置），建立叢集、開 8 個 Worker（依序分到 CCD0、1、0、1…），跑 `6max-pko-10bb-train`：20 輪 × 4 個 Actor × 750 場，每輪 31,000 步，每輪評估 300 × 6 場。

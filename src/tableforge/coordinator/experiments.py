@@ -441,8 +441,54 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
 }
 
 
+TOURNAMENT_FIELDS = ("mixed", "call", "tight", "aggro", "pushfold", "hunter")
+
+
+def is_tournament(config: ExperimentConfig) -> bool:
+    """Tournament benchmarks and tournament NFSP training (both carry a tournament)."""
+    return bool(config.tournament_json)
+
+
+def apply_tournament(
+    config: ExperimentConfig, tournament: Mapping[str, object] | None, opponents: str | None
+) -> ExperimentConfig:
+    """Replace the tournament of a tournament preset with a user-chosen specification.
+
+    `tournament` is a `TournamentSpec` object (players, starting_stack_bb, payout, pko,
+    bounty split, blind structure...); omitted settings keep their spec defaults, not the
+    preset's, so a request always says exactly which tournament it means. `opponents`
+    changes the benchmark field.
+    """
+    if tournament is None and opponents is None:
+        return config
+    if not is_tournament(config):
+        raise ValueError("tournament settings are only available for tournament presets")
+    from tableforge.poker.tournament_spec import TournamentSpec
+
+    changes: dict[str, Any] = {}
+    if tournament is not None:
+        if not isinstance(tournament, Mapping):
+            raise ValueError("tournament must be an object")
+        tournament_config = TournamentSpec.from_dict(dict(tournament)).to_config()
+        changes["tournament_json"] = tournament_config.to_json()
+        changes["players"] = tournament_config.players
+    if opponents is not None:
+        if opponents not in TOURNAMENT_FIELDS:
+            raise ValueError(f"opponents must be one of {', '.join(TOURNAMENT_FIELDS)}")
+        changes["opponents"] = opponents
+    return replace(config, **changes)
+
+
 def apply_overrides(config: ExperimentConfig, overrides: Mapping[str, object]) -> ExperimentConfig:
     """Return `config` with user-chosen training settings; unknown or out-of-range values fail."""
+    overrides = dict(overrides)
+    tournament = overrides.pop("tournament", None)
+    opponents = overrides.pop("opponents", None)
+    config = apply_tournament(
+        config,
+        tournament,  # type: ignore[arg-type]
+        None if opponents is None else str(opponents),
+    )
     if not overrides:
         return config
     if config.kind is not ExperimentKind.NFSP_ITERATIVE:

@@ -322,22 +322,29 @@ BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
 
 
 
-def _tournament_training_preset(key: str, **overrides: object) -> ExperimentPreset:
-    """NFSP on 6-max 10 BB PKO with the settings accepted in T3 (see docs/status.md).
+def _tournament_training_preset(
+    key: str, stack_bb: float = 10, payout: str = "65-35", **overrides: object
+) -> ExperimentPreset:
+    """NFSP on a 6-max PKO with the settings accepted in T3 (see docs/status.md).
+
+    Only the tournament differs between these presets (starting stack, payout); the
+    tournament of any tournament preset can also be replaced when an experiment is created.
 
     Each round: `actors_per_round` actors play `hands_per_job` training tournaments with the
     current checkpoint, one learner trains `train_steps_per_round` steps on them, then the
     new checkpoint is benchmarked on `evaluation_deals` x 6 tournaments against a mixed
     rule-bot field (average policy, best response and the previous checkpoint).
     """
-    from tableforge.poker.tournament import BountyConfig, preset_config
+    from tableforge.poker.tournament import PAYOUTS
+    from tableforge.poker.tournament_spec import TournamentSpec
 
+    tournament = TournamentSpec(starting_stack_bb=stack_bb, payout=PAYOUTS[payout]).to_config()
     settings: dict[str, object] = {
         "hands": 750,
         "hands_per_job": 750,
         "kind": ExperimentKind.NFSP_ITERATIVE,
         "players": 6,
-        "tournament_json": preset_config(10, bounty=BountyConfig()).to_json(),
+        "tournament_json": tournament.to_json(),
         "opponents": "mixed",
         "rounds": 20,
         "actors_per_round": 4,
@@ -390,6 +397,9 @@ BUILTIN_PRESETS = (
     BUILTIN_PRESETS
     + (
         _tournament_training_preset("6max-pko-10bb-train"),
+        _tournament_training_preset("6max-pko-25bb-train", 25),
+        _tournament_training_preset("6max-pko-50bb-train", 50),
+        _tournament_training_preset("6max-pko-25bb-top3-train", 25, "50-30-20"),
         _tournament_training_preset(
             "6max-pko-10bb-smoke",
             hands=20,
@@ -412,7 +422,7 @@ BUILTIN_PRESETS = (
     )
     + tuple(
         _tournament_preset(stack_bb, "65-35", "", pko=True, candidate=candidate)
-        for stack_bb in (10, 25)
+        for stack_bb in (10, 25, 50)
         for candidate in ("pushfold", "hunter")
     )
 )

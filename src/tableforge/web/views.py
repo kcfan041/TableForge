@@ -425,16 +425,29 @@ class ClusterViews:
         """Settings that can be changed for each iterative NFSP preset, with their defaults."""
         from dataclasses import asdict
 
-        from tableforge.coordinator.experiments import OVERRIDE_LIMITS, TRAINING_OVERRIDES
+        from tableforge.coordinator.experiments import (
+            OVERRIDE_LIMITS,
+            TOURNAMENT_FIELDS,
+            TRAINING_OVERRIDES,
+        )
         from tableforge.domain.experiments import ExperimentKind
+        from tableforge.poker.tournament import TournamentConfig
+        from tableforge.poker.tournament_spec import spec_from_config
 
         presets = {}
+        tournaments = {}
         for preset in BUILTIN_PRESETS:
+            if preset.tournament_json:
+                config_view = spec_from_config(TournamentConfig.from_json(preset.tournament_json))
+                config_view["opponents"] = preset.opponents or "mixed"
+                tournaments[preset.key] = config_view
             if preset.kind is not ExperimentKind.NFSP_ITERATIVE:
                 continue
             config = asdict(preset.config())
             presets[preset.key] = {name: config[name] for name in TRAINING_OVERRIDES}
         return {
+            "tournaments": tournaments,
+            "tournament_fields": list(TOURNAMENT_FIELDS),
             "fields": {
                 name: {
                     "type": kind.__name__,

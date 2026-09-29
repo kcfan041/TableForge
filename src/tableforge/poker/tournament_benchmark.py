@@ -228,6 +228,69 @@ def collect_samples(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluationProtocol:
+    """Everything that must be identical when two players' ROIs are compared.
+
+    A model and a baseline are only comparable when they play the same tournament config,
+    against the same field, with the same seeds and the same seat rotation. Build one
+    protocol and evaluate every candidate with it (`evaluate_with`).
+    """
+
+    config_json: str
+    field: str = "mixed"
+    seeds: int = 1_000
+    seed_start: int = 1_500_000_000
+    rotate_seats: bool = True
+
+    def __post_init__(self) -> None:
+        TournamentConfig.from_json(self.config_json)
+        if self.seeds < 2:
+            raise ValueError("a benchmark needs at least two seeds")
+
+    @property
+    def config(self) -> TournamentConfig:
+        return TournamentConfig.from_json(self.config_json)
+
+    def describe(self) -> dict[str, object]:
+        config = self.config
+        return {
+            "tournament": config.name,
+            "config_sha256": _sha256(self.config_json),
+            "field": self.field,
+            "seeds": self.seeds,
+            "seed_start": self.seed_start,
+            "rotate_seats": self.rotate_seats,
+            "tournaments": self.seeds * (config.players if self.rotate_seats else 1),
+        }
+
+
+def _sha256(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def evaluate_with(
+    protocol: EvaluationProtocol,
+    candidate: AgentFactory,
+    field_factory: Callable[[str], FieldFactory],
+    on_progress: Callable[[int], None] | None = None,
+) -> TournamentBenchmark:
+    """Evaluate one candidate under `protocol` (`field_factory(name)` builds the field)."""
+    config = protocol.config
+    samples = collect_samples(
+        candidate,
+        field_factory(protocol.field),
+        config,
+        protocol.seeds,
+        protocol.seed_start,
+        protocol.rotate_seats,
+        on_progress,
+    )
+    return TournamentBenchmark.from_samples(samples, config.name)
+
+
 def evaluate_tournament(
     candidate: AgentFactory,
     field: FieldFactory,

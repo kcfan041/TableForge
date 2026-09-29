@@ -10,6 +10,12 @@ interface StrategyResult {
   mode: string;
   hands: string[];
   actions: string[];
+  scenarios?: string[];
+  players?: number;
+  starting_stack_bb?: number;
+  level?: number;
+  blinds?: { small_blind: number; big_blind: number; ante: number };
+  open_raise_bb?: number;
   positions: string[];
   stacks: number[];
   bounties: number[];
@@ -61,7 +67,8 @@ export function StrategyPage({ session }: { session: Session }) {
   const [scenario, setScenario] = useState(urlParam("scenario") ?? "open");
   const [hero, setHero] = useState(urlParam("hero") ?? "BTN");
   const [shover, setShover] = useState(urlParam("shover") ?? "BTN");
-  const [stack, setStack] = useState(urlParam("stack") ?? "10");
+  const [stack, setStack] = useState(urlParam("stack") ?? "");
+  const [level, setLevel] = useState(urlParam("level") ?? "1");
   const [bounty, setBounty] = useState(urlParam("bounty") ?? "1");
   const [autoRun, setAutoRun] = useState(urlParam("run") === "1");
   const [focus, setFocus] = useState("mix");
@@ -80,21 +87,32 @@ export function StrategyPage({ session }: { session: Session }) {
   useEffect(() => {
     if (!autoRun || !model || !mode) return;
     setAutoRun(false);
-    void request({ model_id: model.model_id, mode });
+    void request({ model_id: model.model_id, mode, level: Number(level) });
   }, [autoRun, model, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const result = state.result;
   const positions = result?.positions ?? ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+  const scenarios = result?.scenarios ?? ["open", "call"];
   const heroes = scenario === "open" ? positions.slice(0, -1) : positions.slice(1);
+  useEffect(() => {
+    if (!result) return;
+    const wanted = Number(stack);
+    if (!result.stacks.includes(wanted)) {
+      const start = result.starting_stack_bb ?? result.stacks[0]!;
+      const closest = result.stacks.reduce((best, item) => (Math.abs(item - start) < Math.abs(best - start) ? item : best));
+      setStack(String(closest));
+    }
+    if (!heroes.includes(hero)) setHero(heroes[heroes.length - 1]!);
+  }, [result]); // eslint-disable-line react-hooks/exhaustive-deps
   const shovers = positions.slice(0, positions.indexOf(hero));
   useEffect(() => {
     if (!heroes.includes(hero)) setHero(heroes[heroes.length - 1]!);
   }, [scenario]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (scenario === "call" && !shovers.includes(shover)) setShover(shovers[shovers.length - 1] ?? "UTG");
-  }, [hero, scenario]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (scenario !== "open" && !shovers.includes(shover)) setShover(shovers[shovers.length - 1] ?? positions[0]!);
+  }, [hero, scenario, result]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const key = `${scenario}|${hero}|${scenario === "call" ? shover : ""}|${stack}|${scenario === "call" ? bounty : "1"}`;
+  const key = `${scenario}|${hero}|${scenario === "open" ? "" : shover}|${stack}|${scenario === "call" ? bounty : "1"}`;
   const table = result?.tables[key] as Record<string, (number | null)[]> | undefined;
   const actions = result?.actions ?? ["fold", "check_call", "raise", "all_in"];
   const shownActions = scenario === "call" ? ["fold", "check_call"] : actions;
@@ -158,11 +176,15 @@ export function StrategyPage({ session }: { session: Session }) {
                 ))}
               </select>
             </label>
+            <label>
+              {t("strategy.level")}
+              <input className="narrow" value={level} onChange={(event) => setLevel(event.target.value.replace(/\D/g, ""))} />
+            </label>
             <button
               type="button"
               className="primary"
               disabled={!canOperate(session) || state.busy || !modelId}
-              onClick={() => void request({ model_id: modelId, mode })}
+              onClick={() => void request({ model_id: modelId, mode, level: Number(level || 1) })}
             >
               {state.busy ? t("strategy.running") : t("strategy.build")}
             </button>
@@ -183,8 +205,11 @@ export function StrategyPage({ session }: { session: Session }) {
             <label>
               {t("strategy.scenario")}
               <select value={scenario} onChange={(event) => setScenario(event.target.value)}>
-                <option value="open">{t("strategy.scenario.open")}</option>
-                <option value="call">{t("strategy.scenario.call")}</option>
+                {scenarios.map((item) => (
+                  <option key={item} value={item}>
+                    {t(`strategy.scenario.${item}` as MessageKey)}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -197,9 +222,9 @@ export function StrategyPage({ session }: { session: Session }) {
                 ))}
               </select>
             </label>
-            {scenario === "call" ? (
+            {scenario !== "open" ? (
               <label>
-                {t("strategy.shover")}
+                {t(scenario === "call" ? "strategy.shover" : "strategy.opener")}
                 <select value={shover} onChange={(event) => setShover(event.target.value)}>
                   {shovers.map((item) => (
                     <option key={item} value={item}>
@@ -303,7 +328,17 @@ export function StrategyPage({ session }: { session: Session }) {
           ) : (
             <p className="muted">{t("strategy.noSpot")}</p>
           )}
-          <p className="muted small">{t("strategy.note")}</p>
+          <p className="muted small">
+            {t("strategy.spotInfo", {
+              players: result.players ?? 6,
+              level: result.level ?? 1,
+              sb: result.blinds?.small_blind ?? 10,
+              bb: result.blinds?.big_blind ?? 20,
+              ante: result.blinds?.ante ?? 20,
+              raise: result.open_raise_bb ?? 2.5,
+            })}{" "}
+            {t("strategy.note")}
+          </p>
         </Card>
       ) : null}
     </Page>

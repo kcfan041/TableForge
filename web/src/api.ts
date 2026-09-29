@@ -108,6 +108,8 @@ export interface CurvePoint {
 }
 
 export interface TrainingOptions {
+  tournaments?: Record<string, import("./pages/TournamentForm").TournamentPresetView>;
+  tournament_fields?: string[];
   fields: Record<string, { type: string; min: number | null; max: number | null }>;
   observation_schemas: string[];
   presets: Record<string, Record<string, number | string>>;
@@ -115,7 +117,7 @@ export interface TrainingOptions {
 
 export interface CreateExperimentBody {
   preset: string;
-  settings?: Record<string, number | string>;
+  settings?: Record<string, unknown>;
   seeds?: number[];
 }
 

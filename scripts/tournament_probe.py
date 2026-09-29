@@ -35,6 +35,10 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=300, help="benchmark seeds (x6 seats)")
     parser.add_argument("--stack-bb", type=float, default=10)
     parser.add_argument("--no-pko", action="store_true")
+    parser.add_argument(
+        "--tournament", default="", help="tournament spec JSON (overrides --stack-bb/--no-pko)"
+    )
+    parser.add_argument("--train-hands", type=int, default=0, help="stop after this many hands")
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--batch", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -57,7 +61,12 @@ def main() -> None:
     args = parser.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
-    config = preset_config(args.stack_bb, bounty=None if args.no_pko else BountyConfig())
+    if args.tournament:
+        from tableforge.poker.tournament_spec import TournamentSpec
+
+        config = TournamentSpec.from_dict(json.loads(args.tournament)).to_config()
+    else:
+        config = preset_config(args.stack_bb, bounty=None if args.no_pko else BountyConfig())
     agent = NfspAgent(
         NfspConfig(
             hidden_size=args.hidden,

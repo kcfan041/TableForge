@@ -5,6 +5,7 @@ import { api, ApiError, type Preset, type Session, type TrainingOptions } from "
 import { Card, Counts, LoadState, Page, ShortId, StatusBadge } from "../components";
 import { useI18n, type MessageKey } from "../i18n";
 import { useLiveData } from "../live";
+import { TournamentForm, type TournamentChoice } from "./TournamentForm";
 
 export function canOperate(session: Session): boolean {
   return session.role === "operator" || session.role === "admin";
@@ -75,6 +76,7 @@ function CreateExperiment() {
   const [custom, setCustom] = useState(false);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [seedText, setSeedText] = useState("");
+  const [tournamentChoice, setTournamentChoice] = useState<TournamentChoice | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -93,9 +95,11 @@ function CreateExperiment() {
     );
   }, [selected, defaults]);
 
-  const changed = (): Record<string, number | string> => {
-    if (!custom || !defaults || !options) return {};
-    const result: Record<string, number | string> = {};
+  const changed = (): Record<string, unknown> => {
+    const result: Record<string, unknown> = tournamentChoice
+      ? { tournament: tournamentChoice.tournament, opponents: tournamentChoice.opponents }
+      : {};
+    if (!custom || !defaults || !options) return result;
     for (const [name, text] of Object.entries(settings)) {
       if (String(defaults[name]) === text) continue;
       result[name] = options.fields[name]?.type === "str" ? text : Number(text);
@@ -130,6 +134,7 @@ function CreateExperiment() {
 
   const current = presets.find((preset) => preset.key === selected);
   const tunable = Boolean(defaults);
+  const tournamentPreset = options?.tournaments?.[selected];
   return (
     <Card title={t("experiments.create")}>
       <form className="stack wide" onSubmit={(event) => void create(event, true)}>
@@ -155,6 +160,13 @@ function CreateExperiment() {
           <p className="muted small">
             <KindLabel kind={current.kind} /> · {presetInfo(current, t, (n) => formatNumber(n))}
           </p>
+        ) : null}
+        {tournamentPreset && options ? (
+          <TournamentForm
+            preset={tournamentPreset}
+            fields={options.tournament_fields ?? ["mixed"]}
+            onChange={setTournamentChoice}
+          />
         ) : null}
         {tunable && options ? (
           <>

@@ -124,7 +124,13 @@ def request_strategy(services: Services, arguments: dict[str, Any]) -> dict[str,
     mode = _mode(info, str(arguments.get("mode", "")))
     artifact_id, sha = checkpoint_artifact(services, info.model_id)
     payload = StrategyTablePayload(
-        "1.0", tournament_json(info), artifact_id, sha, mode, info.algorithm
+        "1.0",
+        tournament_json(info),
+        artifact_id,
+        sha,
+        mode,
+        info.algorithm,
+        level=int(arguments.get("level", 1)),
     ).to_bytes()
     return {"job_id": _create(services, STRATEGY_PAYLOAD_TYPE, payload)}
 

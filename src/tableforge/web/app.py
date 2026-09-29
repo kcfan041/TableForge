@@ -94,7 +94,9 @@ class LoginRequest(BaseModel):
 
 class CreateExperimentRequest(BaseModel):
     preset: str = Field(min_length=1, max_length=200)
-    settings: dict[str, float | int | str] = Field(default_factory=dict)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    """Training settings; ``tournament`` (a tournament spec object) and ``opponents``
+    change the tournament of tournament presets."""
     seeds: list[int] | None = Field(default=None, max_length=16)
 
 

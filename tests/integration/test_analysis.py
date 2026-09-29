@@ -131,10 +131,16 @@ def test_strategy_table_covers_every_spot_and_hand(
     table = done["result"]
     assert table["mode"] == "best_response"
     assert table["hands"] == hand_classes()
-    open_spots = sum(1 for scenario, _, _ in spots() if scenario == "open")
-    call_spots = len(spots()) - open_spots
+    counts = {
+        name: sum(1 for scenario, _, _ in spots() if scenario == name)
+        for name in ("open", "raise", "call")
+    }
+    assert counts == {"open": 5, "raise": 15, "call": 15}
     stacks = len(table["stacks"])
-    assert len(table["tables"]) == stacks * (open_spots + call_spots * 3)
+    assert table["stacks"] == [3, 5, 8, 10, 15, 20]
+    assert len(table["tables"]) == stacks * (counts["open"] + counts["raise"] + counts["call"] * 3)
+    raise_spot = table["tables"]["raise|BB|BTN|10|1"]
+    assert all(abs(sum(values[:4]) - 1) < 1e-3 for values in raise_spot.values())
     btn = table["tables"]["open|BTN||10|1"]
     assert set(btn) == set(hand_classes())
     for values in btn.values():
@@ -143,6 +149,30 @@ def test_strategy_table_covers_every_spot_and_hand(
         assert max(probabilities) == 1.0
     call = table["tables"]["call|BB|BTN|10|3"]
     assert all(values[2] == 0 and values[3] == 0 for values in call.values())
+
+
+@pytest.mark.parametrize("players,stack", [(2, 25), (4, 50)])
+def test_strategy_follows_the_model_tournament(players: int, stack: int) -> None:
+    from tableforge.learning.explain import RuleBotExplainer
+    from tableforge.learning.strategy import build_strategy, default_stacks, positions
+    from tableforge.poker.tournament_spec import TournamentSpec
+    from tableforge.worker.tournament import rule_bot
+
+    config = TournamentSpec.from_dict({"players": players, "starting_stack_bb": stack}).to_config()
+
+    result = build_strategy(
+        RuleBotExplainer(rule_bot("tight", 0)),
+        config,
+        "rule",
+        default_stacks(config.starting_stack_bb),
+        (1.0,),
+        level=2,
+    )
+
+    assert result["positions"] == list(positions(players))
+    assert result["stacks"] == list(default_stacks(stack))
+    assert result["blinds"]["big_blind"] == config.blind_levels[1].big_blind
+    assert len(result["tables"]) == len(spots(players)) * len(result["stacks"])
 
 
 def test_analysis_requests_are_validated(cluster: tuple[object, ClusterViews, object]) -> None:
