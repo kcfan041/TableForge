@@ -439,7 +439,7 @@
   - 測試 2 個（以假的 CPU 群組執行，Linux CI 也會跑）：依序分配 0、1、0；停止一個後新 Worker 補到較空的群組；關閉後不再綁定且設定會保存；單一群組時開關不可用。
   - 實機：在 `tableforge ui` 建立叢集並開 4 個 Worker，每個 Worker 的轉接程式與 Python 程序都綁在指定的 CCD（CCD0、CCD1、CCD0、CCD1）。
 
-### B1 錦標賽規格參數化（進行中）
+### B1 錦標賽規格參數化（完成）
 - **原則**：不把任何網站的賽制寫死。Natural8 等網站的 PKO 起始籌碼、桌子人數與盲注結構依賽事而不同；預設只取常見值（6 人、65/35、50/50 漸進式 bounty），模擬某場實際賽事時再依 lobby 的結構建立 preset。
 - **錦標賽規格**（`poker/tournament_spec.py`，`TournamentSpec`）：人數（2–6）、起始籌碼（BB）、每級手數、BB ante、獎金分配（65/35、50/30/20、贏家全拿，或任意比例如「40/25/15/12/8」）、是否 PKO、bounty 比例、淘汰時現金比例、冠軍是否拿回自己的 bounty、buy-in，以及自訂盲注表（每級小盲、大盲、ante、手數，例如照 lobby 填入）。可以存成 JSON；轉成引擎的 `TournamentConfig`。9 人桌留待之後（需要擴充引擎與 v2 輸入）。
 - **實驗可以換錦標賽**：建立任何錦標賽 preset（benchmark 或 NFSP 錦標賽訓練）時，可以用 `settings.tournament`（規格物件）與 `settings.opponents` 指定錦標賽與對手；UI「建立實驗」卡片新增「自訂錦標賽規格」表單。錦標賽設定存在實驗與模型中，模型的遊戲以存下的完整規格為準，名稱只拿來顯示。
@@ -465,11 +465,13 @@
   | `pko-25bb-nfsp-s1` | **+32.9%**（+27.9 至 +38.0） | +79.8% | 0.739 | +10.3% |
   | `pko-25bb-nfsp-s2` | **+34.8%**（+30.0 至 +39.5） | +70.3% | 0.744 | +10.3% |
   | `pko-25bb-nfsp-s3` | **+32.5%**（+27.6 至 +37.3） | +48.3% | 0.732 | +10.3% |
+  | `pko-50bb-nfsp-s1` | **+32.1%**（+27.4 至 +36.7） | +93.5% | 0.742 | +16.6% |
   | `pko-50bb-nfsp-s2` | **+37.7%**（+32.6 至 +42.8） | +79.9% | 0.768 | +16.6% |
+  | `pko-50bb-nfsp-s3` | **+38.7%**（+34.1 至 +43.3） | +92.6% | 0.773 | +16.6% |
 
-  - 25 BB 3 個 seed、50 BB 已完成的 seed 都顯著大於 0，且遠高於最強基準 Tight bot。50 BB 另外 2 個 seed 在 3 萬場時為 +14.9% 與 +20.2%（3,000 場評估，皆顯著），因記憶體不足中止（見下），正以新的記憶體實作重跑。
+  - 25 BB 與 50 BB 各 3 個 seed 全部顯著大於 0，且遠高於最強基準 Tight bot，符合驗收。50 BB seed 1、3 第一次因記憶體不足中止（見下），以新的記憶體實作重跑完成（每個程序約 1.5 GB）。
   - 在 10/25/50 BB 用同一組設定都學得起來，深籌碼時暫時不需要更細的加注尺寸；翻牌後的表現之後以重播與「面對開局加注」策略表檢查。
-  - 模型已存入本機模型庫：`pko-25bb-nfsp-s1`、`-s2`、`-s3`、`pko-50bb-nfsp-s2`。
+  - 模型已存入本機模型庫：`pko-25bb-nfsp-s1`、`-s2`、`-s3`、`pko-50bb-nfsp-s1`、`-s2`、`-s3`。
 - **記憶體（使用者回報 RAM 快用完）**：同時跑 6 個訓練時每個程序佔 7–9 GB，共約 51 GB（總共 61.6 GB）。
   - 原因：RL 與 SL buffer 把每個狀態存成 Python tuple（406 個 Python 浮點數物件）；另外每次評估最佳回應時，腳本重新載入整個模型（包括 SL reservoir，再轉成 tuple）。
   - 修正：`learning/memory.py` 改用連續的 NumPy float32 矩陣存放（每筆約 1.7 KB，依需要倍增到上限；每手結束的訓練不需要 next state，完全不配置）；最佳回應評估只載入網路權重（`from_actor_bundle`）。
@@ -831,7 +833,7 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **B1 → C → D1（已排定）**：B1 錦標賽規格參數化（10/25/50 BB、6 人；payout 預設 65/35；模型與基準使用相同評估設定；學不起來時先檢查動作抽象）；C 對模型池的表現（PFSP、對模型池 benchmark）；D1 對打（遠端與本機模式），第一步先導入以 scope 表示的權限（`experiment:read`、`experiment:control`、`model:read`、`model:download`、`model:manage`、`analysis:run`、`play:remote`、`admin:manage`；角色只是常用組合）。
+1. **C → D1（已排定；B1 已完成）**：C 對模型池的表現（PFSP、對模型池 benchmark）；D1 對打（遠端與本機模式），第一步先導入以 scope 表示的權限（`experiment:read`、`experiment:control`、`model:read`、`model:download`、`model:manage`、`analysis:run`、`play:remote`、`admin:manage`；角色只是常用組合）。
 2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
