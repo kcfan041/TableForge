@@ -5,6 +5,7 @@ import {
   api,
   ApiError,
   can,
+  type CurvePoint,
   type ExperimentDetail,
   type Interval,
   type Session,
@@ -192,6 +193,60 @@ function PoolMatchups({ result }: { result: PoolResult }) {
   );
 }
 
+/** S4: the learner's ROI against its frozen target, per round. */
+function ExploitSummary({ target, curve }: { target: string; curve: CurvePoint[] }) {
+  const { t, formatNumber } = useI18n();
+  const points = curve.filter((point) => point.benchmark.target_best_response);
+  const percent = (value: number) => `${formatNumber(value, 1)}%`;
+  const best = points.reduce<CurvePoint | null>(
+    (top, point) =>
+      !top || point.benchmark.target_best_response!.bb_per_100 > top.benchmark.target_best_response!.bb_per_100
+        ? point
+        : top,
+    null,
+  );
+  return (
+    <Card title={t("exploit.title")}>
+      <p className="muted small">{t("exploit.help")}</p>
+      <dl className="facts">
+        <dt>{t("exploit.target")}</dt>
+        <dd>
+          <code>{target}</code>
+        </dd>
+        <dt>{t("exploit.value")}</dt>
+        <dd>
+          {best ? (
+            <>
+              <strong className={best.benchmark.target_best_response!.low > 0 ? "negative-text" : ""}>
+                {percent(best.benchmark.target_best_response!.bb_per_100)}
+              </strong>{" "}
+              <span className="muted small">
+                ({percent(best.benchmark.target_best_response!.low)} – {percent(best.benchmark.target_best_response!.high)}, round{" "}
+                {best.round})
+              </span>
+            </>
+          ) : (
+            "–"
+          )}
+        </dd>
+      </dl>
+      {points.length > 0 ? (
+        <ul className="small">
+          {points.map((point) => (
+            <li key={point.round}>
+              {t("exploit.rounds", {
+                round: point.round,
+                best: percent(point.benchmark.target_best_response!.bb_per_100),
+                average: point.benchmark.target_average ? percent(point.benchmark.target_average.bb_per_100) : "–",
+              })}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </Card>
+  );
+}
+
 function GroupCurve({ groupId, current }: { groupId: string; current: string }) {
   const { t } = useI18n();
   const group = useLiveData(async () => {
@@ -304,6 +359,9 @@ export function ExperimentPage({ session }: { session: Session }) {
               experimentId={data.experiment_id}
               defaultId={`${data.preset.replace(/-train$/, "")}-s${data.seed ?? 0}`}
             />
+          ) : null}
+          {typeof data.config.exploit_target === "string" && data.config.exploit_target ? (
+            <ExploitSummary target={data.config.exploit_target} curve={data.curve ?? []} />
           ) : null}
           {data.kind === "nfsp_iterative" ? (
             <Card title={t("curve.title")}>

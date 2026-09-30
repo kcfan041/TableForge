@@ -239,13 +239,18 @@ class NfspMatchPayload:
     pool_sha256: str = ""
     pool_seeds: int = 0
     pool_matchup_seeds: int = 0
+    exploit_seeds: int = 0
+    """S4: seeds for the candidate against a field made only of the pool (the exploit
+    target), for both its average policy and its best response."""
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported match payload schema")
         if self.pool_artifact_id or self.pool_sha256:
             _require_sha(self.pool_sha256)
-        if self.pool_seeds < 0 or self.pool_matchup_seeds < 0:
+        if self.exploit_seeds and not self.pool_artifact_id:
+            raise ValueError("an exploit match needs the target pool")
+        if self.pool_seeds < 0 or self.pool_matchup_seeds < 0 or self.exploit_seeds < 0:
             raise ValueError("pool seeds cannot be negative")
         if self.tournament_json:
             from tableforge.poker.tournament import TournamentConfig
@@ -287,4 +292,5 @@ _TOURNAMENT_MATCH_DEFAULTS: dict[str, object] = {
     "pool_sha256": "",
     "pool_seeds": 0,
     "pool_matchup_seeds": 0,
+    "exploit_seeds": 0,
 }

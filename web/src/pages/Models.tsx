@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { api, ApiError, can, type ModelView, type Session } from "../api";
 import { Card, LoadState, Page } from "../components";
@@ -31,6 +31,21 @@ export function Models({ session }: { session: Session }) {
   const { t, formatDate, formatNumber } = useI18n();
   const list = useLiveData(models.list);
   const [error, setError] = useState<string | null>(null);
+
+  const navigate = useNavigate();
+  const exploit = async (id: string) => {
+    if (!window.confirm(t("models.confirmExploit", { id }))) return;
+    try {
+      const created = (await api.createExperiment({
+        preset: "6max-pko-10bb-exploit",
+        settings: { exploit_target: id },
+      })) as { experiment_id: string };
+      await api.startExperiment(created.experiment_id);
+      navigate(`/experiments/${encodeURIComponent(created.experiment_id)}`);
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : String(reason));
+    }
+  };
 
   const remove = async (id: string) => {
     if (!window.confirm(t("models.confirmRemove", { id }))) return;
@@ -86,6 +101,14 @@ export function Models({ session }: { session: Session }) {
                           <Link to={`/replay?model=${encodeURIComponent(model.model_id)}`}>{t("models.replay")}</Link>
                           {" · "}
                           <Link to={`/strategy?model=${encodeURIComponent(model.model_id)}`}>{t("models.strategy")}</Link>
+                          {can(session, "experiment:control") && model.algorithm === "nfsp" ? (
+                            <>
+                              {" · "}
+                              <button type="button" className="link" onClick={() => void exploit(model.model_id)}>
+                                {t("models.exploit")}
+                              </button>
+                            </>
+                          ) : null}
                           {can(session, "play:remote") ? (
                             <>
                               {" · "}

@@ -84,8 +84,43 @@ class ExperimentService:
         overrides: Mapping[str, object] | None = None,
     ) -> Experiment:
         """Create an experiment from a preset, optionally changing training settings."""
-        config = apply_overrides(_preset(preset_key).config(), overrides or {})
+        config = self._resolve_exploit(
+            apply_overrides(_preset(preset_key).config(), overrides or {})
+        )
         return self.experiments.create(new_experiment_id(), config, now)
+
+    def _resolve_exploit(self, config: ExperimentConfig) -> ExperimentConfig:
+        """Check an exploitability experiment's target; a model target sets the tournament.
+
+        ``rule:<bot>`` keeps the preset's (or the chosen) tournament; any other value is a
+        model id, whose own tournament is used so the learner plays the game it was trained
+        for.
+        """
+        target = config.exploit_target
+        if config.preset_key.endswith("-exploit") and not target:
+            raise ValueError("choose the model (or rule:<bot>) to exploit")
+        if not target:
+            return config
+        if target.startswith("rule:"):
+            from tableforge.learning.opponents_catalog import RULE_POOL
+
+            if target[5:] not in (*RULE_POOL, "pushfold_nash"):
+                raise ValueError(f"unknown rule bot: {target[5:]}")
+            return config
+        from tableforge.coordinator.analysis import tournament_json
+        from tableforge.models import ModelLibrary
+        from tableforge.poker.tournament import TournamentConfig
+
+        if self.models_root is None:
+            raise ValueError("this cluster has no model library")
+        try:
+            info = ModelLibrary(self.models_root).info(target)
+        except KeyError as error:
+            raise ValueError(f"no such model: {target}") from error
+        if info.algorithm != "nfsp":
+            raise ValueError(f"model {target} uses {info.algorithm}, which cannot be exploited yet")
+        tournament = TournamentConfig.from_json(tournament_json(info))
+        return replace(config, tournament_json=tournament.to_json(), players=tournament.players)
 
     def create_group(
         self,
@@ -98,7 +133,7 @@ class ExperimentService:
         if not 1 <= len(seeds) <= 16 or len(set(seeds)) != len(seeds):
             raise ValueError("a group needs 1 to 16 different seeds")
         group_id = str(new_experiment_id())
-        base = apply_overrides(_preset(preset_key).config(), overrides or {})
+        base = self._resolve_exploit(apply_overrides(_preset(preset_key).config(), overrides or {}))
         return [
             self.experiments.create(
                 new_experiment_id(),
@@ -424,6 +459,7 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "pool_history": int,
     "pfsp": str,
     "pool_eval_seeds": int,
+    "exploit_target": str,
     "observation_schema": str,
     "benchmark_deals": int,
     "evaluation_deals": int,

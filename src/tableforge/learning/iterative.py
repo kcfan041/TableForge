@@ -370,6 +370,36 @@ def _tournament_match(
         for name in samples
     }
     references = {"average": roi("average"), "best_response": roi("best_response")}
+    if payload.pool_artifact_id and payload.exploit_seeds:
+        from tableforge.learning.pool_benchmark import rotating_field
+
+        pool = load_pool(fetch, payload.pool_artifact_id, payload.pool_sha256)
+        if pool is None:
+            raise ValueError("the exploit target pool is empty")
+        target_field = rotating_field(pool.all_members())
+        exploit: dict[str, Any] = {"target": [member.name for member in pool.all_members()]}
+        for name, factory in (
+            ("average", lambda: FrozenTournamentPlayer(candidate)),
+            ("best_response", lambda: GreedyTournamentPlayer(greedy)),
+        ):
+            summary = TournamentBenchmark.from_samples(
+                collect_samples(
+                    factory,
+                    target_field,
+                    config,
+                    payload.exploit_seeds,
+                    payload.seed_start + 9_000_000,
+                ),
+                config.name,
+            )
+            exploit[name] = summary.summary()
+            references[f"target_{name}"] = {
+                "bb_per_100": _rounded(summary.roi.mean * 100),
+                "confidence_low": _rounded(summary.roi.low * 100),
+                "confidence_high": _rounded(summary.roi.high * 100),
+                "hands": summary.tournaments,
+            }
+        summaries["exploit"] = exploit
     if payload.pool_artifact_id and payload.pool_seeds:
         from tableforge.learning.pool_benchmark import pool_benchmark
 

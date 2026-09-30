@@ -48,6 +48,12 @@ def main() -> None:
     parser.add_argument("--history-every", type=int, default=0, help="snapshot every N")
     parser.add_argument("--history-limit", type=int, default=5)
     parser.add_argument("--pool-eval-seeds", type=int, default=0, help="also vs model pool")
+    parser.add_argument(
+        "--exploit-target",
+        default="",
+        help="S4: train only against this library model (or rule:<bot>) and report the ROI "
+        "against a field of it (average policy and best response); implies --self-play 0",
+    )
     parser.add_argument("--library", default="", help="model library folder")
     parser.add_argument(
         "--init-model", default="", help="continue training this library model (full state)"
@@ -117,6 +123,29 @@ def main() -> None:
         agent.rng.seed(args.seed + 1)
     opponents = None
     pool_members: list = []  # type: ignore[type-arg]
+    target_members: list = []  # type: ignore[type-arg]
+    if args.exploit_target:
+        from pathlib import Path as _TargetPath
+
+        from tableforge.learning.opponents import OpponentPool, model_member, rule_members
+        from tableforge.models import ModelLibrary as _TargetLibrary
+        from tableforge.web.cluster import Layout as _TargetLayout
+        from tableforge.web.cluster import default_home as _target_home
+
+        if args.exploit_target.startswith("rule:"):
+            target_members = rule_members([args.exploit_target[5:]])
+        else:
+            target_library = _TargetLibrary(
+                _TargetPath(args.library) if args.library else _TargetLayout(_target_home()).models
+            )
+            target_members = [
+                model_member(
+                    f"model:{args.exploit_target}",
+                    target_library.checkpoint(args.exploit_target),
+                )
+            ]
+        opponents = OpponentPool(list(target_members))
+        args.self_play = 0.0
     if args.pool_models or args.pool_eval_seeds:
         from pathlib import Path as _Path
 
@@ -180,6 +209,25 @@ def main() -> None:
                 args.pool_eval_seeds,
                 1_700_000_000,
             )["overall"]  # type: ignore[assignment]
+        exploit: dict[str, object] | None = None
+        if target_members:
+            from tableforge.learning.pool_benchmark import rotating_field
+
+            q_target = NfspAgent.from_actor_bundle(bundle)
+            q_target.training = False
+            exploit = {}
+            for name, factory in (
+                ("average", lambda frozen=frozen: FrozenTournamentPlayer(frozen)),
+                ("best_response", lambda q=q_target: GreedyTournamentPlayer(q)),
+            ):
+                summary = evaluate_tournament(
+                    factory,
+                    rotating_field(target_members),
+                    config,
+                    seeds=args.pool_eval_seeds or args.seeds,
+                    seed_start=1_800_000_000,
+                ).summary()
+                exploit[name] = {key: summary[key] for key in ("roi", "bounty_ev", "itm")}
         greedy: dict[str, object] = {}
         if args.greedy and stage:
             q_agent = NfspAgent.from_actor_bundle(bundle)
@@ -197,6 +245,7 @@ def main() -> None:
                     "tag": args.tag,
                     "seed": args.seed,
                     "pool": pool_result,
+                    "exploit": exploit,
                     "opponents": opponents.summary() if opponents is not None else None,
                     "tournaments": trained,
                     "hands": hands,

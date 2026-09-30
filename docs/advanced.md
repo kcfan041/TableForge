@@ -56,6 +56,14 @@ uv run python scripts/preflop_equity.py --samples 100000 --workers 16
 
 程式內直接求解一個情境：`tableforge.learning.pushfold_nash.solve(PushFoldGame(stacks, sb, bb, ante, prizes, heads=bounties))`，座位以按鈕為 0；結果的 `gap` 是每個人單獨改打法最多還能多拿的錢（buy-in）。
 
+量模型的可剝削程度（S4）也可以用研究腳本在本機跑：
+
+```
+uv run python scripts/tournament_probe.py --exploit-target pko-10bb-nfsp-c1 --init-model pko-10bb-nfsp-c1 --tournaments 40000 --checkpoints 4 --pool-eval-seeds 200 --reward-scale 0.3 --double-q --hand-horizon --rl-capacity 200000 --sl-capacity 1000000
+```
+
+每個檢查點印出 `exploit.best_response.roi`：學習者最佳回應對「其他座位全部是目標」的 ROI。`--init-model` 讓學習者從目標開始（建議，平台的 exploit preset 也這樣做）；`--exploit-target rule:<bot>` 則以 Rule Bot 為目標。
+
 從叢集下載、用於本機對打的模型另外放在 `downloaded-models\`，格式相同。下載透過控制面的 `download_model` 指令（需要 `model:download`），每塊 2 MB，完成後檢查大小與 sha256。對打的指令（`play_start`、`play_act` 等，需要 `play:remote`）也可以用 `/api/command/<指令>` 或 gRPC `Command` 呼叫；格式見 `src/tableforge/coordinator/play.py`。
 
 ## 研究用：參數掃描

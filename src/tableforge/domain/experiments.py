@@ -65,8 +65,21 @@ class ExperimentConfig:
     pool_history: int = 0
     pfsp: str = "uniform"
     pool_eval_seeds: int = 0
+    exploit_target: str = ""
+    """S4: a model id; every other seat is this frozen model and the learner trains to beat
+    it. The learner's best-response ROI against a field of the target is a lower bound on
+    how much the target can be exploited."""
 
     def __post_init__(self) -> None:
+        if self.exploit_target:
+            if self.kind is not ExperimentKind.NFSP_ITERATIVE or not self.tournament_json:
+                raise ValueError("an exploit target needs tournament NFSP training")
+            if self.pool_models or self.pool_history:
+                raise ValueError("an exploit target replaces the opponent pool")
+            if self.self_play_share != 0:
+                raise ValueError("an exploit experiment trains against the target only")
+            if len(self.exploit_target) > 80:
+                raise ValueError("exploit target is too long")
         if self.learner_runtime not in ("cpu", "cuda"):
             raise ValueError("learner_runtime must be cpu or cuda")
         if self.hidden_size < 1 or self.batch_size < 1:
@@ -198,6 +211,7 @@ class ExperimentPreset:
     pool_history: int = 0
     pfsp: str = "uniform"
     pool_eval_seeds: int = 0
+    exploit_target: str = ""
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -241,6 +255,7 @@ class ExperimentPreset:
             pool_history=self.pool_history,
             pfsp=self.pfsp,
             pool_eval_seeds=self.pool_eval_seeds,
+            exploit_target=self.exploit_target,
         )
 
 
@@ -432,6 +447,15 @@ BUILTIN_PRESETS = (
             batch_size=32,
             rl_capacity=20_000,
             sl_capacity=20_000,
+        ),
+        # S4: train only against a frozen target (set `exploit_target` when creating).
+        # The tournament follows the target model; 10 BB PKO is only the default.
+        _tournament_training_preset(
+            "6max-pko-10bb-exploit",
+            rounds=10,
+            self_play_share=0.0,
+            pool_eval_seeds=200,
+            benchmark_deals=0,
         ),
     )
     + tuple(

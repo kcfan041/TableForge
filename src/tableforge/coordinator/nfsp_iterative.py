@@ -212,6 +212,9 @@ class IterativeNfspOrchestrator:
         agent: AgentId,
         now: datetime,
     ) -> bool:
+        target = experiment.config.exploit_target
+        if target and not target.startswith("rule:"):
+            return self._ensure_exploit_start(experiment, jobs, agent, now)
         key = _key(experiment, "round:0:init")
         job = jobs.get(key)
         if job is None:
@@ -243,6 +246,73 @@ class IterativeNfspOrchestrator:
         if checkpoint.status is CheckpointStatus.CANDIDATE:
             self.checkpoints.decide(checkpoint.checkpoint_id, True, "initial checkpoint", now)
         return True
+
+    def _ensure_exploit_start(
+        self,
+        experiment: Experiment,
+        jobs: dict[str, Job],
+        agent: AgentId,
+        now: datetime,
+    ) -> bool:
+        """S4 with a model target: the learner starts as a copy of the target.
+
+        A learner trained from scratch did not get close to exploiting the 10 BB models in
+        60,000 tournaments, while the target's own best response already beats its average
+        policy clearly (docs/status.md, S4). So round 0 is the target itself, and a round-0
+        match measures that best response before any training.
+        """
+        config = experiment.config
+        existing = self.checkpoints.active(agent)
+        if existing is None:
+            models = self._library_models(config.exploit_target, config.tournament_json)
+            if not models:
+                raise PipelineFailedError(
+                    f"exploit target {config.exploit_target} is not in the model library"
+                )
+            source = self.coordinator.read_artifact(models[0].artifact_id)
+            artifact = self.coordinator.upload_artifact(
+                ArtifactDescriptor(
+                    _content_id(source),
+                    ArtifactKind.MODEL_CHECKPOINT,
+                    "application/zip",
+                    "tableforge.nfsp-checkpoint.v1",
+                ),
+                source,
+            )
+            existing = self._register(experiment, agent, 0, None, artifact, now)
+            if existing.status is CheckpointStatus.CANDIDATE:
+                self.checkpoints.decide(
+                    existing.checkpoint_id, True, "exploit experiment: starts as the target", now
+                )
+        key = _key(experiment, "round:0:match")
+        match = jobs.get(key)
+        if match is None:
+            pool = self._target_pool(config)
+            self._create(
+                experiment,
+                key,
+                JobType.EVALUATION,
+                MATCH_PAYLOAD_TYPE,
+                _match_payload(
+                    config,
+                    schema_version="1.0",
+                    candidate_artifact_id=str(existing.artifact_id),
+                    candidate_sha256=existing.sha256,
+                    baseline_artifact_id=str(existing.artifact_id),
+                    baseline_sha256=existing.sha256,
+                    seed_start=config.seed_start + 50_000_000,
+                    min_deals=config.evaluation_deals,
+                    max_deals=config.max_evaluation_deals,
+                    batch_deals=config.evaluation_deals,
+                    target_width=config.target_ci_width,
+                    pool_artifact_id=str(pool.descriptor.artifact_id),
+                    pool_sha256=pool.sha256,
+                    exploit_seeds=config.pool_eval_seeds or config.evaluation_deals,
+                ).to_bytes(),
+                inputs=(pool,),
+            )
+            return False
+        return match.status is JobStatus.SUCCEEDED
 
     def _advance_round(
         self,
@@ -328,7 +398,13 @@ class IterativeNfspOrchestrator:
         match = jobs.get(match_key)
         if match is None:
             pool_fields: dict[str, Any] = {}
-            if config.pool_eval_seeds and base_payload.pool_artifact_id:
+            if config.exploit_target and base_payload.pool_artifact_id:
+                pool_fields = {
+                    "pool_artifact_id": base_payload.pool_artifact_id,
+                    "pool_sha256": base_payload.pool_sha256,
+                    "exploit_seeds": config.pool_eval_seeds or config.evaluation_deals,
+                }
+            elif config.pool_eval_seeds and base_payload.pool_artifact_id:
                 pool_fields = {
                     "pool_artifact_id": base_payload.pool_artifact_id,
                     "pool_sha256": base_payload.pool_sha256,
@@ -366,7 +442,12 @@ class IterativeNfspOrchestrator:
             return False
         if candidate.status is CheckpointStatus.CANDIDATE:
             result = self._match_result(match)
-            promote, reason = promotion_decision(result)
+            if config.exploit_target:
+                # A best-response learner specialises against its target; results against
+                # the rule-bot field are not a reason to go back to an earlier version.
+                promote, reason = True, "exploit experiment: keep the newest learner"
+            else:
+                promote, reason = promotion_decision(result)
             self.checkpoints.decide(candidate.checkpoint_id, promote, reason, now)
         return True
 
@@ -375,6 +456,8 @@ class IterativeNfspOrchestrator:
     ) -> Artifact | None:
         """The round's opponent pool: rule bots, library models and recent checkpoints."""
         config = experiment.config
+        if config.exploit_target:
+            return self._target_pool(config)
         if not config.tournament_json or not (config.pool_models or config.pool_history):
             return None
         from tableforge.domain.opponent_pool import OpponentPoolSpec, PoolModel
@@ -403,6 +486,29 @@ class IterativeNfspOrchestrator:
         content = OpponentPoolSpec(RULE_POOL, tuple(models), config.pfsp).to_bytes()
         from tableforge.domain.opponent_pool import POOL_SCHEMA
 
+        return self.coordinator.upload_artifact(
+            ArtifactDescriptor(
+                _content_id(content),
+                ArtifactKind.LEAGUE_POPULATION,
+                "application/json",
+                POOL_SCHEMA,
+            ),
+            content,
+        )
+
+    def _target_pool(self, config: ExperimentConfig) -> Artifact:
+        """S4: a pool with only the exploit target (a library model or a rule bot)."""
+        from tableforge.domain.opponent_pool import POOL_SCHEMA, OpponentPoolSpec
+
+        target = config.exploit_target
+        if target.startswith("rule:"):
+            spec = OpponentPoolSpec((target[5:],))
+        else:
+            models = self._library_models(target, config.tournament_json)
+            if not models:
+                raise PipelineFailedError(f"exploit target {target} is not in the model library")
+            spec = OpponentPoolSpec((), tuple(models))
+        content = spec.to_bytes()
         return self.coordinator.upload_artifact(
             ArtifactDescriptor(
                 _content_id(content),

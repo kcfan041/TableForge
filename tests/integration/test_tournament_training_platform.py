@@ -216,6 +216,121 @@ def test_tournament_training_with_an_opponent_pool(tmp_path: Path) -> None:
     assert curve[0]["tournament"]["pool"]["matchups"] == {}  # type: ignore[index]
 
 
+SMOKE = {
+    "rounds": 2,
+    "actors_per_round": 2,
+    "hands_per_job": 100,
+    "train_steps_per_round": 100,
+    "evaluation_deals": 10,
+    "max_evaluation_deals": 10,
+    "hidden_size": 32,
+    "batch_size": 32,
+    "rl_capacity": 20_000,
+    "sl_capacity": 20_000,
+    "pool_eval_seeds": 5,
+}
+
+
+def test_exploit_experiment_trains_against_one_frozen_target(tmp_path: Path) -> None:
+    from tableforge.coordinator.models import library
+    from tableforge.domain.opponent_pool import OpponentPoolSpec
+
+    services = build_services(Settings(data_dir=tmp_path))
+    target = NfspAgent(
+        NfspConfig(hidden_size=16, batch_size=16, observation_schema="poker-hunlhe-vector-v2")
+    )
+    spec = {"players": 3, "starting_stack_bb": 10}
+    from tableforge.poker.tournament_spec import TournamentSpec
+
+    tournament = TournamentSpec.from_dict(spec).to_config().to_json()
+    library(services).add(
+        "target",
+        target.to_bundle(),
+        "nfsp",
+        "3max-pko-10bb",
+        training={"tournament_json": tournament},
+    )
+    experiments = services.experiments
+    created = experiments.create(
+        "6max-pko-10bb-exploit", NOW, {**SMOKE, "exploit_target": "target"}
+    )
+    assert created.config.players == 3 and created.config.tournament_json == tournament
+    experiments.start(created.experiment_id, NOW)
+    worker_capability = capability()
+    runtime = WorkerRuntime(
+        node_id=worker_capability.node_id,
+        capability=replace(
+            worker_capability,
+            enabled_roles=("simulation", "evaluation", "nfsp_learner", "nfsp_actor"),
+            logical_cpu_cores=8,
+            total_memory_bytes=32 * 1024**3,
+            available_memory_bytes=32 * 1024**3,
+        ),
+        coordinator=services.coordinator,
+        clock=Clock(),
+        lease_duration=timedelta(minutes=5),
+        simulation_executor=SimulationExecutor(),
+        extra_executors={
+            **_rule_executors(),
+            **_learning_executors(services.coordinator),  # type: ignore[arg-type]
+        },
+    )
+
+    WorkerLoop(
+        runtime,
+        CapturingLogger(),
+        idle_seconds=0,
+        on_idle=lambda: experiments.reconcile_all(NOW) > 0,
+    ).run(max_jobs=40)
+    experiments.reconcile_all(NOW)
+
+    assert experiments.experiments.get(created.experiment_id).status is ExperimentStatus.COMPLETED
+    jobs = services.coordinator.jobs.list_jobs(created.experiment_id)
+    actor = next(
+        NfspActorPayload.from_bytes(job.spec.payload)
+        for job in jobs
+        if job.spec.payload_type == ACTOR_PAYLOAD_TYPE
+    )
+    pool = OpponentPoolSpec.from_bytes(services.coordinator.read_artifact(actor.pool_artifact_id))
+    assert actor.self_play_share == 0 and pool.rules == ()
+    assert [model.name for model in pool.models] == ["model:target"]
+    # The learner starts as a copy of the target; round 0 measures its best response.
+    first = next(
+        item
+        for item in services.repositories.checkpoints.list_checkpoints()
+        if item.round_index == 0
+    )
+    assert services.coordinator.read_artifact(str(first.artifact_id)) == target.to_bundle()
+    curve = experiments.training_curve(created.experiment_id)
+    assert [point["round"] for point in curve] == [0, 1, 2]
+    for point in curve:
+        benchmark = point["benchmark"]
+        assert {"target_average", "target_best_response"} <= set(benchmark)  # type: ignore[arg-type]
+        assert benchmark["target_best_response"]["hands"] == 15  # type: ignore[index]
+        assert point["tournament"]["exploit"]["target"] == ["model:target"]  # type: ignore[index]
+    checkpoints = services.repositories.checkpoints.list_checkpoints()
+    assert all("exploit" in item.decision_reason for item in checkpoints if item.round_index)
+
+
+def test_exploit_targets_are_checked(tmp_path: Path) -> None:
+    experiments = build_services(Settings(data_dir=tmp_path)).experiments
+
+    for settings in (
+        {},
+        {"exploit_target": "missing-model"},
+        {"exploit_target": "rule:shark"},
+        {"exploit_target": "rule:tight", "self_play_share": 0.5},
+    ):
+        with pytest.raises(ValueError):
+            experiments.create("6max-pko-10bb-exploit", NOW, settings)
+    with pytest.raises(ValueError):
+        experiments.create("hu-nfsp-v2-train", NOW, {"exploit_target": "rule:tight"})
+    rule = experiments.create(
+        "6max-pko-10bb-exploit", NOW, {"exploit_target": "rule:pushfold_nash"}
+    )
+    assert rule.config.players == 6
+
+
 def test_pool_settings_need_tournament_training(tmp_path: Path) -> None:
     experiments = build_services(Settings(data_dir=tmp_path)).experiments
 

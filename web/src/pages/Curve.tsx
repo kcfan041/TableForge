@@ -9,6 +9,8 @@ const COLORS: Record<string, string> = {
   average: "#059669",
   best_response: "#7c3aed",
   pool: "#0f172a",
+  target_average: "#0d9488",
+  target_best_response: "#be185d",
 };
 const ORDER = ["random", "call", "tight", "aggro"];
 const TOURNAMENT_ORDER = ["average", "best_response"];
@@ -17,6 +19,7 @@ const TOURNAMENT_ORDER = ["average", "best_response"];
 export function curveSeries(points: CurvePoint[]): string[] {
   const tournament = points.some((point) => point.unit === "roi_percent");
   if (!tournament) return ORDER;
+  if (points.some((point) => point.benchmark.target_best_response)) return ["target_best_response", "target_average", ...TOURNAMENT_ORDER];
   return points.some((point) => point.benchmark.pool) ? [...TOURNAMENT_ORDER, "pool"] : TOURNAMENT_ORDER;
 }
 
