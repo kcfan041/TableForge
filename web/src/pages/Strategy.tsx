@@ -21,6 +21,34 @@ interface StrategyResult {
   value_unit: string;
   columns: string[];
   tables: Record<string, (number | null)[][] | Record<string, (number | null)[]>>;
+  /** ICM Push/Fold Nash baseline (all-in or fold only); absent in older results. */
+  pushfold_nash?: {
+    name: string;
+    max_stack_bb: number;
+    tables: Record<string, Record<string, number>>;
+    gap: Record<string, number>;
+  };
+}
+
+type View = "model" | "baseline" | "difference";
+
+/** The model's aggressive probability that the baseline also measures: shove when opening,
+ * call when facing an all-in. */
+function modelAggression(values: (number | null)[], scenario: string, actions: string[]): number {
+  if (scenario === "call") return values[actions.indexOf("check_call")] ?? 0;
+  return values[actions.indexOf("all_in")] ?? 0;
+}
+
+function differenceStyle(value: number): React.CSSProperties {
+  // Red: the model is more aggressive than the baseline; blue: less aggressive.
+  const strength = Math.min(1, Math.abs(value));
+  const [r, g, b] = value >= 0 ? [220, 38, 38] : [37, 99, 235];
+  return { background: `rgba(${r}, ${g}, ${b}, ${0.05 + strength * 0.9})`, color: strength > 0.55 ? "white" : undefined };
+}
+
+function baselineStyle(value: number, scenario: string): React.CSSProperties {
+  const [r, g, b] = ACTION_COLORS[scenario === "call" ? "check_call" : "all_in"]!;
+  return { background: `rgba(${r}, ${g}, ${b}, ${0.08 + value * 0.85})`, color: value > 0.55 ? "white" : undefined };
 }
 
 const RANKS = "AKQJT98765432";
@@ -71,6 +99,7 @@ export function StrategyPage({ session }: { session: Session }) {
   const [bounty, setBounty] = useState(urlParam("bounty") ?? "1");
   const [autoRun, setAutoRun] = useState(urlParam("run") === "1");
   const [focus, setFocus] = useState("mix");
+  const [view, setView] = useState<View>((urlParam("view") as View | null) ?? "model");
   const [hover, setHover] = useState<string | null>(null);
   const { state, request } = useAnalysis<StrategyResult>("request_strategy");
 
@@ -146,6 +175,38 @@ export function StrategyPage({ session }: { session: Session }) {
   };
 
   const hovered = hover && table ? table[hover] : null;
+  const baseline = scenario === "raise" ? undefined : result?.pushfold_nash?.tables[key];
+  const baselineGap = result?.pushfold_nash?.gap[key];
+  const shownView: View = baseline ? view : "model";
+  const baselineWeights = (name: string) => (name.length === 2 ? 6 : name.endsWith("s") ? 4 : 12);
+  const comparison = useMemo(() => {
+    if (!table || !baseline) return null;
+    let modelTotal = 0;
+    let modelPlays = 0;
+    let baselineTotal = 0;
+    let absolute = 0;
+    const deviations: [string, number][] = [];
+    for (const [name, values] of Object.entries(table)) {
+      const weight = baselineWeights(name) / 1326;
+      const mine = modelAggression(values, scenario, actions);
+      const theirs = baseline[name] ?? 0;
+      modelTotal += mine * weight;
+      modelPlays += (1 - (values[actions.indexOf("fold")] ?? 0)) * weight;
+      baselineTotal += theirs * weight;
+      absolute += Math.abs(mine - theirs) * weight;
+      deviations.push([name, mine - theirs]);
+    }
+    deviations.sort((left, right) => Math.abs(right[1]) - Math.abs(left[1]));
+    return { modelTotal, modelPlays, baselineTotal, absolute, top: deviations.slice(0, 8) };
+  }, [table, baseline, scenario, actions]);
+
+  const cellFor = (name: string, values: (number | null)[]): React.CSSProperties => {
+    if (shownView === "baseline" && baseline) return baselineStyle(baseline[name] ?? 0, scenario);
+    if (shownView === "difference" && baseline) {
+      return differenceStyle(modelAggression(values, scenario, actions) - (baseline[name] ?? 0));
+    }
+    return cellStyle(values, focus, actions);
+  };
 
   return (
     <Page title={t("strategy.title")}>
@@ -255,9 +316,19 @@ export function StrategyPage({ session }: { session: Session }) {
                 </select>
               </label>
             ) : null}
+            {result.pushfold_nash && scenario !== "raise" ? (
+              <label>
+                {t("strategy.view")}
+                <select value={shownView} onChange={(event) => setView(event.target.value as View)} disabled={!baseline}>
+                  <option value="model">{t("strategy.view.model")}</option>
+                  <option value="baseline">{t("strategy.view.baseline")}</option>
+                  <option value="difference">{t("strategy.view.difference")}</option>
+                </select>
+              </label>
+            ) : null}
             <label>
               {t("strategy.color")}
-              <select value={focus} onChange={(event) => setFocus(event.target.value)}>
+              <select value={focus} disabled={shownView !== "model"} onChange={(event) => setFocus(event.target.value)}>
                 <option value="mix">{t("strategy.color.mix")}</option>
                 {shownActions.map((action) => (
                   <option key={action} value={action}>
@@ -267,15 +338,67 @@ export function StrategyPage({ session }: { session: Session }) {
               </select>
             </label>
           </div>
-          <div className="legend">
-            {shownActions.map((action) => (
-              <span key={action}>
-                <span className="swatch" style={{ background: `rgb(${ACTION_COLORS[action]!.join(",")})` }} />{" "}
-                {t(`replay.action.${action}` as MessageKey)}
-                {totals ? ` ${formatNumber(totals[actions.indexOf(action)]! * 100, 1)}%` : ""}
-              </span>
-            ))}
-          </div>
+          {shownView === "model" ? (
+            <div className="legend">
+              {shownActions.map((action) => (
+                <span key={action}>
+                  <span className="swatch" style={{ background: `rgb(${ACTION_COLORS[action]!.join(",")})` }} />{" "}
+                  {t(`replay.action.${action}` as MessageKey)}
+                  {totals ? ` ${formatNumber(totals[actions.indexOf(action)]! * 100, 1)}%` : ""}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="legend">
+              {shownView === "difference" ? (
+                <>
+                  <span>
+                    <span className="swatch" style={{ background: "rgb(220, 38, 38)" }} /> {t(`strategy.diff.more.${scenario === "call" ? "call" : "open"}` as MessageKey)}
+                  </span>
+                  <span>
+                    <span className="swatch" style={{ background: "rgb(37, 99, 235)" }} /> {t(`strategy.diff.less.${scenario === "call" ? "call" : "open"}` as MessageKey)}
+                  </span>
+                </>
+              ) : (
+                <span>
+                  <span className="swatch" style={{ background: `rgb(${ACTION_COLORS[scenario === "call" ? "check_call" : "all_in"]!.join(",")})` }} />{" "}
+                  {t(`strategy.baselineAction.${scenario === "call" ? "call" : "open"}` as MessageKey)}
+                  {comparison ? ` ${formatNumber(comparison.baselineTotal * 100, 1)}%` : ""}
+                </span>
+              )}
+            </div>
+          )}
+          {result.pushfold_nash && scenario !== "raise" ? (
+            <div className="notice small baseline-note">
+              <strong>{t("strategy.baselineName")}</strong> {t("strategy.baselineDisclaimer")}
+              {baseline && comparison ? (
+                <div>
+                  {t(`strategy.compare.${scenario === "call" ? "call" : "open"}` as MessageKey, {
+                    model: formatNumber(comparison.modelTotal * 100, 1),
+                    baseline: formatNumber(comparison.baselineTotal * 100, 1),
+                    distance: formatNumber(comparison.absolute * 100, 1),
+                  })}{" "}
+                  {baselineGap !== undefined ? t("strategy.baselineGap", { gap: formatNumber(baselineGap, 5) }) : null}
+                  {scenario === "open" && comparison.modelPlays - comparison.modelTotal > 0.05 ? (
+                    <div className="warning">
+                      {t("strategy.notPushFold", {
+                        plays: formatNumber(comparison.modelPlays * 100, 1),
+                        shoves: formatNumber(comparison.modelTotal * 100, 1),
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="muted">
+                    {t("strategy.largestDeviations")}{" "}
+                    {comparison.top
+                      .map(([name, value]) => `${name} ${value > 0 ? "+" : ""}${formatNumber(value * 100, 0)}%`)
+                      .join(" · ")}
+                  </div>
+                </div>
+              ) : (
+                <div className="muted">{t("strategy.baselineMissing", { max: result.pushfold_nash.max_stack_bb })}</div>
+              )}
+            </div>
+          ) : null}
           {table ? (
             <div className="strategy-layout">
               <div className="range-grid" onMouseLeave={() => setHover(null)}>
@@ -287,7 +410,7 @@ export function StrategyPage({ session }: { session: Session }) {
                       <div
                         key={name}
                         className={`range-cell${hover === name ? " hovered" : ""}`}
-                        style={cellStyle(values, focus, actions)}
+                        style={cellFor(name, values)}
                         onMouseEnter={() => setHover(name)}
                       >
                         {name}
@@ -318,6 +441,14 @@ export function StrategyPage({ session }: { session: Session }) {
                         ))}
                       </tbody>
                     </table>
+                    {baseline ? (
+                      <p className="small">
+                        {t(`strategy.baselineAction.${scenario === "call" ? "call" : "open"}` as MessageKey)} ({t("strategy.baselineName")}):{" "}
+                        <strong>{formatNumber((baseline[hover] ?? 0) * 100, 1)}%</strong>
+                        <br />
+                        {t("strategy.view.model")}: {formatNumber(modelAggression(hovered, scenario, actions) * 100, 1)}%
+                      </p>
+                    ) : null}
                   </>
                 ) : (
                   <p className="muted small">{t("strategy.hover")}</p>

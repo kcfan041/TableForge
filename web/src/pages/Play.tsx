@@ -6,7 +6,7 @@ import { useI18n, type MessageKey } from "../i18n";
 import { urlParam } from "./analysis";
 import { ACTIONS, CardFace, ReplayViewer, type Explanation, type Replay } from "./Replay";
 
-const RULE_BOTS = ["tight", "call", "aggro", "random", "pushfold", "hunter"];
+const RULE_BOTS = ["tight", "call", "aggro", "random", "pushfold", "hunter", "pushfold_nash"];
 const HUMAN = "human";
 
 interface SeatChoice {

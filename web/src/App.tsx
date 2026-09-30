@@ -5,6 +5,7 @@ import { api, can, localMode, setCsrfToken, setUnauthorizedHandler, type Session
 import { useI18n, type Locale, type MessageKey } from "./i18n";
 import { LiveProvider, useLive } from "./live";
 import { Checkpoints } from "./pages/Checkpoints";
+import { ComparePage } from "./pages/Compare";
 import { Models } from "./pages/Models";
 import { PlayPage } from "./pages/Play";
 import { ReplayPage } from "./pages/Replay";
@@ -49,6 +50,7 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
       ["/nodes", "nav.nodes"],
       ["/experiments", "nav.experiments"],
       ["/models", "nav.models"],
+      ["/compare", "nav.compare"],
     ["/replay", "nav.replay"],
     ["/strategy", "nav.strategy"],
     ["/checkpoints", "nav.checkpoints"],
@@ -111,6 +113,7 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
               <Route path="/experiments/:id" element={<ExperimentPage session={session} />} />
               <Route path="/checkpoints" element={<Checkpoints />} />
         <Route path="/models" element={<Models session={session} />} />
+        <Route path="/compare" element={<ComparePage session={session} />} />
         <Route path="/replay" element={<ReplayPage session={session} />} />
         <Route path="/strategy" element={<StrategyPage session={session} />} />
               <Route path="/events" element={<Events />} />

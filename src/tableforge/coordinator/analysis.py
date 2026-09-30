@@ -24,7 +24,7 @@ ANALYSIS = ExperimentId("analysis")
 REPLAY_PAYLOAD_TYPE = "tableforge.v1.TournamentReplayJobPayload"
 STRATEGY_PAYLOAD_TYPE = "tableforge.v1.StrategyTableJobPayload"
 MIXED_FIELD = ("tight", "call", "aggro", "random", "pushfold", "call")
-RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold", "hunter")
+RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold", "hunter", "pushfold_nash")
 _GAME = re.compile(r"^(\d)max-(pko|sng)-(\d+(?:\.\d+)?)bb")
 
 
@@ -135,6 +135,150 @@ def request_strategy(services: Services, arguments: dict[str, Any]) -> dict[str,
     return {"job_id": _create(services, STRATEGY_PAYLOAD_TYPE, payload)}
 
 
+COMPARISON_SEEDS = 200
+"""Default seeds per pair: x players tournaments (1,200 at 6-max) per ordered pair."""
+COMPARISON_SEED_START = 1_700_000_000
+"""Comparison seeds are kept apart from training and benchmark seeds."""
+
+
+def comparison_candidates(services: Services, game: str = "") -> dict[str, object]:
+    """Models grouped by the tournament they play, with the rule bots and baselines."""
+    from dataclasses import replace
+
+    from tableforge.poker.tournament import TournamentConfig
+
+    # Same engine settings = same group; names and number formatting (10 vs 10.0) do not
+    # matter, so configs are compared as values rather than hashed as text.
+    configs: list[TournamentConfig] = []
+    groups: list[dict[str, object]] = []
+    for info in library(services).list():
+        try:
+            parsed = replace(TournamentConfig.from_json(tournament_json(info)), name="")
+        except (AnalysisError, ValueError):
+            continue
+        if parsed not in configs:
+            configs.append(parsed)
+            groups.append(
+                {
+                    "tournament": str(len(groups)),
+                    "game": info.game,
+                    "players": parsed.players,
+                    "models": [],
+                }
+            )
+        group = groups[configs.index(parsed)]
+        group["models"].append(info.model_id)  # type: ignore[attr-defined]
+    return {
+        "groups": [item for item in groups if not game or item["game"] == game],
+        "rule_bots": list(RULE_BOTS),
+    }
+
+
+def request_comparison(services: Services, arguments: dict[str, Any]) -> dict[str, object]:
+    """Compare models (and rule bots) that play the same tournament: one job per row.
+
+    ``models``: model ids (all must play the same tournament); ``modes``: optional play mode
+    per model id; ``rules``: rule bot names; ``seeds``: seeds per pair.
+    """
+    from tableforge.learning.comparison import (
+        COMPARISON_PAYLOAD_TYPE,
+        MAX_COMPETITORS,
+        ComparisonPayload,
+        Competitor,
+    )
+    from tableforge.learning.pool_benchmark import same_tournament
+    from tableforge.poker.tournament import TournamentConfig
+
+    model_ids = [str(item) for item in arguments.get("models") or []]
+    rules = [str(item) for item in arguments.get("rules") or []]
+    modes = arguments.get("modes") or {}
+    if not isinstance(modes, dict):
+        raise AnalysisError("modes must map model ids to play modes")
+    if not model_ids:
+        raise AnalysisError("choose at least one model")
+    if len(model_ids) + len(rules) > MAX_COMPETITORS:
+        raise AnalysisError(f"compare at most {MAX_COMPETITORS} competitors")
+    unknown = [rule for rule in rules if rule not in RULE_BOTS]
+    if unknown:
+        raise AnalysisError(f"unknown rule bots: {', '.join(unknown)}")
+    seeds = int(arguments.get("seeds", COMPARISON_SEEDS))
+    if not 1 <= seeds <= 2_000:
+        raise AnalysisError("seeds must be between 1 and 2,000")
+    config_json = ""
+    competitors = []
+    for model_id in model_ids:
+        info = library(services).info(model_id)
+        json_text = tournament_json(info)
+        if not config_json:
+            config_json = json_text
+        elif not same_tournament(
+            TournamentConfig.from_json(config_json), TournamentConfig.from_json(json_text)
+        ):
+            raise AnalysisError(f"model {model_id} plays a different tournament")
+        artifact_id, sha = checkpoint_artifact(services, model_id)
+        competitors.append(
+            Competitor(
+                f"model:{model_id}", artifact_id, sha, _mode(info, str(modes.get(model_id, "")))
+            )
+        )
+    competitors.extend(Competitor(f"rule:{rule}") for rule in rules)
+    if len(competitors) < 2:
+        raise AnalysisError("compare at least two competitors")
+    seed_start = int(arguments.get("seed_start", COMPARISON_SEED_START))
+    payloads = [
+        ComparisonPayload("1.0", config_json, tuple(competitors), seeds, seed_start, row)
+        for row in range(len(competitors))
+    ]
+    group = hashlib.sha256(b"".join(item.to_bytes() for item in payloads)).hexdigest()[:24]
+    jobs = [_create(services, COMPARISON_PAYLOAD_TYPE, payload.to_bytes()) for payload in payloads]
+    return {"comparison_id": ",".join(jobs), "group": group, "jobs": jobs}
+
+
+def comparison_result(services: Services, comparison_id: str) -> dict[str, object]:
+    """Progress and (partial) result of a comparison: its id is its row job ids."""
+    from tableforge.learning.comparison import COMPARISON_PAYLOAD_TYPE, ComparisonPayload, summarize
+    from tableforge.poker.tournament import TournamentConfig
+
+    job_ids = [item for item in comparison_id.split(",") if item]
+    if not job_ids or len(job_ids) > 16:
+        raise AnalysisError("not a comparison")
+    rows = []
+    statuses = []
+    payload: ComparisonPayload | None = None
+    for job_id in job_ids:
+        job = services.coordinator.get_job(JobId(job_id))
+        if job.spec.experiment_id != ANALYSIS or job.spec.payload_type != COMPARISON_PAYLOAD_TYPE:
+            raise AnalysisError("not a comparison")
+        payload = ComparisonPayload.from_bytes(job.spec.payload)
+        statuses.append(job.status.value)
+        if job.status is not JobStatus.SUCCEEDED:
+            continue
+        outputs = services.coordinator.job_outputs(job.spec.job_id)
+        if outputs:
+            content = services.coordinator.read_artifact(
+                str(outputs[0].artifact.descriptor.artifact_id)
+            )
+            rows.append(json.loads(content))
+    assert payload is not None
+    names = [item.label for item in payload.competitors]
+    result = summarize(
+        names,
+        TournamentConfig.from_json(payload.config_json),
+        payload.seeds,
+        payload.seed_start,
+        rows,
+    )
+    failed = sum(status == "failed" for status in statuses)
+    status = (
+        "succeeded"
+        if all(item == "succeeded" for item in statuses)
+        else "failed"
+        if failed
+        else "running"
+    )
+    return {"status": status, "jobs": statuses, "result": result}
+
+
 @dataclass(frozen=True, slots=True)
 class AnalysisResult:
     status: str
@@ -155,7 +299,9 @@ def analysis_result(services: Services, job_id: str) -> AnalysisResult:
     job = services.coordinator.get_job(JobId(job_id))
     if job.spec.experiment_id != ANALYSIS:
         raise AnalysisError("not an analysis job")
-    kind = "replay" if job.spec.payload_type == REPLAY_PAYLOAD_TYPE else "strategy"
+    kind = {REPLAY_PAYLOAD_TYPE: "replay", STRATEGY_PAYLOAD_TYPE: "strategy"}.get(
+        job.spec.payload_type, "other"
+    )
     if job.status is not JobStatus.SUCCEEDED:
         error = ""
         if job.status is JobStatus.FAILED:

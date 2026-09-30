@@ -147,7 +147,7 @@ export function ReplayPage({ session }: { session: Session }) {
             <label>
               {t("replay.opponents")}
               <select value={opponents} onChange={(event) => setOpponents(event.target.value)}>
-                {["mixed", "self", "tight", "call", "aggro", "random", "pushfold", "hunter"].map((item) => (
+                {["mixed", "self", "tight", "call", "aggro", "random", "pushfold", "hunter", "pushfold_nash"].map((item) => (
                   <option key={item} value={item}>
                     {t(`replay.field.${item}` as MessageKey)}
                   </option>

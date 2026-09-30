@@ -225,6 +225,9 @@ def build_table(
             seat_players=tuple(range(players)),
             bounties=tuple(bounties) if config.bounty is not None else (),
             starting_bounty=config.starting_bounty,
+            prizes=tuple(config.payout_for_place(place) for place in range(1, players + 1)),
+            bounty_cash_share=config.bounty.cash_share if config.bounty is not None else 0.5,
+            winner_keeps_own=config.bounty.winner_keeps_own if config.bounty is not None else True,
         )
     )
     base = hand.observe(hero_seat)
@@ -255,6 +258,7 @@ def build_strategy(
     bounties: Sequence[float],
     on_progress: Callable[[int], None] | None = None,
     level: int = 1,
+    pushfold_baseline: bool = True,
 ) -> dict[str, object]:
     tables: dict[str, dict[str, list[float | None]]] = {}
     done = 0
@@ -269,7 +273,7 @@ def build_strategy(
                 done += 1
                 if on_progress is not None:
                     on_progress(done)
-    return {
+    document: dict[str, object] = {
         "schema_version": STRATEGY_SCHEMA,
         "config": json.loads(config.to_json()),
         "mode": mode,
@@ -287,6 +291,66 @@ def build_strategy(
         "value_unit": "buy-in",
         "columns": [*(f"p_{action}" for action in ACTIONS), *(f"q_{action}" for action in ACTIONS)],
         "tables": tables,
+    }
+    if pushfold_baseline:
+        document["pushfold_nash"] = pushfold_tables(config, stacks, bounties, level)
+    return document
+
+
+PUSHFOLD_MAX_STACK_BB = 25.0
+"""Push/Fold Nash is only computed for stacks up to this depth (it is a short-stack model)."""
+
+
+def pushfold_tables(
+    config: TournamentConfig, stacks: Sequence[float], bounties: Sequence[float], level: int
+) -> dict[str, object]:
+    """The ICM Push/Fold Nash baseline for the ``open`` and ``call`` spots of a table.
+
+    For ``open`` the value is the chance to shove; for ``call`` the chance to call. Each spot
+    also reports ``gap``: how much any player could still gain by deviating (buy-ins).
+    This is a simplified all-in-or-fold game, not a Nash equilibrium of full hold'em.
+    """
+    from tableforge.learning.pushfold_nash import BASELINE_NAME, solve, spot_game
+    from tableforge.poker.pushfold_ranges import HAND_CLASSES
+
+    players = config.players
+    tables: dict[str, dict[str, float]] = {}
+    gaps: dict[str, float] = {}
+    solved: dict[tuple[float, float, int | None], object] = {}
+    for scenario, hero, opener in spots(players):
+        if scenario == "raise":
+            continue
+        multiples = bounties if scenario == "call" and config.bounty is not None else (1.0,)
+        for stack in stacks:
+            if stack > PUSHFOLD_MAX_STACK_BB:
+                continue
+            for multiple in multiples:
+                shover = seat_of(opener, players) if opener else None
+                cache_key = (stack, multiple, shover if multiple != 1.0 else None)
+                solution = solved.get(cache_key)
+                if solution is None:
+                    solution = solve(
+                        spot_game(config, level, stack, multiple, shover), 800, 0.0005
+                    )
+                    solved[cache_key] = solution
+                hero_seat = seat_of(hero, players)
+                if scenario == "open":
+                    values = solution.push.get(hero_seat)  # type: ignore[attr-defined]
+                else:
+                    values = solution.call.get((shover, hero_seat))  # type: ignore[attr-defined]
+                if values is None:
+                    continue
+                key = f"{scenario}|{hero}|{opener}|{stack:g}|{multiple:g}"
+                tables[key] = {
+                    name: round(value, 4) for name, value in zip(HAND_CLASSES, values, strict=True)
+                }
+                gaps[key] = round(solution.max_gap, 6)  # type: ignore[attr-defined]
+    return {
+        "name": BASELINE_NAME,
+        "description": "ICM Push/Fold Nash: all-in or fold only; not a full-game equilibrium",
+        "max_stack_bb": PUSHFOLD_MAX_STACK_BB,
+        "tables": tables,
+        "gap": gaps,
     }
 
 

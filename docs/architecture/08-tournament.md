@@ -222,6 +222,29 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 - 25/50 BB 與一般錦標賽在 10 BB PKO 有結果後再做。
 - 分散式錦標賽訓練（Actor/Learner Job）與 UI preset 在單機探測有正向結果後再接上。
 
-## 7. 尚未決定
+## 7. ICM Push/Fold Nash baseline（S1）
+
+**名稱固定為「Push/Fold Nash」或「ICM Push/Fold Nash baseline」，UI 與文件都不單寫「Nash」**：它是簡化遊戲的均衡，不是完整無限注德州撲克的 Nash 均衡。
+
+簡化遊戲（`learning/pushfold_nash.py`）：
+- 翻牌前依行動順序，每個人只能全下或蓋牌；有人全下後，後面的人只能跟注或蓋牌，第一個跟注的人結束行動（不模擬第二個跟注者）。
+- 手牌以 169 種起手類別表示；全下勝率來自 `poker/data/preflop_equity.json`（`scripts/preflop_equity.py` 以蒙地卡羅產生，每組 100,000 次，標準誤約 0.16%；向量化評估器先和引擎的評估器逐一比對）。全下者與跟注者之間計算牌的互斥（card removal），三人以上之間不計。
+- 金額：手牌結束後的籌碼以 ICM（Malmuth-Harville）換成剩餘獎金；PKO 另加這手淘汰別人拿到的 bounty 現金，以及（冠軍拿回自己 bounty 時）自己頭上 bounty × 奪冠機率（籌碼比例）。其他人頭上、之後才可能贏到的 bounty 不計。
+- 求解：fictitious play，每個決策對其他人的平均策略取最佳回應。`gap` 是每個玩家單獨改變打法最多還能多拿的錢（buy-in，以起手組合平均）；每個結果都附上。
+- 驗證：兩人、贏家全拿時與公開的 heads-up push/fold 表（HoldemResources.net）一致（3、5、8、10、13、16 BB，距門檻 12% 以外的 338 個決策最多差 2 個，差異處是公開表省略的策略空洞）；6 人 65/35 比贏家全拿跟注更緊；PKO 蓋得過全下者時跟注更寬。
+
+用在三個地方：
+- **策略表**：每個策略表 Job 另外算 25 BB 以內的「前面都蓋牌、輪到自己」與「面對一個全下」情境（`pushfold_nash` 欄位），UI 可切換顯示「模型」、「baseline」、「模型 − baseline」，並列出加權平均差距與差最多的牌。「面對開局加注」沒有 baseline。
+- **Rule Bot**：`pushfold_nash`（`PushFoldNashBot`）在每個決策依當下的籌碼、盲注、剩餘獎金與 bounty 求解（籌碼取到 1/4 BB，整個程序共用快取）；有人加注但不是全下、或有兩個以上全下時一律蓋牌（能免費過牌時過牌）。可以當 benchmark 候選（preset `6max-sng-10bb-pushfold_nash`、`6max-pko-10bb-pushfold_nash`）、benchmark 對手、重播對手、對打對手與模型比較的參賽者。
+- **模型比較**（P2）。
+
+## 8. 模型比較（P2）
+
+- `learning/comparison.py`：參賽者是同規格的模型（可指定打法）與 Rule Bot。每一格是「列」坐一個位置、其他位置全部是「欄」時，列的 ROI；每組相同 seed（預設從 1,700,000,000 起、200 個），列在每個座位各打一次。
+- 每位參賽者一個 Job（一整列），可以分給多個 Worker；`comparison` 查詢把已完成的列合併，未完成時先顯示部分結果。
+- 排名依「對所有對手的平均 ROI」（每個 seed 先平均再算信賴區間）。**刻意不提供 Elo／Bradley-Terry 分數**：實測中「名次比對方好」的分數把 ROI 明顯為負的 Tight bot 排到最前面，因為它大多只是比較晚被淘汰，而錦標賽的錢集中在前面名次。
+- 可比較的模型依引擎設定分組（名稱與數字格式不影響，例如 10 與 10.0）。
+
+## 9. 尚未決定
 
 - 多桌、併桌、late registration 的規則與時程。

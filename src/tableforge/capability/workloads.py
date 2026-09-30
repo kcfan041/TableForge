@@ -34,6 +34,7 @@ def _cpu_profile(
         supported_runtimes=("cpu",),
     )
 
+
 BUILTIN_WORKLOADS = (
     WorkloadProfile(
         schema_version="1.0",
@@ -94,9 +95,7 @@ BUILTIN_WORKLOADS = (
     ),
     _cpu_profile("hu-nfsp-init", "NfspInitJobPayload", "nfsp_learner", (1, 1, 1), (1, 2, 1)),
     _cpu_profile("hu-nfsp-actor", "NfspActorJobPayload", "nfsp_actor", (1, 2, 1), (2, 4, 2)),
-    _cpu_profile(
-        "hu-nfsp-learner", "NfspLearnerJobPayload", "nfsp_learner", (2, 4, 2), (4, 8, 10)
-    ),
+    _cpu_profile("hu-nfsp-learner", "NfspLearnerJobPayload", "nfsp_learner", (2, 4, 2), (4, 8, 10)),
     _cpu_profile("hu-nfsp-match", "NfspMatchJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)),
     _cpu_profile(
         "hu-league-matchup", "LeagueMatchupJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)
@@ -104,8 +103,9 @@ BUILTIN_WORKLOADS = (
     _cpu_profile(
         "tournament-replay", "TournamentReplayJobPayload", "evaluation", (1, 1, 1), (1, 2, 1)
     ),
+    _cpu_profile("strategy-table", "StrategyTableJobPayload", "evaluation", (1, 1, 1), (1, 2, 1)),
     _cpu_profile(
-        "strategy-table", "StrategyTableJobPayload", "evaluation", (1, 1, 1), (1, 2, 1)
+        "model-comparison", "ModelComparisonJobPayload", "evaluation", (1, 2, 1), (1, 4, 1)
     ),
     WorkloadProfile(
         schema_version="1.0",

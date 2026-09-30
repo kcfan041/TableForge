@@ -149,6 +149,56 @@ def test_strategy_table_covers_every_spot_and_hand(
         assert max(probabilities) == 1.0
     call = table["tables"]["call|BB|BTN|10|3"]
     assert all(values[2] == 0 and values[3] == 0 for values in call.values())
+    baseline = table["pushfold_nash"]
+    assert baseline["name"] == "Push/Fold Nash"
+    # Open and call spots only (no "raise"), every stack up to the limit, bounty multiples.
+    assert set(baseline["tables"]) == {
+        key for key in table["tables"] if not key.startswith("raise|")
+    }
+    assert max(baseline["gap"].values()) < 1e-3
+    bb_calls = baseline["tables"]["call|BB|BTN|10|1"]
+    assert bb_calls["AA"] > 0.99 and bb_calls["72o"] < 0.01
+    # A shover worth three starting bounties is called wider than one worth one.
+    assert sum(baseline["tables"]["call|BB|BTN|10|3"].values()) > sum(bb_calls.values())
+
+
+def test_comparison_splits_into_rows_and_ranks_every_competitor(
+    cluster: tuple[object, ClusterViews, object],
+) -> None:
+    services, views, admin = cluster
+    other = NfspAgent(
+        NfspConfig(
+            hidden_size=16, batch_size=16, observation_schema="poker-hunlhe-vector-v2", seed=3
+        )
+    )
+    library(services).add("tiny-pko-2", other.to_bundle(), "nfsp", "6max-pko-10bb")  # type: ignore[arg-type]
+
+    candidates = views.query("comparison_candidates", "", admin)
+    requested = views.command(
+        "request_comparison",
+        {"models": ["tiny-pko", "tiny-pko-2"], "rules": ["tight"], "seeds": 3},
+        admin,
+    )
+    pending = views.query("comparison", requested["comparison_id"], admin)
+    run_worker(services)
+    done = views.query("comparison", requested["comparison_id"], admin)
+
+    assert candidates["groups"][0]["models"] == ["tiny-pko", "tiny-pko-2"]
+    assert "pushfold_nash" in candidates["rule_bots"]
+    assert len(requested["jobs"]) == 3 and pending["status"] == "running"
+    assert done["status"] == "succeeded"
+    result = done["result"]
+    assert result["rows_finished"] == 3 and result["tournaments_per_pair"] == 18
+    names = ["model:tiny-pko", "model:tiny-pko-2", "rule:tight"]
+    assert {item["name"] for item in result["ranking"]} == set(names)
+    for row in names:
+        assert set(result["matrix"][row]) == set(names) - {row}
+    means = [item["average_roi"]["mean"] for item in result["ranking"]]
+    assert means == sorted(means, reverse=True)
+    with pytest.raises(ViewError):
+        views.command("request_comparison", {"models": ["tiny-pko"], "rules": ["aliens"]}, admin)
+    with pytest.raises(ViewError):
+        views.command("request_comparison", {"models": ["tiny-pko"]}, admin)
 
 
 @pytest.mark.parametrize("players,stack", [(2, 25), (4, 50)])

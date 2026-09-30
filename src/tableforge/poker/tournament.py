@@ -252,6 +252,11 @@ class TournamentHandInfo:
     bounties: tuple[float, ...] = ()
     """Bounty on each seat's head in buy-ins (PKO only; empty otherwise)."""
     starting_bounty: float = 0.0
+    prizes: tuple[float, ...] = ()
+    """Prize for each remaining place (1st, 2nd, ... among the players left), in buy-ins."""
+    bounty_cash_share: float = 0.5
+    """PKO: part of an eliminated player's bounty paid in cash (the rest is added)."""
+    winner_keeps_own: bool = True
 
 
 class HandRunner(Protocol):
@@ -470,6 +475,11 @@ class Tournament:
                 seat_players=seat_players,
                 bounties=bounties_before,
                 starting_bounty=config.starting_bounty,
+                prizes=tuple(prizes),
+                bounty_cash_share=config.bounty.cash_share if config.bounty is not None else 0.5,
+                winner_keeps_own=config.bounty.winner_keeps_own
+                if config.bounty is not None
+                else True,
             )
             for seat in range(count)
         )

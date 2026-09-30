@@ -148,7 +148,9 @@ class WorkerManager:
         environment["PYTHONIOENCODING"] = "utf-8"
         stop_file = self.data_dir / "worker-stop" / f"{os.getpid()}-{number}"
         stop_file.parent.mkdir(parents=True, exist_ok=True)
-        stop_file.unlink(missing_ok=True)
+        _remove_quietly(stop_file)
+        if stop_file.exists():
+            raise HTTPException(409, "the previous worker's stop file is still locked; try again")
         environment[STOP_FILE_ENV] = str(stop_file)
         flags = background_process_flags()
         process = subprocess.Popen(
@@ -210,7 +212,7 @@ class WorkerManager:
                 worker.process.kill()
                 worker.process.wait(5)
         if worker.stop_file is not None:
-            worker.stop_file.unlink(missing_ok=True)
+            _remove_quietly(worker.stop_file)
         return worker
 
     def stop_all(self, timeout: float = 15.0) -> None:
@@ -245,6 +247,20 @@ class WorkerManager:
         worker.stopped_at = _now()
         if worker.state not in ("stopped",):
             worker.state = "stopped" if worker.exit_code == 0 else "failed"
+
+
+def _remove_quietly(path: Path, attempts: int = 10) -> None:
+    """Delete a stop file; on Windows another process (antivirus, indexer, the exiting worker)
+    may hold it for a moment, so retry briefly and leave it if it stays locked (a stale stop
+    file only affects a worker started with the same number, which gets a fresh path)."""
+    for attempt in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                return
+            time.sleep(0.1)
 
 
 def _interrupt(worker: WorkerProcess) -> None:

@@ -124,6 +124,10 @@ uv run tableforge ui
 
 **模型、重播、策略表**：訓練好的模型列在「模型」頁（NFSP 實驗完成後可在實驗明細按「存成模型」）。「重播」頁讓模型打一整場錦標賽，可以逐手、逐動作看每個人的手牌、籌碼、bounty，以及模型每個決策對各動作的機率；「策略表」頁用 13×13 表格顯示模型翻牌前每手牌的打法，可以切換位置、籌碼深度與全下者頭上的 bounty，並匯出 CSV。打法可選「平均策略」（預設，較穩健）或「最佳回應」（Q 值最高的動作，較激進）。這兩項需要至少一個執行中的 Worker。
 
+**ICM Push/Fold Nash baseline**：策略表會另外算一份「ICM Push/Fold Nash baseline」，在「顯示」切換「模型」、「baseline」或「模型 − baseline」（紅色是模型比 baseline 更常全下或跟注，藍色是更少），並列出兩者的平均差距與差最多的牌。這個 baseline 是簡化模型：每個人只能全下或蓋牌，用 ICM 計算獎金、PKO 另計 bounty；**不是完整德州撲克的 Nash 均衡**，只適合短籌碼（只算到 25 BB），籌碼越深越不準。Rule Bot 清單裡也有「ICM Push/Fold Nash baseline bot」，可以當對手、重播對手或對打對手。
+
+**模型比較**：「模型比較」頁讓規格相同的模型（可以加 Rule Bot 與 Push/Fold Nash baseline bot）兩兩對戰，顯示對戰矩陣（每格是「列」坐一個位置、其他位置全部是「欄」時列的 ROI）與依平均 ROI 的排名，都附 95% 信賴區間。每位參賽者一個 Job，Worker 越多越快；有 Push/Fold Nash baseline bot 時會慢很多。
+
 **和模型對打**：「對打」頁讓你坐一個位置，和模型或 Rule Bot 打一整場錦標賽。
 
 - 座位可以選「你」、任何模型（可選打法）或 Rule Bot；人數與起始籌碼留空時，用第一個模型訓練時的錦標賽規格。

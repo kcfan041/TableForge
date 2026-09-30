@@ -341,7 +341,6 @@ BUILTIN_PRESETS: tuple[ExperimentPreset, ...] = (
 )
 
 
-
 def _tournament_training_preset(
     key: str, stack_bb: float = 10, payout: str = "65-35", **overrides: object
 ) -> ExperimentPreset:
@@ -444,5 +443,10 @@ BUILTIN_PRESETS = (
         _tournament_preset(stack_bb, "65-35", "", pko=True, candidate=candidate)
         for stack_bb in (10, 25, 50)
         for candidate in ("pushfold", "hunter")
+    )
+    # The ICM Push/Fold Nash baseline in the same mixed field (short stacks only).
+    + (
+        _tournament_preset(10, "65-35", "", candidate="pushfold_nash"),
+        _tournament_preset(10, "65-35", "", pko=True, candidate="pushfold_nash"),
     )
 )

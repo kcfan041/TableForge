@@ -48,6 +48,14 @@ uv run tableforge models remove <模型 ID>
 
 `--info` 是含 `training` 與 `evaluation` 兩個物件的 JSON（選填）。`tableforge ui` 的重播、策略表與遠端對打會從這裡選模型。
 
+ICM Push/Fold Nash baseline 用到的起手牌全下勝率表放在 `src/tableforge/poker/data/preflop_equity.json`，可以重新產生（約 8 分鐘，16 個程序）：
+
+```
+uv run python scripts/preflop_equity.py --samples 100000 --workers 16
+```
+
+程式內直接求解一個情境：`tableforge.learning.pushfold_nash.solve(PushFoldGame(stacks, sb, bb, ante, prizes, heads=bounties))`，座位以按鈕為 0；結果的 `gap` 是每個人單獨改打法最多還能多拿的錢（buy-in）。
+
 從叢集下載、用於本機對打的模型另外放在 `downloaded-models\`，格式相同。下載透過控制面的 `download_model` 指令（需要 `model:download`），每塊 2 MB，完成後檢查大小與 sha256。對打的指令（`play_start`、`play_act` 等，需要 `play:remote`）也可以用 `/api/command/<指令>` 或 gRPC `Command` 呼叫；格式見 `src/tableforge/coordinator/play.py`。
 
 ## 研究用：參數掃描

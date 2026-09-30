@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：627 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：645 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -463,6 +463,45 @@
 - 驗收：
   - 單元與整合測試：只看得到自己的牌、動作檢查、提示、整場轉重播與牌譜、對局不能被其他憑證看到、沒有 `play:remote` 被拒絕、分塊下載（5 MB 模型分 3 塊）、竄改 sha256 時不存檔、`model:manage` 不能刪除模型。
   - 實機（真實模型 `pko-10bb-nfsp-c1`、`pko-10bb-nfsp-s12`）：遠端開局約 5.5 秒（載入模型），之後每個動作約 4 ms；下載 31.7 MB 模型 2.1 秒且與叢集檔案完全相同；本機打完一整場並轉成重播；截圖確認頁面。
+
+### S1 ICM Push/Fold Nash baseline（完成）
+- 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 7 節。**是簡化遊戲（只能全下或蓋牌）的均衡，不是完整德州撲克的 Nash 均衡**；UI 與文件一律稱「ICM Push/Fold Nash baseline」或「Push/Fold Nash」。
+- 內容：
+  - 169×169 起手牌全下勝率表（每組 100,000 次模擬，向量化評估器先與引擎評估器逐一比對）。
+  - fictitious play 求解器：2–9 人、ICM 獎金、PKO bounty、全下者與跟注者之間的牌互斥；回報收斂誤差 `gap`。
+  - 策略表 Job 另外產生 baseline（25 BB 以內的開局全下與面對全下），UI 可切換「模型／baseline／模型 − baseline」，列出平均差距與差最多的牌；模型大量跛入或小加注時另外提示差距不代表選牌錯誤。
+  - Rule Bot `pushfold_nash`（每個決策依當下籌碼、盲注、剩餘獎金與 bounty 求解，全程序共用快取），benchmark preset `6max-sng-10bb-pushfold_nash`、`6max-pko-10bb-pushfold_nash`。
+- 驗收：
+  - heads-up、贏家全拿時與公開的 push/fold 表一致（3–16 BB 共 6 個籌碼深度，距門檻 12% 以外的 338 個決策最多差 2 個，差在公開表省略的策略空洞）；收斂誤差 < 0.001 buy-in。
+  - 6 人 65/35 比贏家全拿跟注更緊；PKO 面對頭上 bounty 較高的全下者跟注更寬（策略表 BB 對 BTN 10 BB：1× bounty 跟 50.4%、3× 跟 54.8% 的起手組合）。
+  - 效能：6 人一個情境約 0.1 秒；10 BB PKO 策略表的 baseline 部分約 15 秒、一般 SNG 約 2 秒。
+- **目前模型和 baseline 的差距（10 BB PKO，平均策略）**：7 個模型的差距都很大，而且方向一致：
+  - 開局：模型很少全下（按鈕 10 BB 全下只佔約 8%，baseline 約 74%），不蓋牌的部分大多是跛入（約 58%）與小加注。依起手組合加權，開局全下比例和 baseline 平均差 55–89 個百分點（籌碼越短差越多）。
+  - 面對全下：模型跟注比 baseline 緊很多（BB 對 BTN 10 BB 跟 28%，baseline 約 50%；對頭上 3 倍 bounty 的全下者 baseline 跟約 55%）；平均差 36–60 個百分點。
+  - 這表示模型學到的是「跛入／小加注」而不是 push/fold，在 10 BB 時這是否較差要看實戰：P2 的結果顯示最好的模型對 baseline bot 仍然贏錢（見下），所以差距本身不代表模型較弱，但面對全下的跟注明顯過緊，是值得追的方向（S4 可剝削程度會量化）。
+
+### P2 模型比較（完成）
+- 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 8 節。每位參賽者一個 Job（一整列），完成的部分先顯示；排名依對所有對手的平均 ROI，**不提供 Elo 分數**（實測中「名次比對方好」的分數把 ROI 明顯為負的 Tight bot 排第一）。
+- 模型依引擎設定分組（修正：`10` 與 `10.0` 視為相同規格，`pko-10bb-platform` 和其他 10 BB 模型同組）。
+- 驗收：整合測試（兩個模型加 Tight bot，三個 Job，排名與矩陣完整）；`tableforge ui` 實機 4 個 Worker：策略表加 baseline 30 秒、5 位參賽者 × 20 seed 的比較 179 秒；截圖確認。
+- **正式比較**（7 個 10 BB PKO 模型 + ICM Push/Fold Nash baseline bot + hunter；每組 200 seed × 6 座位 = 1,200 場；seed 1,700,000,000 起；9 個程序平行 51 分鐘，其中 baseline bot 那一列 51 分鐘、其他列約 8 分鐘）：
+
+  | 排名 | 參賽者 | 平均 ROI | 95% 信賴區間 |
+  |---|---|---|---|
+  | 1 | pko-10bb-nfsp-c1 | +12.4% | +9.1% ~ +15.8% |
+  | 2 | pko-10bb-nfsp-s12 | +11.0% | +7.7% ~ +14.3% |
+  | 3 | ICM Push/Fold Nash baseline bot | +6.9% | +3.4% ~ +10.4% |
+  | 4 | pko-10bb-nfsp-s14 | +6.1% | +2.6% ~ +9.5% |
+  | 5 | pko-10bb-nfsp-s11 | +5.5% | +1.9% ~ +9.1% |
+  | 6 | pko-10bb-nfsp-s1 | +4.5% | +1.4% ~ +7.7% |
+  | 7 | pko-10bb-platform | +4.1% | +1.0% ~ +7.2% |
+  | 8 | pko-10bb-nfsp-s13 | +3.0% | −0.2% ~ +6.3% |
+  | 9 | hunter | −22.6% | −25.6% ~ −19.7% |
+
+  - 平均 ROI 都為正是因為 hunter 在每個人的對手中：扣掉對 hunter 的那一格後，只有 c1 與 s12 明顯為正。
+  - 對 baseline bot：c1 +8.8%、s12 +13.4%（兩者 95% 信賴區間下限 > 0），其他模型 −1.9% ~ +3.0%（不顯著）；baseline bot 對 c1 +2.0%、對 platform +4.9%（不顯著）。
+  - 和 C 階段的結論一致：c1 與 s12 是目前最強的兩個 10 BB 模型；s12 對 s11、s13 顯著為正，platform 對 c1 顯著為負（−11.9%）。
+  - 結果檔在研究結果資料夾（`research-results/p2/comparison.json`）。
 
 ### C 對強對手的表現（達到驗收，有保留）
 - **驗收條件**（使用者定）：對模型池整體 ROI 的 95% 信賴區間下限 > 0；對混合 Rule Bot 不明顯退化。每個舊模型的對戰結果都記錄，但不要求每一個都不輸（策略之間可能互相剋制）。
@@ -912,12 +951,18 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **D1 已完成**（scope 權限、遠端與本機對打、模型下載、對打頁面）。下一步待使用者決定。
-2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
-3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
-4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。
-5. **Worker 背景執行**：開機自動啟動、失敗自動重啟（延後，視測試者回饋）。
-6. **CUDA Worker 容器**（需要 WSL2 後端）。
-7. **O0–O7 對手建模**。
+使用者已確認的順序（D1 之後）：
+
+1. **S1 ICM Push/Fold Nash baseline（先 SNG 再 PKO）＋ P2 模型比較**：完成（見上）。
+2. **S4 可剝削程度量測**：凍結目標模型，另訓練只為了打贏它的學習者，做成實驗 preset。
+3. **H2 練習模式**：對打時每個決策後顯示模型建議與 Q 值差距、漏洞報告、對局存到伺服器。
+4. **H1 匯入 GG／Natural8 牌譜**：使用者暫時沒有樣本，先依公開格式做解析器並標示「尚未用真實牌譜驗證」。
+5. **A0 演算法介面**：把只給 NFSP 用的地方改成可插拔，NFSP 結果位元一致。
+6. **encoder v3 與新動作格式（一次包含 S2 下注尺度、T4 9 人桌、S3 多結構訓練）**，只重訓一次。
+7. **新訓練演算法**：PPO → MMD 正則化 → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
+8. **T5 MTT 階段模擬**。
+9. **S6 對手建模**。
+
+其他（延後）：與測試者實機驗收、Worker 開機自動啟動、CUDA Worker 容器。
 
 長期願景（包括最終的聯邦式對等網路 D1）見 [vision.md](vision.md)，不屬於目前的工作計畫。

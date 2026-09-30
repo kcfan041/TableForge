@@ -451,7 +451,7 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
 }
 
 
-TOURNAMENT_FIELDS = ("mixed", "call", "tight", "aggro", "pushfold", "hunter")
+TOURNAMENT_FIELDS = ("mixed", "call", "tight", "aggro", "pushfold", "hunter", "pushfold_nash")
 
 
 def is_tournament(config: ExperimentConfig) -> bool:

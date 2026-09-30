@@ -65,6 +65,8 @@ QUERY_SCOPES: dict[str, Scope] = {
     "scopes": _READ,
     "models": Scope.MODEL_READ,
     "analysis": Scope.MODEL_READ,
+    "comparison": Scope.MODEL_READ,
+    "comparison_candidates": Scope.MODEL_READ,
 }
 COMMAND_SCOPES: dict[str, Scope] = {
     "create_experiment": Scope.EXPERIMENT_CONTROL,
@@ -81,6 +83,7 @@ COMMAND_SCOPES: dict[str, Scope] = {
     "download_model": Scope.MODEL_DOWNLOAD,
     "request_replay": Scope.ANALYSIS_RUN,
     "request_strategy": Scope.ANALYSIS_RUN,
+    "request_comparison": Scope.ANALYSIS_RUN,
     # Games against models on the cluster host; each game belongs to its creator.
     "play_start": Scope.PLAY_REMOTE,
     "play_list": Scope.PLAY_REMOTE,
@@ -150,6 +153,22 @@ class ClusterViews:
                 return analysis_result(self.services, argument).as_dict()
             except (JobNotFoundError, KeyError) as error:
                 raise ViewError(404, "no such analysis job") from error
+            except AnalysisError as error:
+                raise ViewError(400, str(error)) from error
+        if resource in ("comparison", "comparison_candidates"):
+            from tableforge.application.ports import JobNotFoundError
+            from tableforge.coordinator.analysis import (
+                AnalysisError,
+                comparison_candidates,
+                comparison_result,
+            )
+
+            try:
+                if resource == "comparison_candidates":
+                    return comparison_candidates(self.services, argument)
+                return comparison_result(self.services, argument)
+            except (JobNotFoundError, KeyError) as error:
+                raise ViewError(404, "no such comparison") from error
             except AnalysisError as error:
                 raise ViewError(400, str(error)) from error
         raise ViewError(404, f"unknown resource: {resource}")
@@ -423,14 +442,19 @@ class ClusterViews:
             return self.download_model(arguments)
         if action.startswith("play_"):
             return self.play_command(action, arguments, caller)
-        if action in ("request_replay", "request_strategy"):
+        if action in ("request_replay", "request_strategy", "request_comparison"):
             from tableforge.coordinator.analysis import (
                 AnalysisError,
+                request_comparison,
                 request_replay,
                 request_strategy,
             )
 
-            handler = request_replay if action == "request_replay" else request_strategy
+            handler = {
+                "request_replay": request_replay,
+                "request_strategy": request_strategy,
+                "request_comparison": request_comparison,
+            }[action]
             try:
                 return handler(self.services, arguments)
             except KeyError as error:

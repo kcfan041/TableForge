@@ -44,7 +44,7 @@ SESSION_SCHEMA = "tableforge.play-session.v1"
 HUMAN = "human"
 MAX_GAME_HANDS = 1_000
 MAX_BOT_ACTIONS = 2_000
-RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold", "hunter")
+RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold", "hunter", "pushfold_nash")
 
 
 class PlayError(ValueError):

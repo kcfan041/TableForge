@@ -28,6 +28,10 @@ def rule_bot(name: str, seed: int) -> TableAgent:
         return HeuristicPushFoldBot()
     if name == "hunter":
         return HeuristicPushFoldBot(bounty_weight=HUNTER_BOUNTY_WEIGHT)
+    if name == "pushfold_nash":
+        from tableforge.agents.rule.pushfold_nash import PushFoldNashBot
+
+        return PushFoldNashBot(seed)
     raise ValueError(f"unknown rule bot: {name}")
 
 
