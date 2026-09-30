@@ -98,5 +98,6 @@ def build_services(settings: Settings) -> Services:
             experiments=repositories.experiments,
             coordinator=coordinator,
             checkpoints=repositories.checkpoints,
+            models_root=settings.data_dir / "models",
         ),
     )

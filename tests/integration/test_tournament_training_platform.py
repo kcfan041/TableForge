@@ -147,6 +147,84 @@ def test_tournament_training_runs_on_the_platform(tmp_path: Path) -> None:
         assert tournament["average"]["bounty_ev"]["mean"] > 0
 
 
+def test_tournament_training_with_an_opponent_pool(tmp_path: Path) -> None:
+    from tableforge.coordinator.models import library
+    from tableforge.domain.opponent_pool import OpponentPoolSpec
+
+    services = build_services(Settings(data_dir=tmp_path))
+    pool_model = NfspAgent(
+        NfspConfig(hidden_size=16, batch_size=16, observation_schema="poker-hunlhe-vector-v2")
+    )
+    library(services).add("pko-10bb-old", pool_model.to_bundle(), "nfsp", "6max-pko-10bb")
+    library(services).add("pko-25bb-other", pool_model.to_bundle(), "nfsp", "6max-pko-25bb")
+    experiments = services.experiments
+    created = experiments.create(
+        "6max-pko-10bb-smoke",
+        NOW,
+        {"pool_models": "library", "pool_history": 2, "pfsp": "hard", "pool_eval_seeds": 3},
+    )
+    experiments.start(created.experiment_id, NOW)
+    worker_capability = capability()
+    runtime = WorkerRuntime(
+        node_id=worker_capability.node_id,
+        capability=replace(
+            worker_capability,
+            enabled_roles=("simulation", "evaluation", "nfsp_learner", "nfsp_actor"),
+            logical_cpu_cores=8,
+            total_memory_bytes=32 * 1024**3,
+            available_memory_bytes=32 * 1024**3,
+        ),
+        coordinator=services.coordinator,
+        clock=Clock(),
+        lease_duration=timedelta(minutes=5),
+        simulation_executor=SimulationExecutor(),
+        extra_executors={
+            **_rule_executors(),
+            **_learning_executors(services.coordinator),  # type: ignore[arg-type]
+        },
+    )
+
+    WorkerLoop(
+        runtime,
+        CapturingLogger(),
+        idle_seconds=0,
+        on_idle=lambda: experiments.reconcile_all(NOW) > 0,
+    ).run(max_jobs=40)
+    experiments.reconcile_all(NOW)
+
+    assert experiments.experiments.get(created.experiment_id).status is ExperimentStatus.COMPLETED
+    jobs = services.coordinator.jobs.list_jobs(created.experiment_id)
+    actors = [
+        NfspActorPayload.from_bytes(job.spec.payload)
+        for job in jobs
+        if job.spec.payload_type == ACTOR_PAYLOAD_TYPE
+    ]
+    first = OpponentPoolSpec.from_bytes(
+        services.coordinator.read_artifact(actors[0].pool_artifact_id)
+    )
+    last = OpponentPoolSpec.from_bytes(
+        services.coordinator.read_artifact(actors[-1].pool_artifact_id)
+    )
+    assert [model.name for model in first.models] == ["model:pko-10bb-old"]
+    assert first.weighting == "hard" and "tight" in first.rules
+    assert [model.kind for model in last.models] == ["model", "history"]
+    curve = experiments.training_curve(created.experiment_id)
+    assert all("pool" in point["benchmark"] for point in curve)  # type: ignore[operator]
+    final = curve[-1]["tournament"]["pool"]  # type: ignore[index]
+    assert final["members"] == ["model:pko-10bb-old", "history:round-1"]
+    assert set(final["matchups"]) == set(final["members"])
+    assert curve[0]["tournament"]["pool"]["matchups"] == {}  # type: ignore[index]
+
+
+def test_pool_settings_need_tournament_training(tmp_path: Path) -> None:
+    experiments = build_services(Settings(data_dir=tmp_path)).experiments
+
+    with pytest.raises(ValueError):
+        experiments.create("hu-nfsp-v2-train", NOW, {"pool_models": "library"})
+    with pytest.raises(ValueError):
+        experiments.create("6max-pko-10bb-smoke", NOW, {"pfsp": "sometimes"})
+
+
 def explainers() -> list[tuple[object, str]]:
     agent = NfspAgent(
         NfspConfig(hidden_size=16, batch_size=16, observation_schema="poker-hunlhe-vector-v2")

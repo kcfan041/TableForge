@@ -159,10 +159,15 @@ class NfspActorPayload:
     """When set, the actor plays whole tournaments; `hands` is then the tournament count."""
     self_play_share: float = 0.5
     hand_horizon: bool = False
+    pool_artifact_id: str = ""
+    """Opponent pool (`OpponentPoolSpec`) for the seats not played by the learner."""
+    pool_sha256: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported actor payload schema")
+        if self.pool_artifact_id or self.pool_sha256:
+            _require_sha(self.pool_sha256)
         if self.hands < 1:
             raise ValueError("actor hands must be positive")
         if not 0 <= self.self_play_share <= 1:
@@ -229,10 +234,19 @@ class NfspMatchPayload:
     """When set, the match is a tournament benchmark against a rule-bot field; `min_deals`
     is then the number of tournament seeds (each played once per seat)."""
     tournament_field: str = "mixed"
+    pool_artifact_id: str = ""
+    """When set, the candidate is also benchmarked against the pool's models."""
+    pool_sha256: str = ""
+    pool_seeds: int = 0
+    pool_matchup_seeds: int = 0
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported match payload schema")
+        if self.pool_artifact_id or self.pool_sha256:
+            _require_sha(self.pool_sha256)
+        if self.pool_seeds < 0 or self.pool_matchup_seeds < 0:
+            raise ValueError("pool seeds cannot be negative")
         if self.tournament_json:
             from tableforge.poker.tournament import TournamentConfig
 
@@ -263,8 +277,14 @@ _TOURNAMENT_ACTOR_DEFAULTS: dict[str, object] = {
     "tournament_json": "",
     "self_play_share": 0.5,
     "hand_horizon": False,
+    "pool_artifact_id": "",
+    "pool_sha256": "",
 }
 _TOURNAMENT_MATCH_DEFAULTS: dict[str, object] = {
     "tournament_json": "",
     "tournament_field": "mixed",
+    "pool_artifact_id": "",
+    "pool_sha256": "",
+    "pool_seeds": 0,
+    "pool_matchup_seeds": 0,
 }

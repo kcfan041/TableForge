@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from tableforge.domain.artifacts import ArtifactKind
 from tableforge.domain.learning import (
@@ -84,7 +85,7 @@ class NfspActorExecutor:
         agent = NfspAgent.from_actor_bundle(content)
         agent.rng.seed(payload.actor_seed)
         if payload.tournament_json:
-            return _tournament_shard(agent, payload, on_progress)
+            return _tournament_shard(agent, payload, on_progress, self.fetch_artifact)
         picker = None
         if payload.population_artifact_id:
             from tableforge.domain.league import LeaguePopulation
@@ -245,16 +246,36 @@ class NfspMatchExecutor:
         ).encode()
 
 
+def load_pool(fetch: Fetch, artifact_id: str, sha256: str, models_only: bool = False) -> Any:
+    """Build an `OpponentPool` from a pool artifact (checkpoints verified by sha256)."""
+    from tableforge.domain.opponent_pool import OpponentPoolSpec
+    from tableforge.learning.opponents import OpponentPool, model_member, rule_members
+
+    spec = OpponentPoolSpec.from_bytes(verified(fetch(artifact_id), sha256))
+    members = [] if models_only else rule_members(spec.rules)
+    for model in spec.models:
+        members.append(
+            model_member(model.name, verified(fetch(model.artifact_id), model.sha256), model.kind)
+        )
+    if not members:
+        return None
+    return OpponentPool(members, weighting=spec.weighting)
+
+
 def _tournament_shard(
     agent: NfspAgent,
     payload: NfspActorPayload,
     on_progress: Callable[[int], None] | None,
+    fetch: Fetch | None = None,
 ) -> bytes:
     """Play `payload.hands` training tournaments and return their experience."""
     from tableforge.learning.tournament_training import play_training_tournament
     from tableforge.poker.tournament import TournamentConfig
 
     config = TournamentConfig.from_json(payload.tournament_json)
+    opponents = None
+    if payload.pool_artifact_id and fetch is not None:
+        opponents = load_pool(fetch, payload.pool_artifact_id, payload.pool_sha256)
     transitions: list[Transition] = []
     samples: list[PolicySample] = []
     agent.policy_sink = samples.append
@@ -267,6 +288,7 @@ def _tournament_shard(
                 transitions.append,
                 payload.self_play_share,
                 hand_horizon=payload.hand_horizon,
+                opponents=opponents,
             )
             if on_progress is not None and (index + 1) % 10 == 0:
                 on_progress(index + 1)
@@ -343,10 +365,32 @@ def _tournament_match(
             "hands": summary.tournaments,
         }
 
-    summaries = {
+    summaries: dict[str, Any] = {
         name: TournamentBenchmark.from_samples(samples[name], config.name).summary()
         for name in samples
     }
+    references = {"average": roi("average"), "best_response": roi("best_response")}
+    if payload.pool_artifact_id and payload.pool_seeds:
+        from tableforge.learning.pool_benchmark import pool_benchmark
+
+        pool = load_pool(fetch, payload.pool_artifact_id, payload.pool_sha256, models_only=True)
+        if pool is not None:
+            result = pool_benchmark(
+                lambda: FrozenTournamentPlayer(candidate),
+                pool.all_members(),
+                config,
+                payload.pool_seeds,
+                payload.seed_start + 7_000_000,
+                payload.pool_matchup_seeds,
+            )
+            summaries["pool"] = result
+            overall = result["overall"]["roi"]  # type: ignore[index]
+            references["pool"] = {
+                "bb_per_100": _rounded(overall["mean"] * 100),
+                "confidence_low": _rounded(overall["low"] * 100),
+                "confidence_high": _rounded(overall["high"] * 100),
+                "hands": result["overall"]["tournaments"],  # type: ignore[index]
+            }
     return json.dumps(
         {
             "baseline_sha256": payload.baseline_sha256,
@@ -360,7 +404,7 @@ def _tournament_match(
                 "standard_error": _rounded((difference.high - difference.low) / 3.92),
                 "unit": "roi_points",
             },
-            "references": {"average": roi("average"), "best_response": roi("best_response")},
+            "references": references,
             "reference_unit": "roi_percent",
             "tournament": summaries,
             "schema_version": MATCH_SCHEMA,

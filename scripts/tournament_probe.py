@@ -38,7 +38,22 @@ def main() -> None:
     parser.add_argument(
         "--tournament", default="", help="tournament spec JSON (overrides --stack-bb/--no-pko)"
     )
-    parser.add_argument("--train-hands", type=int, default=0, help="stop after this many hands")
+    parser.add_argument(
+        "--pool-models", default="", help="library model ids to train against (or 'library')"
+    )
+    parser.add_argument(
+        "--pool-rules", default="random,call,tight,aggro,pushfold,hunter", help="rule bots"
+    )
+    parser.add_argument("--pfsp", default="uniform", choices=("uniform", "hard", "variance"))
+    parser.add_argument("--history-every", type=int, default=0, help="snapshot every N")
+    parser.add_argument("--history-limit", type=int, default=5)
+    parser.add_argument("--pool-eval-seeds", type=int, default=0, help="also vs model pool")
+    parser.add_argument("--library", default="", help="model library folder")
+    parser.add_argument(
+        "--init-model", default="", help="continue training this library model (full state)"
+    )
+    parser.add_argument("--init-checkpoint", default="", help="continue from a checkpoint file")
+    parser.add_argument("--seed-offset", type=int, default=0, help="first training seed index")
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--batch", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -83,6 +98,47 @@ def main() -> None:
             observation_schema="poker-hunlhe-vector-v2",
         )
     )
+    if args.init_model:
+        from pathlib import Path as _InitPath
+
+        from tableforge.models import ModelLibrary as _InitLibrary
+        from tableforge.web.cluster import Layout as _InitLayout
+        from tableforge.web.cluster import default_home as _init_home
+
+        init_library = _InitLibrary(
+            _InitPath(args.library) if args.library else _InitLayout(_init_home()).models
+        )
+        agent = NfspAgent.from_bundle(init_library.checkpoint(args.init_model))
+        agent.rng.seed(args.seed)
+    if args.init_checkpoint:
+        from pathlib import Path as _CheckpointPath
+
+        agent = NfspAgent.from_bundle(_CheckpointPath(args.init_checkpoint).read_bytes())
+        agent.rng.seed(args.seed + 1)
+    opponents = None
+    pool_members: list = []  # type: ignore[type-arg]
+    if args.pool_models or args.pool_eval_seeds:
+        from pathlib import Path as _Path
+
+        from tableforge.learning.opponents import OpponentPool, rule_members
+        from tableforge.learning.pool_benchmark import library_pool
+        from tableforge.models import ModelLibrary
+        from tableforge.web.cluster import Layout, default_home
+
+        library = ModelLibrary(
+            _Path(args.library) if args.library else Layout(default_home()).models
+        )
+        pool_members = library_pool(library, config)
+        if args.pool_models and args.pool_models != "library":
+            wanted = {f"model:{item}" for item in args.pool_models.split(",") if item}
+            pool_members = [member for member in pool_members if member.name in wanted]
+        if args.pool_models:
+            opponents = OpponentPool(
+                rule_members([item for item in args.pool_rules.split(",") if item])
+                + list(pool_members),
+                weighting=args.pfsp,
+                history_limit=args.history_limit,
+            )
     per_stage = args.tournaments // args.checkpoints
     trained = 0
     hands = 0
@@ -94,10 +150,12 @@ def main() -> None:
                 agent,
                 config,
                 per_stage,
-                seed_start=args.seed * 10_000_000 + trained,
+                seed_start=args.seed * 10_000_000 + args.seed_offset + trained,
                 train_every_hands=args.train_every,
                 self_play_share=args.self_play,
                 hand_horizon=args.hand_horizon,
+                opponents=opponents,
+                history_every=args.history_every,
             )
             trained += per_stage
             hands += report.hands
@@ -111,6 +169,17 @@ def main() -> None:
             seeds=args.seeds,
             seed_start=args.eval_seed_start,
         ).summary()
+        pool_result: dict[str, object] | None = None
+        if args.pool_eval_seeds and pool_members:
+            from tableforge.learning.pool_benchmark import pool_benchmark
+
+            pool_result = pool_benchmark(
+                lambda frozen=frozen: FrozenTournamentPlayer(frozen),
+                pool_members,
+                config,
+                args.pool_eval_seeds,
+                1_700_000_000,
+            )["overall"]  # type: ignore[assignment]
         greedy: dict[str, object] = {}
         if args.greedy and stage:
             q_agent = NfspAgent.from_actor_bundle(bundle)
@@ -127,6 +196,8 @@ def main() -> None:
                 {
                     "tag": args.tag,
                     "seed": args.seed,
+                    "pool": pool_result,
+                    "opponents": opponents.summary() if opponents is not None else None,
                     "tournaments": trained,
                     "hands": hands,
                     "elapsed_s": round(time.perf_counter() - started),

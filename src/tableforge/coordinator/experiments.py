@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from tableforge.application.ports import CheckpointRepository, ExperimentRepository
@@ -56,11 +57,14 @@ class ExperimentService:
     experiments: ExperimentRepository
     coordinator: CoordinatorService
     checkpoints: CheckpointRepository | None = None
+    models_root: Path | None = None
 
     def _orchestrator(self) -> IterativeNfspOrchestrator:
         if self.checkpoints is None:
             raise ValueError("iterative NFSP experiments require a checkpoint repository")
-        return IterativeNfspOrchestrator(self.coordinator, self.checkpoints, _profile)
+        return IterativeNfspOrchestrator(
+            self.coordinator, self.checkpoints, _profile, self.models_root
+        )
 
     def reconcile_all(self, now: datetime) -> int:
         advanced = 0
@@ -416,6 +420,10 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "self_play_share": float,
     "rl_capacity": int,
     "sl_capacity": int,
+    "pool_models": str,
+    "pool_history": int,
+    "pfsp": str,
+    "pool_eval_seeds": int,
     "observation_schema": str,
     "benchmark_deals": int,
     "evaluation_deals": int,
@@ -435,6 +443,8 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "self_play_share": (0, 1),
     "rl_capacity": (1_000, 5_000_000),
     "sl_capacity": (1_000, 5_000_000),
+    "pool_history": (0, 20),
+    "pool_eval_seeds": (0, 5_000),
     "benchmark_deals": (0, 100_000),
     "evaluation_deals": (2, 100_000),
     "max_evaluation_deals": (2, 1_000_000),

@@ -2,7 +2,9 @@
 
 One learning agent plays whole tournaments. The learner always has one seat (which rotates
 with the seed); every other seat is, independently, the same agent (self-play) with
-probability `self_play_share`, or a fixed opponent drawn from `OPPONENT_POOL`.
+probability `self_play_share`, or a fixed opponent drawn from `OPPONENT_POOL` (rule bots)
+or, when an `OpponentPool` is given, from that pool (rule bots, frozen models from the
+model library and earlier versions of the learner, optionally weighted by PFSP).
 
 Reward (docs/architecture/08-tournament.md, section 6): after every hand each learning
 seat receives the change in its tournament equity (`Tournament.equity`: ICM share of the
@@ -21,6 +23,7 @@ from dataclasses import dataclass, field
 
 from tableforge.learning.buffers import Transition
 from tableforge.learning.nfsp import NfspAgent
+from tableforge.learning.opponents import OpponentPool, PoolMember
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.table import TableAgent, TableObservation, TableRunner
 from tableforge.poker.tournament import Tournament, TournamentConfig, TournamentHandInfo
@@ -119,6 +122,7 @@ def play_training_tournament(
     after_hand: Callable[[], None] | None = None,
     pool: Sequence[str] = OPPONENT_POOL,
     hand_horizon: bool = False,
+    opponents: OpponentPool | None = None,
 ) -> TournamentEpisode:
     """Play one tournament with the learning agent in one or more seats."""
     if not 0 <= self_play_share <= 1:
@@ -130,12 +134,18 @@ def play_training_tournament(
     lineup: list[str] = []
     agents: list[TableAgent] = []
     seats: list[LearningSeat] = []
+    drawn: dict[int, PoolMember] = {}
     for player in range(config.players):
         if player == learner or rng.random() < self_play_share:
             seat = LearningSeat(agent, player, sink, hand_horizon=hand_horizon)
             seats.append(seat)
             agents.append(seat)
             lineup.append("self")
+        elif opponents is not None:
+            member = opponents.draw(rng)
+            drawn[player] = member
+            agents.append(member.build(seed * 16 + player))
+            lineup.append(member.name)
         else:
             kind = rng.choice(list(pool))
             agents.append(rule_bot(kind, seed * 16 + player))
@@ -163,6 +173,9 @@ def play_training_tournament(
         if not seat.done:
             seat.after_hand(tournament.equity(seat.player), True)
     agent.hand_info = None
+    if opponents is not None:
+        for player, member in drawn.items():
+            opponents.record(member, result.results[learner], result.results[player])
     return TournamentEpisode(
         learner_players=tuple(seat.player for seat in seats),
         lineup=tuple(lineup),
@@ -192,8 +205,14 @@ def tournament_self_play_train(
     self_play_share: float = 0.5,
     on_progress: Callable[[int], None] | None = None,
     hand_horizon: bool = False,
+    opponents: OpponentPool | None = None,
+    history_every: int = 0,
 ) -> TournamentTrainingReport:
-    """Play `tournaments` training tournaments, training after every few hands."""
+    """Play `tournaments` training tournaments, training after every few hands.
+
+    With `opponents` and `history_every`, a frozen copy of the learner's average policy
+    joins the pool every `history_every` tournaments (the pool keeps the newest few).
+    """
     if train_every_hands < 1:
         raise ValueError("train_every_hands must be positive")
     metrics: dict[str, float] = {}
@@ -215,7 +234,14 @@ def tournament_self_play_train(
             self_play_share,
             after_hand,
             hand_horizon=hand_horizon,
+            opponents=opponents,
         )
+        if (
+            opponents is not None
+            and history_every
+            and (seed_start + index + 1) % history_every == 0
+        ):
+            opponents.add_history(snapshot_member(agent, f"history:{seed_start + index + 1}"))
         if on_progress is not None:
             on_progress(index + 1)
     return TournamentTrainingReport(
@@ -260,6 +286,14 @@ class GreedyTournamentPlayer:
     def act(self, observation: TableObservation, legal: LegalActions) -> Action:
         self.agent.best_response_mode = True
         return self.agent.act(observation, legal)
+
+
+def snapshot_member(agent: NfspAgent, name: str) -> PoolMember:
+    """A frozen copy of the learner's current average policy (no buffers, no optimizer)."""
+    copy = NfspAgent(agent.config, device=str(agent.device))
+    copy.policy_network.load_state_dict(agent.policy_network.state_dict())
+    copy.training = False
+    return PoolMember(name, lambda seed: FrozenTournamentPlayer(copy), "history")
 
 
 def frozen_player(bundle: bytes) -> FrozenTournamentPlayer:

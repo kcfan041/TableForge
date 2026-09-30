@@ -49,6 +49,11 @@ const SETTING_ORDER = [
   "learning_rate",
   "target_update_steps",
   "reward_scale",
+  "self_play_share",
+  "pool_models",
+  "pfsp",
+  "pool_history",
+  "pool_eval_seeds",
   "anticipatory",
   "epsilon",
   "benchmark_deals",
@@ -182,7 +187,24 @@ function CreateExperiment() {
                   return (
                     <label key={name} className={differs ? "changed" : ""}>
                       {t(`setting.${name}` as MessageKey)}
-                      {name === "observation_schema" ? (
+                      {name === "pfsp" ? (
+                        <select
+                          value={settings[name]}
+                          onChange={(event) => setSettings({ ...settings, [name]: event.target.value })}
+                        >
+                          {["uniform", "hard", "variance"].map((value) => (
+                            <option key={value} value={value}>
+                              {t(`pfsp.${value}` as MessageKey)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : name === "pool_models" ? (
+                        <input
+                          value={settings[name]}
+                          placeholder="library"
+                          onChange={(event) => setSettings({ ...settings, [name]: event.target.value })}
+                        />
+                      ) : name === "observation_schema" ? (
                         <select
                           value={settings[name]}
                           onChange={(event) => setSettings({ ...settings, [name]: event.target.value })}

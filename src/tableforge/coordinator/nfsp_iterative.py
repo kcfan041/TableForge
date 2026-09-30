@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from tableforge.application.ports import CheckpointRepository
@@ -91,6 +92,8 @@ class IterativeNfspOrchestrator:
     coordinator: CoordinatorService
     checkpoints: CheckpointRepository
     profile_for: Callable[[str, str | None, str], WorkloadProfile]
+    models_root: Path | None = None
+    """The cluster's model library, for opponent pools of tournament training."""
 
     def reconcile(self, experiment: Experiment, now: datetime) -> bool:
         jobs = {
@@ -261,6 +264,7 @@ class IterativeNfspOrchestrator:
             population: Artifact | None = None
             if config.league:
                 population = self._population(agent, base, round_index, config.historical_limit)
+            pool = self._opponent_pool(experiment, agent, base)
             for index, key in enumerate(actor_keys):
                 seed = config.seed_start + round_index * 1_000_000 + index * 100_000
                 self._create(
@@ -282,8 +286,10 @@ class IterativeNfspOrchestrator:
                         tournament_json=config.tournament_json,
                         self_play_share=config.self_play_share,
                         hand_horizon=config.hand_horizon,
+                        pool_artifact_id=str(pool.descriptor.artifact_id) if pool else "",
+                        pool_sha256=pool.sha256 if pool else "",
                     ).to_bytes(),
-                    inputs=(population,) if population else (),
+                    inputs=tuple(item for item in (population, pool) if item is not None),
                 )
             return False
         actors = [jobs[key] for key in actor_keys if key in jobs]
@@ -321,6 +327,16 @@ class IterativeNfspOrchestrator:
         match_key = _key(experiment, f"{prefix}:match")
         match = jobs.get(match_key)
         if match is None:
+            pool_fields: dict[str, Any] = {}
+            if config.pool_eval_seeds and base_payload.pool_artifact_id:
+                pool_fields = {
+                    "pool_artifact_id": base_payload.pool_artifact_id,
+                    "pool_sha256": base_payload.pool_sha256,
+                    "pool_seeds": config.pool_eval_seeds,
+                    "pool_matchup_seeds": (
+                        max(config.pool_eval_seeds // 3, 2) if round_index == config.rounds else 0
+                    ),
+                }
             self._create(
                 experiment,
                 match_key,
@@ -328,6 +344,7 @@ class IterativeNfspOrchestrator:
                 MATCH_PAYLOAD_TYPE,
                 _match_payload(
                     config,
+                    **pool_fields,
                     schema_version="1.0",
                     candidate_artifact_id=str(candidate.artifact_id),
                     candidate_sha256=candidate.sha256,
@@ -352,6 +369,92 @@ class IterativeNfspOrchestrator:
             promote, reason = promotion_decision(result)
             self.checkpoints.decide(candidate.checkpoint_id, promote, reason, now)
         return True
+
+    def _opponent_pool(
+        self, experiment: Experiment, agent: AgentId, base: Checkpoint
+    ) -> Artifact | None:
+        """The round's opponent pool: rule bots, library models and recent checkpoints."""
+        config = experiment.config
+        if not config.tournament_json or not (config.pool_models or config.pool_history):
+            return None
+        from tableforge.domain.opponent_pool import OpponentPoolSpec, PoolModel
+        from tableforge.learning.opponents_catalog import RULE_POOL
+
+        models: list[PoolModel] = []
+        if config.pool_models:
+            models.extend(self._library_models(config.pool_models, config.tournament_json))
+        if config.pool_history:
+            earlier = [
+                item
+                for item in self.checkpoints.list_checkpoints(agent)
+                if item.status in (CheckpointStatus.ACTIVE, CheckpointStatus.RETIRED)
+                and item.round_index > 0
+                and item.round_index <= base.round_index
+            ][-config.pool_history :]
+            models.extend(
+                PoolModel(
+                    f"history:round-{item.round_index}",
+                    str(item.artifact_id),
+                    item.sha256,
+                    "history",
+                )
+                for item in earlier
+            )
+        content = OpponentPoolSpec(RULE_POOL, tuple(models), config.pfsp).to_bytes()
+        from tableforge.domain.opponent_pool import POOL_SCHEMA
+
+        return self.coordinator.upload_artifact(
+            ArtifactDescriptor(
+                _content_id(content),
+                ArtifactKind.LEAGUE_POPULATION,
+                "application/json",
+                POOL_SCHEMA,
+            ),
+            content,
+        )
+
+    def _library_models(self, selection: str, tournament_json: str) -> list[Any]:
+        from tableforge.domain.opponent_pool import PoolModel
+        from tableforge.learning.pool_benchmark import same_tournament
+        from tableforge.models import ModelLibrary
+        from tableforge.poker.tournament import TournamentConfig
+
+        if self.models_root is None:
+            return []
+        library = ModelLibrary(self.models_root)
+        wanted = None if selection == "library" else set(selection.split(","))
+        target = TournamentConfig.from_json(tournament_json)
+        found = []
+        for info in library.list():
+            if wanted is not None and info.model_id not in wanted:
+                continue
+            if info.algorithm != "nfsp":
+                continue
+            from tableforge.coordinator.analysis import AnalysisError
+            from tableforge.coordinator.analysis import tournament_json as model_tournament
+
+            try:
+                model_config = TournamentConfig.from_json(model_tournament(info))
+            except AnalysisError:
+                continue
+            if not same_tournament(model_config, target):
+                continue
+            content = library.checkpoint(info.model_id)
+            artifact = self.coordinator.upload_artifact(
+                ArtifactDescriptor(
+                    _content_id(content),
+                    ArtifactKind.MODEL_CHECKPOINT,
+                    "application/zip",
+                    "tableforge.nfsp-checkpoint.v1",
+                ),
+                content,
+            )
+            found.append(
+                PoolModel(
+                    f"model:{info.model_id}", str(artifact.descriptor.artifact_id), artifact.sha256
+                )
+            )
+        return found
 
     def _checkpoint_by_sha(self, agent: AgentId, sha256: str) -> Checkpoint:
         for checkpoint in self.checkpoints.list_checkpoints(agent):

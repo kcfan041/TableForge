@@ -61,6 +61,10 @@ class ExperimentConfig:
     double_q: bool = False
     rl_capacity: int = 50_000
     sl_capacity: int = 100_000
+    pool_models: str = ""
+    pool_history: int = 0
+    pfsp: str = "uniform"
+    pool_eval_seeds: int = 0
 
     def __post_init__(self) -> None:
         if self.learner_runtime not in ("cpu", "cuda"):
@@ -96,6 +100,14 @@ class ExperimentConfig:
             raise ValueError("self_play_share must be between 0 and 1")
         if self.rl_capacity < 1 or self.sl_capacity < 1:
             raise ValueError("buffer capacities must be positive")
+        if self.pfsp not in ("uniform", "hard", "variance"):
+            raise ValueError("pfsp must be uniform, hard or variance")
+        if self.pool_history < 0 or self.pool_eval_seeds < 0:
+            raise ValueError("pool settings cannot be negative")
+        if (self.pool_models or self.pool_history or self.pool_eval_seeds) and not (
+            tournament_training
+        ):
+            raise ValueError("opponent pools are only available for tournament training")
         if self.kind is ExperimentKind.TOURNAMENT_BENCHMARK:
             from tableforge.domain.tournament import TournamentJobPayload
 
@@ -182,6 +194,10 @@ class ExperimentPreset:
     double_q: bool = False
     rl_capacity: int = 50_000
     sl_capacity: int = 100_000
+    pool_models: str = ""
+    pool_history: int = 0
+    pfsp: str = "uniform"
+    pool_eval_seeds: int = 0
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -221,6 +237,10 @@ class ExperimentPreset:
             double_q=self.double_q,
             rl_capacity=self.rl_capacity,
             sl_capacity=self.sl_capacity,
+            pool_models=self.pool_models,
+            pool_history=self.pool_history,
+            pfsp=self.pfsp,
+            pool_eval_seeds=self.pool_eval_seeds,
         )
 
 

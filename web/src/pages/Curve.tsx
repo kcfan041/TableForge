@@ -8,6 +8,7 @@ const COLORS: Record<string, string> = {
   aggro: "#d97706",
   average: "#059669",
   best_response: "#7c3aed",
+  pool: "#0f172a",
 };
 const ORDER = ["random", "call", "tight", "aggro"];
 const TOURNAMENT_ORDER = ["average", "best_response"];
@@ -15,7 +16,8 @@ const TOURNAMENT_ORDER = ["average", "best_response"];
 /** Series names in a curve: rule bots (bb/100) or tournament play modes (ROI %). */
 export function curveSeries(points: CurvePoint[]): string[] {
   const tournament = points.some((point) => point.unit === "roi_percent");
-  return tournament ? TOURNAMENT_ORDER : ORDER;
+  if (!tournament) return ORDER;
+  return points.some((point) => point.benchmark.pool) ? [...TOURNAMENT_ORDER, "pool"] : TOURNAMENT_ORDER;
 }
 
 function isTournament(points: CurvePoint[]): boolean {
@@ -232,6 +234,7 @@ function LatestTournament({ series }: { series: Series[] }) {
           <th>{t("tournament.bountyEv")}</th>
           <th>{t("tournament.itm")}</th>
           <th>{t("curve.vsPrevious")}</th>
+          {series.some((item) => item.points.some((point) => point.benchmark.pool)) ? <th>{t("curve.roiPool")}</th> : null}
         </tr>
       </thead>
       <tbody>
@@ -254,6 +257,16 @@ function LatestTournament({ series }: { series: Series[] }) {
                     percent,
                   )
                 : <td>–</td>}
+              {last?.benchmark.pool
+                ? cell(
+                    {
+                      mean: last.benchmark.pool.bb_per_100 / 100,
+                      low: last.benchmark.pool.low / 100,
+                      high: last.benchmark.pool.high / 100,
+                    },
+                    percent,
+                  )
+                : null}
             </tr>
           );
         })}

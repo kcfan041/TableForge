@@ -131,6 +131,66 @@ function Results({ results, players }: { results: NonNullable<ExperimentDetail["
   );
 }
 
+interface PoolResult {
+  members: string[];
+  overall: { roi: { mean: number; low: number; high: number }; tournaments: number };
+  matchups: Record<string, { roi: { mean: number; low: number; high: number }; tournaments: number }>;
+}
+
+function poolResult(data: ExperimentDetail): PoolResult | null {
+  const points = data.curve ?? [];
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    const pool = (points[index]!.tournament as Record<string, unknown> | null | undefined)?.pool as PoolResult | undefined;
+    if (pool && Object.keys(pool.matchups ?? {}).length > 0) return pool;
+  }
+  return null;
+}
+
+function PoolMatchups({ result }: { result: PoolResult }) {
+  const { t, formatNumber } = useI18n();
+  const percent = (value: number) => `${formatNumber(value * 100, 1)}%`;
+  const rows: [string, { mean: number; low: number; high: number }, number][] = [
+    [t("pool.overall"), result.overall.roi, result.overall.tournaments],
+    ...Object.entries(result.matchups).map(
+      ([name, item]) => [name.replace(/^model:/, "").replace(/^history:/, t("pool.history")), item.roi, item.tournaments] as [
+        string,
+        { mean: number; low: number; high: number },
+        number,
+      ],
+    ),
+  ];
+  return (
+    <>
+      <p className="muted small">{t("pool.help")}</p>
+      <table className="metrics">
+        <thead>
+          <tr>
+            <th>{t("pool.opponent")}</th>
+            <th>ROI</th>
+            <th>{t("tournament.interval")}</th>
+            <th>{t("pool.tournaments")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([name, roi, tournaments], index) => {
+            const significant = roi.low > 0 || roi.high < 0;
+            return (
+              <tr key={name} className={index === 0 ? "selected" : ""}>
+                <th>{name}</th>
+                <td className={significant ? (roi.mean > 0 ? "positive-text" : "negative-text") : ""}>{percent(roi.mean)}</td>
+                <td className="muted small">
+                  {percent(roi.low)} – {percent(roi.high)}
+                </td>
+                <td>{formatNumber(tournaments)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 function GroupCurve({ groupId, current }: { groupId: string; current: string }) {
   const { t } = useI18n();
   const group = useLiveData(async () => {
@@ -251,6 +311,11 @@ export function ExperimentPage({ session }: { session: Session }) {
               ) : (
                 <TrainingCurve series={[{ label: `seed ${data.seed ?? ""}`, points: data.curve ?? [] }]} />
               )}
+            </Card>
+          ) : null}
+          {poolResult(data) ? (
+            <Card title={t("pool.title")}>
+              <PoolMatchups result={poolResult(data)!} />
             </Card>
           ) : null}
           {data.tournament ? (

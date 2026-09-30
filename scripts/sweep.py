@@ -14,7 +14,8 @@ Start a sweep (returns immediately):
     {"base": ["--reward-scale", "100"],
      "bigbuf": ["--reward-scale", "100", "--rl-capacity", "500000"]}
 
-`{tag}` in an argument is replaced by the run tag (useful for `--save {tag}.zip`).
+`{tag}` in an argument is replaced by the run tag (useful for `--save {tag}.zip`) and `{seed}`
+by the seed (useful for continuing each seed from its own checkpoint).
 Use `--probe tournament` for tournaments; `--size` is then the number of tournaments.
 
 Watch and summarize:
@@ -95,11 +96,27 @@ def _option(extra: list[str], name: str, default: int) -> int:
     return default
 
 
-def estimate_bytes(extra: list[str]) -> int:
-    """Peak memory of one run: base cost plus full replay buffers (and a copy while
-    checkpoints are written)."""
+DECISIONS_PER_TOURNAMENT = 40
+DECISIONS_PER_HAND = 4
+
+
+def estimate_bytes(extra: list[str], size: int = 0, probe: str = "tournament") -> int:
+    """Peak memory of one run: base cost plus the replay buffers it can actually fill.
+
+    The RL memory fills up to its capacity; the SL reservoir only receives the decisions
+    made in best-response mode (`--anticipatory`, 0.1 by default), so it rarely reaches its
+    capacity. The SL states are counted twice for the copy made while writing checkpoints.
+    """
     rl = _option(extra, "--rl-capacity", 50_000)
     sl = _option(extra, "--sl-capacity", 100_000)
+    if size:
+        per_unit = DECISIONS_PER_TOURNAMENT if probe == "tournament" else DECISIONS_PER_HAND
+        decisions = size * per_unit
+        anticipatory = (
+            float(extra[extra.index("--anticipatory") + 1]) if "--anticipatory" in extra else 0.1
+        )
+        rl = min(rl, decisions)
+        sl = min(sl, int(decisions * anticipatory * 1.2))
     next_states = 1 if "--hand-horizon" in extra else 2
     return BASE_BYTES + rl * BYTES_PER_ITEM * next_states + sl * BYTES_PER_ITEM * 2
 
@@ -142,7 +159,7 @@ def start(args: argparse.Namespace) -> None:
     runs = [(name, extra, seed) for name, extra in configs.items() for seed in seeds]
     if len(runs) > args.max_runs:
         raise SystemExit(f"{len(runs)} runs requested; the limit is {args.max_runs}")
-    estimates = [estimate_bytes(extra) for _, extra, _ in runs]
+    estimates = [estimate_bytes(extra, args.size, args.probe) for _, extra, _ in runs]
     available = available_memory()
     budget = available * args.memory_share if available else 0
     print(
@@ -202,7 +219,10 @@ def start(args: argparse.Namespace) -> None:
             str(seed),
             "--tag",
             tag,
-            *[part.replace("{tag}", str(folder / tag)) for part in extra],
+            *[
+                part.replace("{tag}", str(folder / tag)).replace("{seed}", str(seed))
+                for part in extra
+            ],
         ]
         with (
             (folder / f"{tag}.jsonl").open("w", encoding="utf-8") as out,
