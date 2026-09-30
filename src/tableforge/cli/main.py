@@ -1014,7 +1014,12 @@ def _local_ui(args: argparse.Namespace, settings: Settings) -> None:
         except ClusterSetupError as error:
             print(f"warning: {error}", file=sys.stderr, flush=True)
     context = LocalUiContext(
-        data_dir, layout.operators, manager, _node_id_for, supervisor=supervisor
+        data_dir,
+        layout.operators,
+        manager,
+        _node_id_for,
+        supervisor=supervisor,
+        models_dir=layout.downloaded_models,
     )
     url = f"http://127.0.0.1:{args.port}/"
     server = uvicorn.Server(

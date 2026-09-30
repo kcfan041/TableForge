@@ -86,6 +86,12 @@ export function Models({ session }: { session: Session }) {
                           <Link to={`/replay?model=${encodeURIComponent(model.model_id)}`}>{t("models.replay")}</Link>
                           {" · "}
                           <Link to={`/strategy?model=${encodeURIComponent(model.model_id)}`}>{t("models.strategy")}</Link>
+                          {can(session, "play:remote") ? (
+                            <>
+                              {" · "}
+                              <Link to="/play">{t("models.play")}</Link>
+                            </>
+                          ) : null}
                           {can(session, "admin:manage") ? (
                             <>
                               {" · "}

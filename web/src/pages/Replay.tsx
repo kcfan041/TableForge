@@ -5,13 +5,13 @@ import { Card, Page } from "../components";
 import { useI18n, type MessageKey } from "../i18n";
 import { initialModel, urlParam, useAnalysis, useModels } from "./analysis";
 
-interface Explanation {
+export interface Explanation {
   probabilities: Record<string, number>;
   details: { name: string; unit: string; per_action: Record<string, number>; value: number | null }[];
   raise_sizes: Record<string, number>;
 }
 
-interface ReplayAction {
+export interface ReplayAction {
   player: number;
   street: string;
   pot: number;
@@ -22,7 +22,7 @@ interface ReplayAction {
   explanation: Explanation | null;
 }
 
-interface ReplayHand {
+export interface ReplayHand {
   hand: number;
   level: number;
   small_blind: number;
@@ -45,7 +45,7 @@ interface ReplayHand {
   winners: number[];
 }
 
-interface Replay {
+export interface Replay {
   seed: number;
   labels: string[];
   hands: ReplayHand[];
@@ -53,11 +53,11 @@ interface Replay {
   config: { players: number; payout: number[] };
 }
 
-const ACTIONS = ["fold", "check_call", "raise", "all_in"];
+export const ACTIONS = ["fold", "check_call", "raise", "all_in"];
 const SUIT: Record<string, string> = { s: "♠", h: "♥", d: "♦", c: "♣" };
 type Filter = "all" | "model" | "allin" | "knockout" | "busted";
 
-function CardFace({ card, hidden = false }: { card: string; hidden?: boolean }) {
+export function CardFace({ card, hidden = false }: { card: string; hidden?: boolean }) {
   if (hidden) return <span className="playing-card back" />;
   const suit = card.slice(-1);
   const red = suit === "h" || suit === "d";
@@ -88,7 +88,7 @@ function matches(hand: ReplayHand, filter: Filter, model: number[]): boolean {
 }
 
 export function ReplayPage({ session }: { session: Session }) {
-  const { t, formatNumber } = useI18n();
+  const { t } = useI18n();
   const { models, error: modelsError } = useModels();
   const [modelId, setModelId] = useState("");
   const [mode, setMode] = useState("");
@@ -96,10 +96,6 @@ export function ReplayPage({ session }: { session: Session }) {
   const [seat, setSeat] = useState(urlParam("seat") ?? "0");
   const [opponents, setOpponents] = useState(urlParam("opponents") ?? "mixed");
   const [autoRun, setAutoRun] = useState(urlParam("run") === "1");
-  const [handIndex, setHandIndex] = useState(0);
-  const [step, setStep] = useState(0);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [showCards, setShowCards] = useState(true);
   const { state, request } = useAnalysis<Replay>("request_replay");
 
   useEffect(() => {
@@ -119,38 +115,6 @@ export function ReplayPage({ session }: { session: Session }) {
 
   const replay = state.result;
   const modelSeats = useMemo(() => (replay ? modelIndex(replay, modelId) : []), [replay, modelId]);
-  const visible = useMemo(
-    () => (replay ? replay.hands.map((hand, index) => [hand, index] as const).filter(([hand]) => matches(hand, filter, modelSeats)) : []),
-    [replay, filter, modelSeats],
-  );
-  useEffect(() => {
-    const wanted = Number(urlParam("hand") ?? "1") - 1;
-    setHandIndex(replay && wanted > 0 && wanted < replay.hands.length ? wanted : 0);
-    setStep(Number(urlParam("step") ?? "0"));
-  }, [replay]);
-
-  const hand = replay?.hands[handIndex];
-  const actions = hand?.actions ?? [];
-  const current = step > 0 ? actions[step - 1] : null;
-  const street = current ? current.street : "preflop";
-
-  const stacksNow = useMemo(() => {
-    if (!hand) return new Map<number, number>();
-    const map = new Map(hand.players.map((player, index) => [player, hand.stacks_before[index]!]));
-    return map;
-  }, [hand]);
-
-  const folded = new Set(actions.slice(0, step).filter((action) => action.action === "fold").map((action) => action.player));
-  const lastAction = new Map(actions.slice(0, step).map((action) => [action.player, action]));
-  const finished = hand !== undefined && step >= actions.length;
-
-  const go = (next: number) => {
-    setHandIndex(Math.max(0, Math.min((replay?.hands.length ?? 1) - 1, next)));
-    setStep(0);
-  };
-
-  const actionLabel = (action: ReplayAction) =>
-    `${t(`replay.action.${action.action}` as MessageKey)}${action.amount && action.action !== "fold" && action.action !== "check_call" ? ` ${formatNumber(action.amount)}` : ""}`;
 
   return (
     <Page title={t("replay.title")}>
@@ -223,7 +187,56 @@ export function ReplayPage({ session }: { session: Session }) {
           {state.busy ? <p className="muted small">{t("replay.waiting", { status: state.status ?? "" })}</p> : null}
         </Card>
       ) : null}
-      {replay && hand ? (
+      {replay ? <ReplayViewer replay={replay} focus={modelSeats} /> : null}
+    </Page>
+  );
+}
+
+/** Shows a replay document: the result, the hand list and a step-by-step table.
+ * `focus` are the player ids to highlight (the model, or the person in a played game). */
+export function ReplayViewer({ replay, focus, readUrl = true }: { replay: Replay; focus: number[]; readUrl?: boolean }) {
+  const { t, formatNumber } = useI18n();
+  const [handIndex, setHandIndex] = useState(0);
+  const [step, setStep] = useState(0);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [showCards, setShowCards] = useState(true);
+  const modelSeats = focus;
+  const visible = useMemo(
+    () => (replay ? replay.hands.map((hand, index) => [hand, index] as const).filter(([hand]) => matches(hand, filter, modelSeats)) : []),
+    [replay, filter, modelSeats],
+  );
+  useEffect(() => {
+    const wanted = readUrl ? Number(urlParam("hand") ?? "1") - 1 : 0;
+    setHandIndex(wanted > 0 && wanted < replay.hands.length ? wanted : 0);
+    setStep(readUrl ? Number(urlParam("step") ?? "0") : 0);
+  }, [replay, readUrl]);
+
+  const hand = replay.hands[handIndex];
+  const actions = hand?.actions ?? [];
+  const current = step > 0 ? actions[step - 1] : null;
+  const street = current ? current.street : "preflop";
+
+  const stacksNow = useMemo(() => {
+    if (!hand) return new Map<number, number>();
+    const map = new Map(hand.players.map((player, index) => [player, hand.stacks_before[index]!]));
+    return map;
+  }, [hand]);
+
+  const folded = new Set(actions.slice(0, step).filter((action) => action.action === "fold").map((action) => action.player));
+  const lastAction = new Map(actions.slice(0, step).map((action) => [action.player, action]));
+  const finished = hand !== undefined && step >= actions.length;
+
+  const go = (next: number) => {
+    setHandIndex(Math.max(0, Math.min(replay.hands.length - 1, next)));
+    setStep(0);
+  };
+
+  const actionLabel = (action: ReplayAction) =>
+    `${t(`replay.action.${action.action}` as MessageKey)}${action.amount && action.action !== "fold" && action.action !== "check_call" ? ` ${formatNumber(action.amount)}` : ""}`;
+
+  return (
+    <>
+      {hand ? (
         <>
           <Card title={t("replay.summary")}>
             <table className="metrics">
@@ -368,11 +381,11 @@ export function ReplayPage({ session }: { session: Session }) {
           </div>
         </>
       ) : null}
-    </Page>
+    </>
   );
 }
 
-function DecisionPanel({ action, label, actionLabel }: { action: ReplayAction; label: string; actionLabel: string }) {
+export function DecisionPanel({ action, label, actionLabel }: { action: ReplayAction; label: string; actionLabel: string }) {
   const { t, formatNumber } = useI18n();
   const explanation = action.explanation;
   return (

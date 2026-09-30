@@ -84,6 +84,11 @@ class Layout:
         return model_library_root(self.coordinator)
 
     @property
+    def downloaded_models(self) -> Path:
+        """Models copied from a cluster to play with on this computer (local play)."""
+        return self.home / "downloaded-models"
+
+    @property
     def service_file(self) -> Path:
         return self.coordinator / SERVICE_FILE
 

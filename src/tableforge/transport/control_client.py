@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -7,6 +9,7 @@ from typing import Any, TypeVar
 import grpc
 
 from tableforge._generated.tableforge.v1 import control_pb2, control_pb2_grpc
+from tableforge.models import ModelInfo, ModelLibrary
 from tableforge.transport.errors import ERROR_METADATA_KEY
 from tableforge.transport.join import OperatorCredentials
 
@@ -105,6 +108,63 @@ class RemoteControl:
             control_pb2.CommandRequest(action=action, json=json.dumps(arguments)),
         )
         return json.loads(response.json)
+
+
+class DownloadError(Exception):
+    pass
+
+
+def download_model(
+    command: Callable[[str, dict[str, Any]], Any],
+    model_id: str,
+    library: ModelLibrary,
+    on_progress: Callable[[int, int], None] | None = None,
+    replace: bool = False,
+) -> ModelInfo:
+    """Copy a cluster model into `library`; the checkpoint must match the cluster's sha256.
+
+    `command` sends one control command (``RemoteControl.command`` or the web API).
+    """
+    parts: list[bytes] = []
+    received = 0
+    first: dict[str, Any] | None = None
+    for _ in range(100_000):
+        chunk = command("download_model", {"model_id": model_id, "offset": received})
+        if first is None:
+            first = chunk
+        elif chunk["sha256"] != first["sha256"]:
+            raise DownloadError("the model changed on the cluster during the download; try again")
+        if int(chunk["offset"]) != received:
+            raise DownloadError("the cluster sent a chunk from the wrong place")
+        data = base64.b64decode(str(chunk["data"]), validate=True)
+        parts.append(data)
+        received += len(data)
+        if on_progress is not None:
+            on_progress(received, int(first["size_bytes"]))
+        if chunk["done"]:
+            break
+        if not data:
+            raise DownloadError("the cluster sent an empty chunk")
+    else:
+        raise DownloadError("the download did not finish")
+    assert first is not None
+    content = b"".join(parts)
+    if len(content) != int(first["size_bytes"]):
+        raise DownloadError("the downloaded checkpoint has the wrong size")
+    if hashlib.sha256(content).hexdigest() != first["sha256"]:
+        raise DownloadError("the downloaded checkpoint does not match its sha256")
+    model = first["model"]
+    return library.add(
+        model_id,
+        content,
+        str(model["algorithm"]),
+        str(model["game"]),
+        description=str(model.get("description", "")),
+        training=dict(model.get("training") or {}),
+        evaluation=dict(model.get("evaluation") or {}),
+        source=f"downloaded from cluster ({model.get('source', '')})".replace(" ()", ""),
+        replace=replace,
+    )
 
 
 def experiment_json(view: control_pb2.ExperimentView) -> dict[str, object]:

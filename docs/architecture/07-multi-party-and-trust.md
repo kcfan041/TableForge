@@ -116,6 +116,16 @@ Worker 永遠主動連出到 Coordinator 與 storage，Coordinator 從不連入 
 - 管理者可以修改任何人的 scope（寫入 `OPERATOR_SCOPES_CHANGED` 事件）；不能拿掉自己的 `admin:manage`，叢集至少保留一個有 `admin:manage` 的憑證。
 - 資料庫 schema 6 在 `operators` 新增 `scopes` 欄位；空值代表「角色的 scope」，因此升級前的憑證權限完全不變。
 - HTTP API 與 gRPC `ControlService` 使用同一張「查詢／指令 → scope」對照表；`WhoAmI` 回傳 scopes，任何有效憑證都可以呼叫。
+- `model:manage` 不包含刪除；刪除模型只接受 `admin:manage`（有測試鎖定）。
+
+### 4.2.2 對打與模型下載（已實作）
+
+- **遠端對打**（`play:remote`）：`play_start`、`play_act`、`play_state`、`play_list`、`play_replay`、`play_history`、`play_close` 指令。對局與模型推論都在 Coordinator 主機上執行，不經過 Worker Job，所以每個動作立即回應。模型從叢集模型庫讀取（sha256 檢查），網路權重有小型快取。
+- 每場對局屬於建立它的憑證：其他憑證（即使同樣有 `play:remote`）看不到、也不能操作；閒置 2 小時自動移除，每個憑證最多保留 3 場。
+- 對局進行中，回應只含自己的手牌與公開資訊；模型的決策說明（機率、Q 值）不隨動作送出，只在比賽結束後轉成重播時才出現。提示預設關閉，開啟後只解釋自己的位置。
+- 模型從哪裡來由 `SeatFactory` 決定（`tableforge.coordinator.play.ModelSeats`），之後改由專用推論節點提供時只要換一個 factory。
+- **模型下載**（`model:download`）：`download_model` 指令每次回傳 2 MB（base64），接收端依序組合，檢查大小與 sha256 後才存入；過程中叢集上的模型被替換會中止下載。
+- **本機對打**：`tableforge ui` 把下載的模型放在 `<home>/downloaded-models`，在本機推論，不需要連上叢集；權限在下載時檢查，之後離線可用。
 
 ### 4.3 專案與權限
 

@@ -1022,3 +1022,17 @@ input.narrow {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   font-size: 0.85em;
 }
+
+.hint {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+
+.inline-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+

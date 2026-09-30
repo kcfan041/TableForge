@@ -195,6 +195,55 @@ def test_grpc_checks_scopes_not_roles(cluster: Cluster) -> None:
     assert controller.create("hu-rule-smoke").status == "created"
 
 
+def test_models_download_in_verified_chunks_over_grpc(cluster: Cluster) -> None:
+    import os
+
+    from tableforge.domain.auth import Scope
+    from tableforge.models import ModelLibrary
+    from tableforge.transport.control_client import DownloadError, download_model
+    from tableforge.web.cluster import model_library_root
+
+    def remote(scopes: frozenset[Scope]) -> RemoteControl:
+        return RemoteControl(
+            OperatorCredentials(
+                cluster_id=str(cluster.repositories.auth.cluster_id(datetime.now(UTC))),
+                address=cluster.address,
+                ca_certificate=cluster.tls.certificate_path.read_text(encoding="utf-8"),
+                operator_id="",
+                token=cluster.repositories.auth.issue_operator(
+                    OperatorRole.CUSTOM, "x", datetime.now(UTC), timedelta(hours=1), scopes
+                ).token,
+                role="custom",
+            )
+        )
+
+    content = os.urandom(5 * 1024 * 1024 + 123)
+    shared = ModelLibrary(model_library_root(cluster.tmp))
+    shared.add("big", content, "nfsp", "6max-pko-10bb", description="five megabytes")
+    recipient = remote(frozenset({Scope.MODEL_READ, Scope.MODEL_DOWNLOAD}))
+    operator = remote(frozenset({Scope.MODEL_READ, Scope.EXPERIMENT_CONTROL, Scope.PLAY_REMOTE}))
+    mine = ModelLibrary(cluster.tmp / "mine")
+    progress: list[int] = []
+
+    info = download_model(recipient.command, "big", mine, lambda done, total: progress.append(done))
+
+    assert mine.checkpoint("big") == content and info.description == "five megabytes"
+    assert len(progress) == 3 and progress[-1] == len(content)
+    with pytest.raises(ControlError) as denied:
+        download_model(operator.command, "big", ModelLibrary(cluster.tmp / "other"))
+    assert denied.value.code == "ROLE_REQUIRED"
+
+    def tampered(action: str, arguments: dict[str, object]) -> dict[str, object]:
+        chunk = dict(recipient.command(action, arguments))
+        if chunk["offset"] == 0:
+            chunk["sha256"] = "0" * 64
+        return chunk
+
+    with pytest.raises(DownloadError, match="sha256|changed"):
+        download_model(tampered, "big", ModelLibrary(cluster.tmp / "tampered"))
+    assert ModelLibrary(cluster.tmp / "tampered").list() == []
+
+
 def test_cluster_documents_over_grpc_follow_roles(cluster: Cluster) -> None:
     def operator(role: OperatorRole, name: str) -> RemoteControl:
         code = cluster.invite(InviteScope(node=False, role=role))

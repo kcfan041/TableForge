@@ -43,6 +43,9 @@ class ViewError(Exception):
         self.status = status
 
 
+DOWNLOAD_CHUNK = 2 * 1024 * 1024
+"""Bytes per model download chunk (base64 grows it by a third; gRPC allows 8 MB)."""
+
 # Scope required by each query and command. Anything not listed is rejected.
 _READ = Scope.EXPERIMENT_READ
 QUERY_SCOPES: dict[str, Scope] = {
@@ -74,8 +77,18 @@ COMMAND_SCOPES: dict[str, Scope] = {
     "set_operator_scopes": Scope.ADMIN_MANAGE,
     "save_model": Scope.MODEL_MANAGE,
     "remove_model": Scope.ADMIN_MANAGE,
+    # Copy a model to your own computer (in chunks; the receiver checks the sha256).
+    "download_model": Scope.MODEL_DOWNLOAD,
     "request_replay": Scope.ANALYSIS_RUN,
     "request_strategy": Scope.ANALYSIS_RUN,
+    # Games against models on the cluster host; each game belongs to its creator.
+    "play_start": Scope.PLAY_REMOTE,
+    "play_list": Scope.PLAY_REMOTE,
+    "play_act": Scope.PLAY_REMOTE,
+    "play_state": Scope.PLAY_REMOTE,
+    "play_replay": Scope.PLAY_REMOTE,
+    "play_history": Scope.PLAY_REMOTE,
+    "play_close": Scope.PLAY_REMOTE,
 }
 
 
@@ -406,6 +419,10 @@ class ClusterViews:
             return {"revoked_sessions": auth.revoke_node(NodeId(str(arguments["node_id"])))}
         if action in ("save_model", "remove_model"):
             return self.model_command(action, arguments)
+        if action == "download_model":
+            return self.download_model(arguments)
+        if action.startswith("play_"):
+            return self.play_command(action, arguments, caller)
         if action in ("request_replay", "request_strategy"):
             from tableforge.coordinator.analysis import (
                 AnalysisError,
@@ -421,6 +438,54 @@ class ClusterViews:
             except (AnalysisError, ValueError, TypeError) as error:
                 raise ViewError(400, str(error)) from error
         raise ViewError(404, f"unknown action: {action}")
+
+    def play_command(
+        self, action: str, arguments: dict[str, Any], caller: OperatorIdentity
+    ) -> object:
+        from tableforge.coordinator.play import play_command, remote_play
+        from tableforge.learning.play import PlayError
+
+        service, seats = remote_play(self.services.settings.data_dir)
+        try:
+            return play_command(service, seats, str(caller.operator_id), action, arguments)
+        except KeyError as error:
+            raise ViewError(404, "no such game (it may have expired)") from error
+        except (PlayError, TypeError, ValueError) as error:
+            raise ViewError(400, str(error)) from error
+
+    def download_model(self, arguments: dict[str, Any]) -> dict[str, object]:
+        """One chunk of a model's checkpoint, base64 encoded, with its description.
+
+        The first call (offset 0) also returns the model description; the caller joins the
+        chunks and checks the result against `sha256` before using it.
+        """
+        import base64
+
+        from tableforge.coordinator.models import library, model_view
+
+        model_id = str(arguments.get("model_id", "")).strip()
+        offset = _int(str(arguments.get("offset", 0)), 0)
+        try:
+            info = library(self.services).info(model_id)
+            content = library(self.services).checkpoint(model_id)
+        except KeyError as error:
+            raise ViewError(404, f"no such model: {model_id}") from error
+        except ValueError as error:
+            raise ViewError(409, str(error)) from error
+        if not 0 <= offset <= len(content):
+            raise ViewError(400, "offset is outside the checkpoint")
+        chunk = content[offset : offset + DOWNLOAD_CHUNK]
+        document: dict[str, object] = {
+            "model_id": info.model_id,
+            "sha256": info.sha256,
+            "size_bytes": len(content),
+            "offset": offset,
+            "data": base64.b64encode(chunk).decode("ascii"),
+            "done": offset + len(chunk) >= len(content),
+        }
+        if offset == 0:
+            document["model"] = model_view(info)
+        return document
 
     def model_command(self, action: str, arguments: dict[str, Any]) -> object:
         from tableforge.coordinator.models import library, model_view, save_experiment_model

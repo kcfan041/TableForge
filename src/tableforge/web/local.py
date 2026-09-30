@@ -30,6 +30,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from tableforge.capability.cpu_topology import child_processes, set_affinity, spread_masks
+from tableforge.coordinator.play import ModelSeats
+from tableforge.learning.play import PlayService
+from tableforge.models import ModelLibrary
 from tableforge.processes import STOP_FILE_ENV, background_process_flags
 from tableforge.transport.control_client import ControlError, RemoteControl
 from tableforge.transport.credentials import RemoteCredentials
@@ -316,6 +319,8 @@ class LocalUiContext:
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")
     supervisor: CoordinatorSupervisor | None = None
     detect_tailscale: Callable[[], str | None] = tailscale_ipv4
+    models_dir: Path | None = None
+    """Downloaded models for local play (None: local play is off)."""
 
 
 class CreateClusterRequest(BaseModel):
@@ -447,6 +452,78 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             raise HTTPException(400, "arguments must be an object")
         return await asyncio.to_thread(remote, lambda client: client.command(action, arguments))
 
+    def local_library() -> ModelLibrary:
+        if context.models_dir is None:
+            raise HTTPException(409, "local play is not available in this panel")
+        return ModelLibrary(context.models_dir)
+
+    local_seats = ModelSeats(local_library)
+    local_play = PlayService(local_seats)
+
+    @app.get("/api/local/models")
+    def local_models() -> list[dict[str, object]]:
+        from tableforge.coordinator.models import model_view
+
+        return [model_view(info) for info in local_library().list()]
+
+    @app.post("/api/local/models/download")
+    async def download(request: Request) -> dict[str, object]:
+        from tableforge.coordinator.models import model_view
+        from tableforge.transport.control_client import DownloadError, download_model
+
+        body = await _json_object(request)
+        model_id = str(body.get("model_id", "")).strip()
+        target = local_library()
+
+        def run() -> dict[str, object]:
+            client = control()
+            try:
+                info = download_model(
+                    client.command, model_id, target, replace=bool(body.get("replace", False))
+                )
+            except ControlError as error:
+                raise HTTPException(_http_status(error.code), str(error)) from error
+            except FileExistsError as error:
+                raise HTTPException(409, f"model {model_id} is already on this computer") from error
+            except (DownloadError, ValueError) as error:
+                raise HTTPException(400, str(error)) from error
+            return model_view(info)
+
+        return await asyncio.to_thread(run)
+
+    @app.delete("/api/local/models/{model_id}")
+    def remove_local_model(model_id: str) -> dict[str, bool]:
+        try:
+            local_library().remove(model_id)
+        except KeyError as error:
+            raise HTTPException(404, "no such model on this computer") from error
+        return {"ok": True}
+
+    @app.post("/api/local/play/{action}")
+    async def play(action: str, request: Request) -> Any:
+        """Games against downloaded models, run on this computer (no cluster needed)."""
+        from tableforge.coordinator.play import PLAY_ACTIONS, play_command
+        from tableforge.learning.play import PlayError
+
+        if action not in PLAY_ACTIONS:
+            raise HTTPException(404, "unknown play action")
+        body = await _json_object(request)
+        local_library()
+
+        def run() -> Any:
+            try:
+                return play_command(local_play, local_seats, "local", action, body)
+            except KeyError as error:
+                raise HTTPException(404, "no such game (it may have expired)") from error
+            except ImportError as error:
+                raise HTTPException(
+                    409, "playing models needs PyTorch: install TableForge with --extra learning"
+                ) from error
+            except (PlayError, TypeError, ValueError) as error:
+                raise HTTPException(400, str(error)) from error
+
+        return await asyncio.to_thread(run)
+
     @app.get("/api/status")
     def get_status() -> dict[str, object]:
         return status()
@@ -570,6 +647,16 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             return HTMLResponse(html)
 
     return app
+
+
+async def _json_object(request: Request) -> dict[str, Any]:
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except json.JSONDecodeError as error:
+        raise HTTPException(400, "arguments must be JSON") from error
+    if not isinstance(body, dict):
+        raise HTTPException(400, "arguments must be an object")
+    return body
 
 
 def _role_scopes(role: str) -> list[str]:

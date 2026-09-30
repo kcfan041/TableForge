@@ -23,7 +23,13 @@ from tableforge.poker.table import (
     TableResult,
     TableRunner,
 )
-from tableforge.poker.tournament import Tournament, TournamentConfig, TournamentHandInfo
+from tableforge.poker.tournament import (
+    HandRecord,
+    Tournament,
+    TournamentConfig,
+    TournamentHandInfo,
+    TournamentResult,
+)
 
 REPLAY_PAYLOAD_TYPE = "tableforge.v1.TournamentReplayJobPayload"
 REPLAY_SCHEMA = "tableforge.tournament-replay.v1"
@@ -115,19 +121,7 @@ class _Seat:
             else None
         )
         action = self.explainer.act(observation, legal, self.mode)
-        me = observation.players[observation.observer]
-        self.log.append(
-            {
-                "player": self.player,
-                "street": observation.street.name.lower(),
-                "pot": observation.pot,
-                "to_call": max(0, observation.current_bet - me.street_contribution),
-                "stack": me.stack,
-                "action": canonical_action(action, legal),
-                "amount": action.amount,
-                "explanation": explanation,
-            }
-        )
+        self.log.append(action_entry(self.player, observation, legal, action, explanation))
         return action
 
 
@@ -165,55 +159,91 @@ def play_replay(
         record = tournament.play_hand(seats, runner, record=True)
         assert record is not None and runner.last is not None
         hand, result = runner.last
-        hands.append(
-            {
-                "hand": record.hand_number + 1,
-                "level": record.level,
-                "small_blind": record.small_blind,
-                "big_blind": record.big_blind,
-                "ante": record.ante,
-                "button": record.button_player,
-                "players": list(record.seat_players),
-                "stacks_before": list(record.stacks_before),
-                "stacks_after": list(record.stacks_after),
-                "bounties_before": [round(value, 6) for value in record.bounties_before],
-                "bounties_after": [round(value, 6) for value in record.bounties_after],
-                "icm_before": [round(value, 6) for value in record.icm_before],
-                "icm_after": [round(value, 6) for value in record.icm_after],
-                "hole_cards": [[str(card) for card in cards] for cards in hand.hole_cards],
-                "board": [str(card) for card in hand.board],
-                "actions": list(log),
-                "busted": list(record.busted),
-                "knockouts": [
-                    {
-                        "eliminated": knockout.eliminated,
-                        "collector": knockout.collector,
-                        "cash": round(knockout.cash, 6),
-                        "added_to_bounty": round(knockout.added_to_bounty, 6),
-                    }
-                    for knockout in record.knockouts
-                ],
-                "showdown": not result.ended_by_fold,
-                "winners": [record.seat_players[index] for index in result.winners]
-                if not result.ended_by_fold
-                else [
-                    record.seat_players[index]
-                    for index, payout in enumerate(result.payouts)
-                    if payout > 0
-                ],
-            }
-        )
+        hands.append(hand_document(record, hand, result, log))
         if on_progress is not None:
             on_progress(len(hands))
         if len(hands) > MAX_REPLAY_HANDS:
             raise RuntimeError("replay is longer than the hand limit")
-    final = tournament.finish()
+    return replay_document(config, seed, labels, hands, tournament.finish())
+
+
+def action_entry(
+    player: int,
+    observation: TableObservation,
+    legal: LegalActions,
+    action: Action,
+    explanation: dict[str, object] | None,
+) -> dict[str, object]:
+    """One decision in a replay (who, when, what, and the model's explanation if any)."""
+    me = observation.players[observation.observer]
+    return {
+        "player": player,
+        "street": observation.street.name.lower(),
+        "pot": observation.pot,
+        "to_call": max(0, observation.current_bet - me.street_contribution),
+        "stack": me.stack,
+        "action": canonical_action(action, legal),
+        "amount": action.amount,
+        "explanation": explanation,
+    }
+
+
+def hand_document(
+    record: HandRecord,
+    hand: TableHand,
+    result: TableResult,
+    actions: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    """One finished hand of a replay, with every hole card."""
+    return {
+        "hand": record.hand_number + 1,
+        "level": record.level,
+        "small_blind": record.small_blind,
+        "big_blind": record.big_blind,
+        "ante": record.ante,
+        "button": record.button_player,
+        "players": list(record.seat_players),
+        "stacks_before": list(record.stacks_before),
+        "stacks_after": list(record.stacks_after),
+        "bounties_before": [round(value, 6) for value in record.bounties_before],
+        "bounties_after": [round(value, 6) for value in record.bounties_after],
+        "icm_before": [round(value, 6) for value in record.icm_before],
+        "icm_after": [round(value, 6) for value in record.icm_after],
+        "hole_cards": [[str(card) for card in cards] for cards in hand.hole_cards],
+        "board": [str(card) for card in hand.board],
+        "actions": list(actions),
+        "busted": list(record.busted),
+        "knockouts": [
+            {
+                "eliminated": knockout.eliminated,
+                "collector": knockout.collector,
+                "cash": round(knockout.cash, 6),
+                "added_to_bounty": round(knockout.added_to_bounty, 6),
+            }
+            for knockout in record.knockouts
+        ],
+        "showdown": not result.ended_by_fold,
+        "winners": [record.seat_players[index] for index in result.winners]
+        if not result.ended_by_fold
+        else [
+            record.seat_players[index] for index, payout in enumerate(result.payouts) if payout > 0
+        ],
+    }
+
+
+def replay_document(
+    config: TournamentConfig,
+    seed: int,
+    labels: Sequence[str],
+    hands: Sequence[dict[str, object]],
+    final: TournamentResult,
+) -> dict[str, object]:
     return {
         "schema_version": REPLAY_SCHEMA,
         "config": json.loads(config.to_json()),
         "seed": seed,
         "labels": list(labels),
-        "hands": hands,
+        "hands": list(hands),
         "result": {
             "places": list(final.places),
             "prizes": [round(value, 6) for value in final.prizes],

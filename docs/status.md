@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：605 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：627 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -449,6 +449,20 @@
   - 每一個查詢與指令都測試「少了它需要的 scope 就被拒絕、只有那個 scope 就通過權限檢查」（HTTP 30 個組合）；gRPC 另測「只能下載」與「只能操作實驗」兩種憑證。
   - 升級前資料、自訂 scope 邀請碼、修改 scope 與事件、最後一個管理者不能被移除或撤銷。
   - 三個 `tableforge ui` 端對端測試通過；實際建立自訂 scope 與 model_recipient 邀請碼並截圖確認。
+
+### D1b–D1d 和模型對打（完成）
+- 規格見 [architecture/07-multi-party-and-trust.md](architecture/07-multi-party-and-trust.md) 4.2.2。
+- **引擎**：`Tournament.play_hand` 拆成 `begin_hand`／`finish_hand`，讓對局可以停在真人的回合；原本的行為不變（撲克與錦標賽測試全數通過）。
+- **對局**（`learning/play.py`）：`GameSession` 一個座位是真人，其他座位是模型或 Rule Bot；動作有蓋牌、過牌／跟注、加注到指定金額（附最小、半池、一池）、全下，並檢查是否合法。
+  - 進行中只看得到自己的手牌，攤牌時才看得到對手的牌；模型的決策說明不隨動作送出。
+  - 提示預設關閉；開啟後顯示模型在自己位置的機率與 Q 值。
+  - 打完可以轉成重播（和重播 Job 同格式，所有手牌與模型說明都看得到），牌譜隨時可以下載（文字）。
+- **遠端對打**（`play:remote`）：在 Coordinator 主機上執行，每場屬於建立它的憑證，閒置 2 小時移除。錦標賽規格預設用第一個模型訓練時的規格，也可以指定。
+- **模型下載**（`model:download`）：每塊 2 MB，完成後檢查 sha256；`tableforge ui` 存到 `<home>/downloaded-models`，**本機對打**用這裡的模型，不需要連上叢集。
+- **對打頁面**：座位設定（真人、模型與打法、Rule Bot）、人數、起始籌碼、seed、提示開關；牌桌、下注、上一手結果；結束後的名次與轉重播（重用重播頁的元件）；`tableforge ui` 內可以切換遠端或本機，並下載、更新、刪除本機模型。
+- 驗收：
+  - 單元與整合測試：只看得到自己的牌、動作檢查、提示、整場轉重播與牌譜、對局不能被其他憑證看到、沒有 `play:remote` 被拒絕、分塊下載（5 MB 模型分 3 塊）、竄改 sha256 時不存檔、`model:manage` 不能刪除模型。
+  - 實機（真實模型 `pko-10bb-nfsp-c1`、`pko-10bb-nfsp-s12`）：遠端開局約 5.5 秒（載入模型），之後每個動作約 4 ms；下載 31.7 MB 模型 2.1 秒且與叢集檔案完全相同；本機打完一整場並轉成重播；截圖確認頁面。
 
 ### C 對強對手的表現（達到驗收，有保留）
 - **驗收條件**（使用者定）：對模型池整體 ROI 的 95% 信賴區間下限 > 0；對混合 Rule Bot 不明顯退化。每個舊模型的對戰結果都記錄，但不要求每一個都不輸（策略之間可能互相剋制）。
@@ -898,7 +912,7 @@ uv run tableforge doctor
 
 依建議優先順序：
 
-1. **D1（下一個；B1、C 已完成）**：對打（遠端與本機模式），第一步先導入以 scope 表示的權限（`experiment:read`、`experiment:control`、`model:read`、`model:download`、`model:manage`、`analysis:run`、`play:remote`、`admin:manage`；角色只是常用組合）。
+1. **D1 已完成**（scope 權限、遠端與本機對打、模型下載、對打頁面）。下一步待使用者決定。
 2. **與測試者實機驗收**：S0 的程式、流程與指南已完成，等測試者可以配合時進行。測試者之間不做隔離；使用者、專案與隔離屬於完整版（S1–S5）。
 3. **PFSP**：依 matchup 勝率調整對手權重（目前為固定權重）。
 4. **多演算法同桌對戰**：新增 Deep CFR 與 PPO executor，加入 League 與 matchup matrix。

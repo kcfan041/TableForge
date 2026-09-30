@@ -85,6 +85,19 @@ def test_every_query_and_command_needs_exactly_its_scope(
     assert call(client, only, kind, name) != 403
 
 
+def test_model_manage_saves_but_only_admin_manage_deletes(
+    services: Services, client: TestClient
+) -> None:
+    manager = credential(services, frozenset({Scope.MODEL_READ, Scope.MODEL_MANAGE}))
+    operator = credential(services, ROLE_SCOPES[OperatorRole.OPERATOR])
+
+    assert COMMAND_SCOPES["save_model"] is Scope.MODEL_MANAGE
+    assert COMMAND_SCOPES["remove_model"] is Scope.ADMIN_MANAGE
+    assert call(client, manager, "command", "save_model") != 403
+    assert call(client, manager, "command", "remove_model") == 403
+    assert call(client, operator, "command", "remove_model") == 403
+
+
 def test_download_without_control_and_control_without_download(services: Services) -> None:
     auth = services.repositories.auth
     now = datetime.now(UTC)

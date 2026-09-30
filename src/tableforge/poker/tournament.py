@@ -265,6 +265,21 @@ class TournamentAware(Protocol):
     def begin_hand(self, info: TournamentHandInfo) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class StartedHand:
+    """A dealt tournament hand (`Tournament.begin_hand`); seats are table seats."""
+
+    hand: TableHand
+    agents: tuple[TableAgent, ...]
+    infos: tuple[TournamentHandInfo, ...]
+    level: int
+    seat_players: tuple[int, ...]
+    stacks_before: tuple[int, ...]
+    bounties_before: tuple[float, ...]
+    icm_before: tuple[float, ...]
+    record: bool
+
+
 # --- results ----------------------------------------------------------------------------
 
 
@@ -399,6 +414,19 @@ class Tournament:
     def play_hand(
         self, agents: Sequence[TableAgent], runner: HandRunner, record: bool = False
     ) -> HandRecord | None:
+        started = self.begin_hand(agents, record)
+        result = runner.run(started.hand, started.agents)
+        return self.finish_hand(started, result)
+
+    def begin_hand(self, agents: Sequence[TableAgent], record: bool = False) -> StartedHand:
+        """Deal the next hand and tell tournament-aware agents about it.
+
+        `play_hand` is `begin_hand`, playing `StartedHand.hand` to the end, then
+        `finish_hand`. The split lets a caller play the hand one action at a time (for
+        example while waiting for a human).
+        """
+        if self.complete:
+            raise AssertionError("tournament is over")
         config = self.config
         seat_players = tuple(self.alive)
         count = len(seat_players)
@@ -424,29 +452,49 @@ class Tournament:
             seed=f"{self.seed}:{self.hand_number}",
             big_blind_ante=level.ante,
         )
-        seat_agents = [agents[player] for player in seat_players]
+        seat_agents = tuple(agents[player] for player in seat_players)
+        infos = tuple(
+            TournamentHandInfo(
+                hand_number=self.hand_number,
+                level=level_number,
+                small_blind=level.small_blind,
+                big_blind=level.big_blind,
+                ante=level.ante,
+                hands_to_next_level=left,
+                hands_per_level=level.hands,
+                players_left=count,
+                starting_stack=config.starting_stack,
+                payout=config.payout,
+                seat=seat,
+                player=seat_players[seat],
+                seat_players=seat_players,
+                bounties=bounties_before,
+                starting_bounty=config.starting_bounty,
+            )
+            for seat in range(count)
+        )
         for seat, agent in enumerate(seat_agents):
             if isinstance(agent, TournamentAware):
-                agent.begin_hand(
-                    TournamentHandInfo(
-                        hand_number=self.hand_number,
-                        level=level_number,
-                        small_blind=level.small_blind,
-                        big_blind=level.big_blind,
-                        ante=level.ante,
-                        hands_to_next_level=left,
-                        hands_per_level=level.hands,
-                        players_left=count,
-                        starting_stack=config.starting_stack,
-                        payout=config.payout,
-                        seat=seat,
-                        player=seat_players[seat],
-                        seat_players=seat_players,
-                        bounties=bounties_before,
-                        starting_bounty=config.starting_bounty,
-                    )
-                )
-        result = runner.run(hand, seat_agents)
+                agent.begin_hand(infos[seat])
+        return StartedHand(
+            hand=hand,
+            agents=seat_agents,
+            infos=infos,
+            level=level_number,
+            seat_players=seat_players,
+            stacks_before=stacks_before,
+            bounties_before=bounties_before,
+            icm_before=icm_before,
+            record=record,
+        )
+
+    def finish_hand(self, started: StartedHand, result: TableResult) -> HandRecord | None:
+        """Apply a finished hand from `begin_hand` to the tournament."""
+        config = self.config
+        seat_players = started.seat_players
+        stacks_before = started.stacks_before
+        count = len(seat_players)
+        level = config.level_at(self.hand_number)[1]
         for seat, player in enumerate(seat_players):
             self.stacks[player] = result.final_stacks[seat]
         if sum(self.stacks) != config.starting_stack * config.players:
@@ -462,8 +510,11 @@ class Tournament:
                 knockouts = self._collect_bounties(busted, seat_players, result.pots)
             self._place(busted, count)
         self.hand_number += 1
-        if not record:
+        if not started.record:
             return None
+        level_number = started.level
+        icm_before = started.icm_before
+        bounties_before = started.bounties_before
         stacks_after = tuple(self.stacks[player] for player in seat_players)
         icm_after = tuple(
             self.prizes[player]
