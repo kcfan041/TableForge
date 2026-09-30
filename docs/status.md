@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：570 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：605 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -438,6 +438,17 @@
 - 驗收：
   - 測試 2 個（以假的 CPU 群組執行，Linux CI 也會跑）：依序分配 0、1、0；停止一個後新 Worker 補到較空的群組；關閉後不再綁定且設定會保存；單一群組時開關不可用。
   - 實機：在 `tableforge ui` 建立叢集並開 4 個 Worker，每個 Worker 的轉接程式與 Python 程序都綁在指定的 CCD（CCD0、CCD1、CCD0、CCD1）。
+
+### D1a 權限改以 scope 表示（完成）
+- 規格見 [architecture/07-multi-party-and-trust.md](architecture/07-multi-party-and-trust.md) 4.2.1。八個獨立的 scope：`experiment:read`、`experiment:control`、`model:read`、`model:download`、`model:manage`、`analysis:run`、`play:remote`、`admin:manage`；角色（viewer、operator、model_recipient、admin）只是常用組合。
+- 支援使用者要求的兩種情況：「可以看、可以下載模型，但不能操作實驗、不能遠端對打」（model_recipient 或自訂），以及「可以操作實驗、可以遠端對打，但不能下載模型」（operator）。
+- 「產生重播、策略表」需要 `analysis:run`，查看已產生的結果只需要 `model:read`；「存成模型」需要 `model:manage`，刪除模型需要 `admin:manage`。
+- 資料庫 schema 6：`operators.scopes` 欄位，空值代表角色的 scope，升級前的憑證權限不變（測試確認）。
+- 「邀請與憑證」頁可以選角色或逐項勾選 scope，列表顯示每個邀請碼與憑證的 scope，管理者可以直接修改；CLI `coordinator invite create --scopes model:read,model:download`。
+- 驗收：
+  - 每一個查詢與指令都測試「少了它需要的 scope 就被拒絕、只有那個 scope 就通過權限檢查」（HTTP 30 個組合）；gRPC 另測「只能下載」與「只能操作實驗」兩種憑證。
+  - 升級前資料、自訂 scope 邀請碼、修改 scope 與事件、最後一個管理者不能被移除或撤銷。
+  - 三個 `tableforge ui` 端對端測試通過；實際建立自訂 scope 與 model_recipient 邀請碼並截圖確認。
 
 ### C 對強對手的表現（達到驗收，有保留）
 - **驗收條件**（使用者定）：對模型池整體 ROI 的 95% 信賴區間下限 > 0；對混合 Rule Bot 不明顯退化。每個舊模型的對戰結果都記錄，但不要求每一個都不輸（策略之間可能互相剋制）。

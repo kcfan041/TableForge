@@ -114,10 +114,13 @@ class WhoAmIResponse(_message.Message):
     OPERATOR_ID_FIELD_NUMBER: _builtins.int
     ROLE_FIELD_NUMBER: _builtins.int
     LABEL_FIELD_NUMBER: _builtins.int
+    SCOPES_FIELD_NUMBER: _builtins.int
     cluster_id: _builtins.str
     operator_id: _builtins.str
     role: _builtins.str
     label: _builtins.str
+    @_builtins.property
+    def scopes(self) -> _containers.RepeatedScalarFieldContainer[_builtins.str]: ...
     def __init__(
         self,
         *,
@@ -125,10 +128,11 @@ class WhoAmIResponse(_message.Message):
         operator_id: _builtins.str = ...,
         role: _builtins.str = ...,
         label: _builtins.str = ...,
+        scopes: _abc.Iterable[_builtins.str] | None = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "label", b"label", "operator_id", b"operator_id", "role", b"role"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["cluster_id", b"cluster_id", "label", b"label", "operator_id", b"operator_id", "role", b"role", "scopes", b"scopes"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 

@@ -5,8 +5,9 @@ package tableforge.v1;
 import "google/protobuf/timestamp.proto";
 
 // Remote control plane for operators. Authenticated with an operator credential, never a
-// node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-// (operator + invites and revocation). GC, migrations and certificates stay host-only.
+// node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+// model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+// named scope combinations. GC, migrations and certificates stay host-only.
 service ControlService {
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
   rpc ListPresets(ListPresetsRequest) returns (ListPresetsResponse);
@@ -50,6 +51,7 @@ message WhoAmIResponse {
   string operator_id = 2;
   string role = 3;
   string label = 4;
+  repeated string scopes = 5;
 }
 
 message ListPresetsRequest {}

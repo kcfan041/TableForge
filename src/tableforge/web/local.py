@@ -425,6 +425,8 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
         return {
             "operator_id": me.operator_id,
             "role": me.role,
+            # Coordinators from before scopes send none; fall back to the role's scopes.
+            "scopes": list(me.scopes) or _role_scopes(me.role),
             "label": me.label,
             "cluster_id": me.cluster_id,
             "csrf_token": None,
@@ -568,6 +570,15 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
             return HTMLResponse(html)
 
     return app
+
+
+def _role_scopes(role: str) -> list[str]:
+    from tableforge.domain.auth import ROLE_SCOPES, OperatorRole
+
+    try:
+        return sorted(scope.value for scope in ROLE_SCOPES[OperatorRole(role)])
+    except ValueError:
+        return []
 
 
 def _http_status(code: str) -> int:

@@ -136,6 +136,11 @@ def main() -> None:
         choices=[role.value for role in INVITABLE_ROLES],
         help="also grant a remote control credential with this role",
     )
+    invite_create.add_argument(
+        "--scopes",
+        default="",
+        help="grant exactly these scopes instead of a role, e.g. model:read,model:download",
+    )
     invite_create.add_argument("--ttl-hours", type=float, default=24.0)
     invite_create.add_argument(
         "--confirm-admin",
@@ -764,7 +769,10 @@ def _coordinator_command(args: argparse.Namespace, services: Services) -> None:
     elif args.coordinator_command == "operator":
         if args.operator_command == "list":
             for identity in auth.list_operators():
-                print(f"{identity.operator_id}\t{identity.role.value}\t{identity.label}")
+                print(
+                    f"{identity.operator_id}\t{identity.role.value}\t"
+                    f"{','.join(identity.scope_list())}\t{identity.label}"
+                )
         elif not auth.revoke_operator(OperatorId(args.operator_id)):
             raise SystemExit(f"no active operator credential {args.operator_id}")
         else:
@@ -918,10 +926,17 @@ def _invite_command(args: argparse.Namespace, services: Services) -> None:
             raise SystemExit(f"no open invite {args.invite_id}")
         print(f"{args.invite_id}\trevoked")
         return
+    from tableforge.domain.auth import parse_scopes
+
     try:
-        scope = InviteScope(node=args.node, role=OperatorRole(args.role) if args.role else None)
+        custom = parse_scopes(args.scopes) if args.scopes else None
+        scope = InviteScope(
+            node=args.node,
+            role=OperatorRole(args.role) if args.role else None,
+            custom_scopes=custom,
+        )
     except ValueError as error:
-        raise SystemExit("choose --node, --role, or both") from error
+        raise SystemExit(f"choose --node, --role or --scopes ({error})") from error
     try:
         issued = issue_invite(
             auth,

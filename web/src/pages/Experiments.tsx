@@ -1,14 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { api, ApiError, type Preset, type Session, type TrainingOptions } from "../api";
+import { api, ApiError, can, type Preset, type Session, type TrainingOptions } from "../api";
 import { Card, Counts, LoadState, Page, ShortId, StatusBadge } from "../components";
 import { useI18n, type MessageKey } from "../i18n";
 import { useLiveData } from "../live";
 import { TournamentForm, type TournamentChoice } from "./TournamentForm";
 
+/** May create, start and stop experiments (`experiment:control`). */
 export function canOperate(session: Session): boolean {
-  return session.role === "operator" || session.role === "admin";
+  return can(session, "experiment:control");
 }
 
 export function KindLabel({ kind }: { kind: string }) {

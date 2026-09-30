@@ -28,8 +28,9 @@ GRPC_VERSION: str
 
 class ControlServiceStub:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-    (operator + invites and revocation). GC, migrations and certificates stay host-only.
+    node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+    model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+    named scope combinations. GC, migrations and certificates stay host-only.
     """
 
     @_typing.overload
@@ -55,8 +56,9 @@ class ControlServiceStub:
 @_typing.type_check_only
 class ControlServiceAsyncStub(ControlServiceStub):
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-    (operator + invites and revocation). GC, migrations and certificates stay host-only.
+    node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+    model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+    named scope combinations. GC, migrations and certificates stay host-only.
     """
 
     def __init__(self, channel: _aio.Channel) -> None: ...
@@ -78,8 +80,9 @@ class ControlServiceAsyncStub(ControlServiceStub):
 
 class ControlServiceServicer(metaclass=_abc_1.ABCMeta):
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-    (operator + invites and revocation). GC, migrations and certificates stay host-only.
+    node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+    model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+    named scope combinations. GC, migrations and certificates stay host-only.
     """
 
     @_abc_1.abstractmethod

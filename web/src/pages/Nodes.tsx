@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { api, ApiError, type Session } from "../api";
+import { api, ApiError, can, type Session } from "../api";
 import { formatBytes, LoadState, Page, ShortId, StatusBadge } from "../components";
 import { useI18n } from "../i18n";
 import { useLiveData } from "../live";
@@ -40,7 +40,7 @@ export function Nodes({ session }: { session: Session }) {
                     <th>{t("nodes.gpu")}</th>
                     <th>{t("nodes.workers")}</th>
                     <th>{t("nodes.heartbeat")}</th>
-                    {session.role === "admin" ? <th /> : null}
+                    {can(session, "admin:manage") ? <th /> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -98,7 +98,7 @@ export function Nodes({ session }: { session: Session }) {
                         )}
                       </td>
                       <td className="nowrap">{formatDate(node.last_heartbeat_at)}</td>
-                      {session.role === "admin" ? (
+                      {can(session, "admin:manage") ? (
                         <td>
                           <button type="button" className="danger" onClick={() => void revoke(node.node_id)}>
                             {t("nodes.revoke")}

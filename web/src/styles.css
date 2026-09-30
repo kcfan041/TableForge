@@ -1006,3 +1006,19 @@ input.narrow {
 .range-detail {
   min-width: 240px;
 }
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.scope-tag {
+  display: inline-block;
+  margin: 0 0.25rem 0.2rem 0;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 0.85em;
+}

@@ -15,7 +15,14 @@ from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from tableforge.composition import Services
-from tableforge.domain.auth import InviteScope, OperatorIdentity, OperatorRole
+from tableforge.domain.auth import (
+    ROLE_SCOPES,
+    InviteScope,
+    OperatorIdentity,
+    OperatorRole,
+    Scope,
+    parse_scopes,
+)
 from tableforge.domain.experiments import BUILTIN_PRESETS, Experiment
 from tableforge.domain.ids import AgentId, ExperimentId, InviteId, NodeId, OperatorId
 from tableforge.infrastructure.sql.events import DomainEvent
@@ -36,37 +43,47 @@ class ViewError(Exception):
         self.status = status
 
 
-# Minimum role for each query and command. Anything not listed is rejected.
-QUERY_ROLES: dict[str, OperatorRole] = {
-    "overview": OperatorRole.VIEWER,
-    "nodes": OperatorRole.VIEWER,
-    "presets": OperatorRole.VIEWER,
-    "training_options": OperatorRole.VIEWER,
-    "experiments": OperatorRole.VIEWER,
-    "experiment": OperatorRole.VIEWER,
-    "matrix": OperatorRole.VIEWER,
-    "checkpoints": OperatorRole.VIEWER,
-    "events": OperatorRole.VIEWER,
-    "events_after": OperatorRole.VIEWER,
-    "diagnostics": OperatorRole.VIEWER,
-    "invites": OperatorRole.ADMIN,
-    "operators": OperatorRole.ADMIN,
-    "models": OperatorRole.VIEWER,
-    "analysis": OperatorRole.VIEWER,
+# Scope required by each query and command. Anything not listed is rejected.
+_READ = Scope.EXPERIMENT_READ
+QUERY_SCOPES: dict[str, Scope] = {
+    "overview": _READ,
+    "nodes": _READ,
+    "presets": _READ,
+    "training_options": _READ,
+    "experiments": _READ,
+    "experiment": _READ,
+    "matrix": _READ,
+    "checkpoints": _READ,
+    "events": _READ,
+    "events_after": _READ,
+    "diagnostics": _READ,
+    "invites": Scope.ADMIN_MANAGE,
+    "operators": Scope.ADMIN_MANAGE,
+    "scopes": _READ,
+    "models": Scope.MODEL_READ,
+    "analysis": Scope.MODEL_READ,
 }
-COMMAND_ROLES: dict[str, OperatorRole] = {
-    "create_experiment": OperatorRole.OPERATOR,
-    "start_experiment": OperatorRole.OPERATOR,
-    "stop_experiment": OperatorRole.OPERATOR,
-    "create_invite": OperatorRole.ADMIN,
-    "revoke_invite": OperatorRole.ADMIN,
-    "revoke_operator": OperatorRole.ADMIN,
-    "revoke_node": OperatorRole.ADMIN,
-    "save_model": OperatorRole.OPERATOR,
-    "remove_model": OperatorRole.OPERATOR,
-    "request_replay": OperatorRole.OPERATOR,
-    "request_strategy": OperatorRole.OPERATOR,
+COMMAND_SCOPES: dict[str, Scope] = {
+    "create_experiment": Scope.EXPERIMENT_CONTROL,
+    "start_experiment": Scope.EXPERIMENT_CONTROL,
+    "stop_experiment": Scope.EXPERIMENT_CONTROL,
+    "create_invite": Scope.ADMIN_MANAGE,
+    "revoke_invite": Scope.ADMIN_MANAGE,
+    "revoke_operator": Scope.ADMIN_MANAGE,
+    "revoke_node": Scope.ADMIN_MANAGE,
+    "set_operator_scopes": Scope.ADMIN_MANAGE,
+    "save_model": Scope.MODEL_MANAGE,
+    "remove_model": Scope.ADMIN_MANAGE,
+    "request_replay": Scope.ANALYSIS_RUN,
+    "request_strategy": Scope.ANALYSIS_RUN,
 }
+
+
+def missing_scope(required: Scope, identity: OperatorIdentity) -> str | None:
+    """Why `identity` may not do something that needs `required` (None when it may)."""
+    if identity.has(required):
+        return None
+    return f"requires the {required.value} permission, which this credential does not have"
 
 
 @dataclass(frozen=True)
@@ -106,6 +123,8 @@ class ClusterViews:
             return self.invites()
         if resource == "operators":
             return self.operators(caller)
+        if resource == "scopes":
+            return self.scope_catalog(caller)
         if resource == "models":
             from tableforge.coordinator.models import library, model_view
 
@@ -299,6 +318,9 @@ class ClusterViews:
             {
                 "invite_id": str(item.invite_id),
                 "scope": item.scope.encode(),
+                "role": item.scope.operator_role.value if item.scope.operator_role else None,
+                "scopes": sorted(scope.value for scope in item.scope.scopes),
+                "node": item.scope.node,
                 "label": item.label,
                 "created_at": _iso(item.created_at),
                 "expires_at": _iso(item.expires_at),
@@ -315,11 +337,24 @@ class ClusterViews:
             for item in sorted(auth.list_invites(), key=lambda item: item.created_at, reverse=True)
         ]
 
+    def scope_catalog(self, caller: OperatorIdentity) -> dict[str, object]:
+        """Every scope, the role presets, and the caller's own scopes (for the UI)."""
+        return {
+            "scopes": [scope.value for scope in Scope],
+            "roles": {
+                role.value: sorted(scope.value for scope in scopes)
+                for role, scopes in ROLE_SCOPES.items()
+                if role is not OperatorRole.CUSTOM
+            },
+            "mine": caller.scope_list(),
+        }
+
     def operators(self, caller: OperatorIdentity) -> list[dict[str, object]]:
         return [
             {
                 "operator_id": str(record.identity.operator_id),
                 "role": record.identity.role.value,
+                "scopes": record.identity.scope_list(),
                 "label": record.identity.label,
                 "created_at": _iso(record.created_at),
                 "expires_at": _iso(record.expires_at),
@@ -331,6 +366,12 @@ class ClusterViews:
     # --- commands ------------------------------------------------------------------------
 
     def command(self, action: str, arguments: dict[str, Any], caller: OperatorIdentity) -> Any:
+        try:
+            return self._command(action, arguments, caller)
+        except KeyError as error:
+            raise ViewError(400, f"missing argument: {error.args[0]}") from error
+
+    def _command(self, action: str, arguments: dict[str, Any], caller: OperatorIdentity) -> Any:
         now = self.clock.now()
         experiments = self.services.experiments
         auth = self.services.repositories.auth
@@ -352,9 +393,15 @@ class ClusterViews:
             operator_id = str(arguments["operator_id"])
             if operator_id == str(caller.operator_id):
                 raise ViewError(400, "you cannot revoke the credential you are signed in with")
-            if not auth.revoke_operator(OperatorId(operator_id)):
+            try:
+                revoked = auth.revoke_operator(OperatorId(operator_id))
+            except ValueError as error:
+                raise ViewError(409, str(error)) from error
+            if not revoked:
                 raise ViewError(404, "no active credential with that id")
             return {"ok": True}
+        if action == "set_operator_scopes":
+            return self.set_operator_scopes(arguments, caller, now)
         if action == "revoke_node":
             return {"revoked_sessions": auth.revoke_node(NodeId(str(arguments["node_id"])))}
         if action in ("save_model", "remove_model"):
@@ -460,17 +507,50 @@ class ClusterViews:
             "presets": presets,
         }
 
+    def set_operator_scopes(
+        self, arguments: dict[str, Any], caller: OperatorIdentity, now: datetime
+    ) -> dict[str, object]:
+        """Give an operator credential exactly these scopes (a role name or a scope list)."""
+        operator_id = OperatorId(str(arguments.get("operator_id", "")))
+        try:
+            scopes = _requested_scopes(arguments)
+        except ValueError as error:
+            raise ViewError(400, str(error)) from error
+        if scopes is None or not scopes:
+            raise ViewError(400, "give a role or at least one scope")
+        if operator_id == caller.operator_id and Scope.ADMIN_MANAGE not in scopes:
+            raise ViewError(400, "you cannot remove admin:manage from your own credential")
+        try:
+            identity = self.services.repositories.auth.set_operator_scopes(operator_id, scopes, now)
+        except KeyError as error:
+            raise ViewError(404, "no active credential with that id") from error
+        except ValueError as error:
+            raise ViewError(409, str(error)) from error
+        return {
+            "operator_id": str(identity.operator_id),
+            "role": identity.role.value,
+            "scopes": identity.scope_list(),
+        }
+
     def create_invite(self, arguments: dict[str, Any]) -> dict[str, object]:
         from tableforge.transport.invite_issue import InviteIssueError
 
         role_value = arguments.get("role")
-        role = OperatorRole(role_value) if role_value else None
+        try:
+            role = OperatorRole(role_value) if role_value else None
+            custom = parse_scopes(arguments["scopes"]) if arguments.get("scopes") else None
+        except ValueError as error:
+            raise ViewError(400, str(error)) from error
+        if custom is not None and role is not None:
+            raise ViewError(400, "choose a role or a list of scopes, not both")
         ttl_hours = float(arguments.get("ttl_hours", 24.0))
         if not 0 < ttl_hours <= 24 * 30:
             raise ViewError(400, "the invite lifetime must be between 0 and 720 hours")
         address = str(arguments.get("address") or "").strip() or self.advertised_address()
         try:
-            scope = InviteScope(node=bool(arguments.get("node", False)), role=role)
+            scope = InviteScope(
+                node=bool(arguments.get("node", False)), role=role, custom_scopes=custom
+            )
             issued = issue_invite(
                 self.services.repositories.auth,
                 self.services.settings,
@@ -595,3 +675,16 @@ def event_view(event: DomainEvent) -> dict[str, object]:
         "payload": event.payload,
         "occurred_at": _iso(event.occurred_at),
     }
+
+
+def _requested_scopes(arguments: dict[str, Any]) -> frozenset[Scope] | None:
+    """Scopes from ``{"role": "operator"}`` or ``{"scopes": [...]}`` (None when neither)."""
+    if arguments.get("scopes"):
+        return parse_scopes(arguments["scopes"])
+    role = arguments.get("role")
+    if role:
+        preset = OperatorRole(str(role))
+        if preset is OperatorRole.CUSTOM:
+            raise ValueError("give the scopes of a custom credential explicitly")
+        return ROLE_SCOPES[preset]
+    return None

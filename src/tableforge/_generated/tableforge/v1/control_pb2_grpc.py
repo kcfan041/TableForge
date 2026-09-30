@@ -27,8 +27,9 @@ if _version_not_supported:
 
 class ControlServiceStub:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-    (operator + invites and revocation). GC, migrations and certificates stay host-only.
+    node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+    model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+    named scope combinations. GC, migrations and certificates stay host-only.
     """
 
     def __init__(self, channel):
@@ -101,8 +102,9 @@ class ControlServiceStub:
 
 class ControlServiceServicer:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-    (operator + invites and revocation). GC, migrations and certificates stay host-only.
+    node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+    model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+    named scope combinations. GC, migrations and certificates stay host-only.
     """
 
     def WhoAmI(self, request, context):
@@ -252,8 +254,9 @@ def add_ControlServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class ControlService:
     """Remote control plane for operators. Authenticated with an operator credential, never a
-    node session. Roles: viewer (read), operator (read + create/start/stop) and admin
-    (operator + invites and revocation). GC, migrations and certificates stay host-only.
+    node session. Every call needs a scope (experiment:read, experiment:control, model:read,
+    model:download, model:manage, analysis:run, play:remote, admin:manage); roles are only
+    named scope combinations. GC, migrations and certificates stay host-only.
     """
 
     @staticmethod

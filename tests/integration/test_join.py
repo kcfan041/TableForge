@@ -158,6 +158,43 @@ def test_join_node_and_operator_then_work_and_control(cluster: Cluster) -> None:
     assert control.get(experiment.experiment_id).job_counts["succeeded"] == 1
 
 
+def test_grpc_checks_scopes_not_roles(cluster: Cluster) -> None:
+    from tableforge.domain.auth import Scope
+
+    def remote(scopes: frozenset[Scope]) -> RemoteControl:
+        return RemoteControl(
+            OperatorCredentials(
+                cluster_id=str(cluster.repositories.auth.cluster_id(datetime.now(UTC))),
+                address=cluster.address,
+                ca_certificate=cluster.tls.certificate_path.read_text(encoding="utf-8"),
+                operator_id="",
+                token=cluster.repositories.auth.issue_operator(
+                    OperatorRole.CUSTOM, "x", datetime.now(UTC), timedelta(hours=1), scopes
+                ).token,
+                role="custom",
+            )
+        )
+
+    downloader = remote(frozenset({Scope.MODEL_READ, Scope.MODEL_DOWNLOAD}))
+    controller = remote(frozenset({Scope.EXPERIMENT_READ, Scope.EXPERIMENT_CONTROL}))
+
+    me = downloader.whoami()
+    assert set(me.scopes) == {"model:read", "model:download"} and me.role == "custom"
+    assert downloader.query("models") == []
+    for denied in (
+        lambda: downloader.query("overview"),
+        lambda: downloader.command("create_experiment", {"preset": "hu-rule-smoke"}),
+        lambda: controller.query("models"),
+        lambda: controller.command("remove_model", {"model_id": "x"}),
+    ):
+        with pytest.raises(ControlError) as error:
+            denied()
+        assert error.value.code == "ROLE_REQUIRED"
+    created = controller.command("create_experiment", {"preset": "hu-rule-smoke"})
+    assert created["status"] == "created"
+    assert controller.create("hu-rule-smoke").status == "created"
+
+
 def test_cluster_documents_over_grpc_follow_roles(cluster: Cluster) -> None:
     def operator(role: OperatorRole, name: str) -> RemoteControl:
         code = cluster.invite(InviteScope(node=False, role=role))

@@ -1,8 +1,26 @@
-export type Role = "viewer" | "operator" | "admin";
+export type Role = "viewer" | "operator" | "model_recipient" | "admin" | "custom";
+
+export const SCOPES = [
+  "experiment:read",
+  "experiment:control",
+  "model:read",
+  "model:download",
+  "model:manage",
+  "analysis:run",
+  "play:remote",
+  "admin:manage",
+] as const;
+export type ScopeName = (typeof SCOPES)[number];
+
+/** Whether the signed-in credential has a scope (roles are only labels). */
+export function can(session: Session, scope: ScopeName): boolean {
+  return (session.scopes ?? []).includes(scope);
+}
 
 export interface Session {
   operator_id: string;
   role: Role;
+  scopes?: string[];
   label: string;
   cluster_id: string;
   csrf_token: string | null;
@@ -230,6 +248,8 @@ export interface Diagnostics {
 }
 
 export interface InviteView {
+  scopes?: string[];
+  role?: string | null;
   invite_id: string;
   scope: string;
   label: string;
@@ -249,6 +269,7 @@ export interface CreatedInvite {
 }
 
 export interface OperatorView {
+  scopes?: string[];
   operator_id: string;
   role: Role;
   label: string;
@@ -315,6 +336,7 @@ export interface InviteRequest {
   address?: string;
   node: boolean;
   role: Role | null;
+  scopes?: string[];
   ttl_hours: number;
   label: string;
   confirm_admin?: boolean;
@@ -377,6 +399,8 @@ const coordinatorApi = {
       "POST",
       `/api/admin/nodes/${encodeURIComponent(id)}/revoke`,
     ),
+  setOperatorScopes: (id: string, scopes: string[]) =>
+    coordinatorCommand<{ role: Role; scopes: string[] }>("set_operator_scopes", { operator_id: id, scopes }),
 };
 
 const localApi: typeof coordinatorApi = {
@@ -407,6 +431,8 @@ const localApi: typeof coordinatorApi = {
   operators: () => query<OperatorView[]>("operators"),
   revokeOperator: (id) => command<{ ok: boolean }>("revoke_operator", { operator_id: id }),
   revokeNode: (id) => command<{ revoked_sessions: number }>("revoke_node", { node_id: id }),
+  setOperatorScopes: (id, scopes) =>
+    command<{ role: Role; scopes: string[] }>("set_operator_scopes", { operator_id: id, scopes }),
 };
 
 export const api = localMode ? localApi : coordinatorApi;

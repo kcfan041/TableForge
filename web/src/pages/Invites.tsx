@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { api, ApiError, type CreatedInvite, type Role, type Session } from "../api";
+import { api, ApiError, can, SCOPES, type CreatedInvite, type Role, type Session } from "../api";
 import { Card, CopyButton, LoadState, Page, ShortId, StatusBadge } from "../components";
 import { useI18n, type MessageKey } from "../i18n";
 import { useLiveData } from "../live";
@@ -10,13 +10,14 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
   const [address, setAddress] = useState("");
   const [node, setNode] = useState(true);
   const [role, setRole] = useState<Role | "">("operator");
+  const [custom, setCustom] = useState<string[]>(["experiment:read", "model:read"]);
   const [ttl, setTtl] = useState(24);
   const [label, setLabel] = useState("");
   const [confirmAdmin, setConfirmAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedInvite | null>(null);
-  const isAdmin = role === "admin";
+  const isAdmin = role === "admin" || (role === "custom" && custom.includes("admin:manage"));
 
   useEffect(() => {
     void api.diagnostics().then((data) => {
@@ -33,7 +34,7 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!node && !role) {
+    if ((!node && !role) || (role === "custom" && custom.length === 0)) {
       setError(t("invites.needScope"));
       return;
     }
@@ -49,7 +50,8 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
         await api.createInvite({
           address: address.trim(),
           node,
-          role: role || null,
+          role: role && role !== "custom" ? role : null,
+          scopes: role === "custom" ? custom : undefined,
           ttl_hours: ttl,
           label: label.trim(),
           confirm_admin: confirmAdmin,
@@ -79,10 +81,13 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
             <option value="">{t("invites.roleNone")}</option>
             <option value="viewer">{t("role.viewer")}</option>
             <option value="operator">{t("role.operator")}</option>
+            <option value="model_recipient">{t("role.model_recipient")}</option>
             <option value="admin">{t("role.admin")}</option>
+            <option value="custom">{t("role.custom")}</option>
           </select>
           <span className="muted small">{t(`invites.roleHelp.${role || "none"}` as MessageKey)}</span>
         </label>
+        {role === "custom" ? <ScopePicker value={custom} onChange={setCustom} /> : null}
         {isAdmin ? (
           <label className="checkbox warning-box">
             <input
@@ -150,13 +155,90 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+export function ScopePicker({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="scope-grid">
+      {SCOPES.map((scope) => (
+        <label key={scope} className="checkbox small">
+          <input
+            type="checkbox"
+            checked={value.includes(scope)}
+            onChange={(event) =>
+              onChange(event.target.checked ? [...value, scope] : value.filter((item) => item !== scope))
+            }
+          />
+          <span>
+            <code>{scope}</code> {t(`scope.${scope}` as MessageKey)}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function OperatorScopes({
+  operator,
+  onSaved,
+}: {
+  operator: { operator_id: string; scopes?: string[]; current: boolean };
+  onSaved: () => void;
+}) {
+  const { t } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState<string[]>(operator.scopes ?? []);
+  const [error, setError] = useState<string | null>(null);
+  if (!editing) {
+    return (
+      <>
+        <span className="small">
+          {(operator.scopes ?? []).map((scope) => (
+            <code key={scope} className="scope-tag">
+              {scope}
+            </code>
+          ))}
+        </span>{" "}
+        <button type="button" className="link" onClick={() => setEditing(true)}>
+          {t("invites.editScopes")}
+        </button>
+      </>
+    );
+  }
+  return (
+    <div>
+      <ScopePicker value={value} onChange={setValue} />
+      <div className="row">
+        <button
+          type="button"
+          className="primary"
+          onClick={() =>
+            void api
+              .setOperatorScopes(operator.operator_id, value)
+              .then(() => {
+                setEditing(false);
+                onSaved();
+              })
+              .catch((reason: unknown) => setError(reason instanceof ApiError ? reason.message : String(reason)))
+          }
+        >
+          {t("invites.saveScopes")}
+        </button>
+        <button type="button" onClick={() => setEditing(false)}>
+          {t("common.cancel")}
+        </button>
+      </div>
+      {error ? <p className="error small">{error}</p> : null}
+    </div>
+  );
+}
+
 export function Invites({ session }: { session: Session }) {
   const { t, formatDate } = useI18n();
   const invites = useLiveData(api.invites);
   const operators = useLiveData(api.operators);
   const [error, setError] = useState<string | null>(null);
 
-  if (session.role !== "admin") {
+  if (!can(session, "admin:manage")) {
     return (
       <Page title={t("invites.title")}>
         <p className="notice">{t("invites.adminOnly")}</p>
@@ -209,7 +291,15 @@ export function Invites({ session }: { session: Session }) {
                           <ShortId id={invite.invite_id} />
                         </td>
                         <td>
-                          <code>{invite.scope}</code>
+                          {invite.role ? t(`role.${invite.role}` as MessageKey) : null}
+                          <div className="small">
+                            {(invite.scopes ?? []).map((scope) => (
+                              <code key={scope} className="scope-tag">
+                                {scope}
+                              </code>
+                            ))}
+                            {invite.scope.includes("node") ? <code className="scope-tag">node</code> : null}
+                          </div>
                         </td>
                         <td>{invite.label}</td>
                         <td>
@@ -250,6 +340,7 @@ export function Invites({ session }: { session: Session }) {
                   <tr>
                     <th>ID</th>
                     <th>{t("invites.role")}</th>
+                    <th>{t("invites.scopes")}</th>
                     <th>{t("invites.label")}</th>
                     <th>{t("experiments.created")}</th>
                     <th>{t("invites.expires")}</th>
@@ -263,6 +354,9 @@ export function Invites({ session }: { session: Session }) {
                         <ShortId id={operator.operator_id} />
                       </td>
                       <td>{t(`role.${operator.role}` as MessageKey)}</td>
+                      <td>
+                        <OperatorScopes operator={operator} onSaved={operators.reload} />
+                      </td>
                       <td>
                         {operator.label} {operator.current ? <span className="muted">{t("invites.current")}</span> : null}
                       </td>

@@ -27,16 +27,17 @@ from pydantic import BaseModel, Field
 
 from tableforge.application.ports import IdempotencyConflictError, JobNotFoundError
 from tableforge.composition import Services
-from tableforge.domain.auth import AuthenticationError, OperatorIdentity, OperatorRole
+from tableforge.domain.auth import AuthenticationError, OperatorIdentity, OperatorRole, Scope
 from tableforge.transport.invite import InviteCode, InviteFormatError
 from tableforge.version import package_version
 from tableforge.web.views import (
-    COMMAND_ROLES,
-    QUERY_ROLES,
+    COMMAND_SCOPES,
+    QUERY_SCOPES,
     Clock,
     ClusterViews,
     ViewError,
     event_view,
+    missing_scope,
 )
 
 SESSION_COOKIE = "tf_session"
@@ -104,6 +105,7 @@ class CreateInviteRequest(BaseModel):
     address: str = Field(default="", max_length=300)
     node: bool = False
     role: OperatorRole | None = None
+    scopes: list[str] | None = Field(default=None, max_length=20)
     ttl_hours: float = Field(default=24.0, gt=0, le=24 * 30)
     label: str = Field(default="", max_length=200)
     confirm_admin: bool = False
@@ -173,31 +175,23 @@ def create_app(context: WebContext) -> FastAPI:
             raise HTTPException(403, "missing or invalid CSRF token; reload the page")
         return Caller(session.identity, session.csrf_token)
 
-    def require(role: OperatorRole) -> Callable[[Caller], Caller]:
-        def check(current: Caller = Depends(caller)) -> Caller:  # noqa: B008
-            if not current.identity.role.allows(role):
-                raise HTTPException(
-                    403,
-                    f"requires the {role.value} role; you are {current.identity.role.value}",
-                )
-            return current
-
-        return check
-
-    viewer = Depends(require(OperatorRole.VIEWER))
+    # Every endpoint authenticates; the scope each query or command needs is checked in
+    # `query` / `command` (the same tables the gRPC ControlService uses).
+    viewer = Depends(caller)
 
     def query(resource: str, argument: str, current: Caller) -> Any:
-        _check(QUERY_ROLES[resource], current.identity)
+        _check(QUERY_SCOPES[resource], current.identity)
         return views.query(resource, argument, current.identity)
 
     def command(action: str, arguments: dict[str, Any], current: Caller) -> Any:
-        _check(COMMAND_ROLES[action], current.identity)
+        _check(COMMAND_SCOPES[action], current.identity)
         return views.command(action, arguments, current.identity)
 
     def identity_view(identity: OperatorIdentity) -> dict[str, object]:
         return {
             "operator_id": str(identity.operator_id),
             "role": identity.role.value,
+            "scopes": identity.scope_list(),
             "label": identity.label,
             "cluster_id": str(auth.cluster_id(context.clock.now())),
         }
@@ -291,14 +285,14 @@ def create_app(context: WebContext) -> FastAPI:
     @app.get("/api/query/{resource}")
     def generic_query(resource: str, argument: str = "", current: Caller = viewer) -> Any:
         """Any query from the role table (the same ones ControlService offers)."""
-        if resource not in QUERY_ROLES:
+        if resource not in QUERY_SCOPES:
             raise HTTPException(404, f"unknown resource: {resource}")
         return query(resource, argument, current)
 
     @app.post("/api/command/{action}")
     async def generic_command(action: str, request: Request, current: Caller = viewer) -> Any:
         """Any command from the role table (the same ones ControlService offers)."""
-        if action not in COMMAND_ROLES:
+        if action not in COMMAND_SCOPES:
             raise HTTPException(404, f"unknown action: {action}")
         try:
             arguments = json.loads(await request.body() or b"{}")
@@ -355,7 +349,7 @@ def create_app(context: WebContext) -> FastAPI:
 
     @app.post("/api/admin/invites")
     def create_invite(body: CreateInviteRequest, current: Caller = viewer) -> Any:
-        return command("create_invite", body.model_dump(mode="json"), current)
+        return command("create_invite", body.model_dump(mode="json", exclude_none=True), current)
 
     @app.delete("/api/admin/invites/{invite_id}")
     def revoke_invite(invite_id: str, current: Caller = viewer) -> Any:
@@ -407,11 +401,10 @@ def create_app(context: WebContext) -> FastAPI:
     return app
 
 
-def _check(required: OperatorRole, identity: OperatorIdentity) -> None:
-    if not identity.role.allows(required):
-        raise HTTPException(
-            403, f"requires the {required.value} role; you are {identity.role.value}"
-        )
+def _check(required: Scope, identity: OperatorIdentity) -> None:
+    problem = missing_scope(required, identity)
+    if problem:
+        raise HTTPException(403, problem)
 
 
 def _operator_token(credential: str, context: WebContext, now: datetime) -> str:

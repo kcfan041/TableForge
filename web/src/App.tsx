@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
-import { api, localMode, setCsrfToken, setUnauthorizedHandler, type Session } from "./api";
+import { api, can, localMode, setCsrfToken, setUnauthorizedHandler, type Session } from "./api";
 import { useI18n, type Locale, type MessageKey } from "./i18n";
 import { LiveProvider, useLive } from "./live";
 import { Checkpoints } from "./pages/Checkpoints";
@@ -53,7 +53,7 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
     ["/checkpoints", "nav.checkpoints"],
       ["/events", "nav.events"],
     );
-    if (session.role === "admin") links.push(["/invites", "nav.invites"]);
+    if (can(session, "admin:manage")) links.push(["/invites", "nav.invites"]);
     links.push(["/diagnostics", "nav.diagnostics"]);
   }
 

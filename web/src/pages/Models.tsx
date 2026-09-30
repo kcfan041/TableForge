@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { api, ApiError, type ModelView, type Session } from "../api";
+import { api, ApiError, can, type ModelView, type Session } from "../api";
 import { Card, LoadState, Page } from "../components";
 import { useI18n } from "../i18n";
 import { useLiveData } from "../live";
-import { canOperate } from "./Experiments";
 
 type Interval = { mean: number; low: number; high: number };
 
@@ -87,7 +86,7 @@ export function Models({ session }: { session: Session }) {
                           <Link to={`/replay?model=${encodeURIComponent(model.model_id)}`}>{t("models.replay")}</Link>
                           {" · "}
                           <Link to={`/strategy?model=${encodeURIComponent(model.model_id)}`}>{t("models.strategy")}</Link>
-                          {canOperate(session) ? (
+                          {can(session, "admin:manage") ? (
                             <>
                               {" · "}
                               <button type="button" className="link danger-text" onClick={() => void remove(model.model_id)}>

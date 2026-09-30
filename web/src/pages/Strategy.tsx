@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { Session } from "../api";
+import { can, type Session } from "../api";
 import { Card, Page } from "../components";
 import { useI18n, type MessageKey } from "../i18n";
 import { initialModel, urlParam, useAnalysis, useModels } from "./analysis";
-import { canOperate } from "./Experiments";
 
 interface StrategyResult {
   mode: string;
@@ -183,7 +182,7 @@ export function StrategyPage({ session }: { session: Session }) {
             <button
               type="button"
               className="primary"
-              disabled={!canOperate(session) || state.busy || !modelId}
+              disabled={!can(session, "analysis:run") || state.busy || !modelId}
               onClick={() => void request({ model_id: modelId, mode, level: Number(level || 1) })}
             >
               {state.busy ? t("strategy.running") : t("strategy.build")}
@@ -194,7 +193,7 @@ export function StrategyPage({ session }: { session: Session }) {
               </button>
             ) : null}
           </div>
-          {!canOperate(session) ? <p className="muted small">{t("replay.viewerNote")}</p> : null}
+          {!can(session, "analysis:run") ? <p className="muted small">{t("replay.viewerNote")}</p> : null}
           {state.error ? <p className="error">{state.error}</p> : null}
           {state.busy ? <p className="muted small">{t("strategy.waiting")}</p> : null}
         </Card>

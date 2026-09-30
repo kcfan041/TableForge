@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from tableforge.domain.auth import (
+    ROLE_SCOPES,
     AuthenticationError,
     Invite,
     InviteScope,
@@ -15,7 +16,10 @@ from tableforge.domain.auth import (
     OperatorRecord,
     OperatorRole,
     Redemption,
+    Scope,
     WebSession,
+    parse_scopes,
+    role_for,
 )
 from tableforge.domain.ids import (
     ClusterId,
@@ -278,16 +282,18 @@ class SqlAuthRepository:
                     ),
                 )
             operator: IssuedOperator | None = None
-            if invite.scope.role is not None:
+            if invite.scope.grants_operator:
                 token = f"{OPERATOR_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+                role = invite.scope.operator_role or OperatorRole.CUSTOM
                 operator = IssuedOperator(
-                    new_operator_id(), token, invite.scope.role, now + operator_ttl
+                    new_operator_id(), token, role, now + operator_ttl, invite.scope.scopes
                 )
                 connection.execute(
                     """
                     INSERT INTO operators (
-                        operator_id, token_hash, role, label, invite_id, created_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        operator_id, token_hash, role, label, invite_id, created_at, expires_at,
+                        scopes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(operator.operator_id),
@@ -297,6 +303,7 @@ class SqlAuthRepository:
                         str(invite.invite_id),
                         self._db.timestamp(now),
                         self._db.timestamp(operator.expires_at),
+                        _encode_scopes(operator.scopes),
                     ),
                 )
             redeemed_by = str(node_id) if node_id else str(operator.operator_id if operator else "")
@@ -304,7 +311,7 @@ class SqlAuthRepository:
                 "UPDATE invites SET redeemed_at = ?, redeemed_by = ? WHERE invite_id = ?",
                 (self._db.timestamp(now), redeemed_by, str(invite.invite_id)),
             )
-            if operator is not None and operator.role is OperatorRole.ADMIN:
+            if operator is not None and Scope.ADMIN_MANAGE in operator.scopes:
                 record_event(
                     self._db,
                     connection,
@@ -357,24 +364,23 @@ class SqlAuthRepository:
             ).fetchone()
         if row is None or row["revoked"] or parse_timestamp(row["expires_at"]) <= now:
             raise AuthenticationError("invalid or expired operator credential")
-        return OperatorIdentity(
-            OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
-        )
+        return _identity(row)
 
     def list_operators(self) -> tuple[OperatorIdentity, ...]:
         with self._db.read() as connection:
             rows = connection.execute(
                 "SELECT * FROM operators WHERE revoked = 0 ORDER BY created_at"
             ).fetchall()
-        return tuple(
-            OperatorIdentity(
-                OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
-            )
-            for row in rows
-        )
+        return tuple(_identity(row) for row in rows)
 
     def revoke_operator(self, operator_id: OperatorId) -> bool:
         with self._db.transaction() as connection:
+            target = connection.execute(
+                "SELECT * FROM operators WHERE operator_id = ? AND revoked = 0",
+                (str(operator_id),),
+            ).fetchone()
+            if target is not None and Scope.ADMIN_MANAGE in _identity(target).scopes:
+                self._require_other_admin(connection, operator_id)
             cursor = connection.execute(
                 "UPDATE operators SET revoked = 1 WHERE operator_id = ? AND revoked = 0",
                 (str(operator_id),),
@@ -385,7 +391,12 @@ class SqlAuthRepository:
             return cursor.rowcount == 1
 
     def issue_operator(
-        self, role: OperatorRole, label: str, now: datetime, ttl: timedelta
+        self,
+        role: OperatorRole,
+        label: str,
+        now: datetime,
+        ttl: timedelta,
+        scopes: frozenset[Scope] | None = None,
     ) -> IssuedOperator:
         """Issue an operator credential directly, without an invite.
 
@@ -395,25 +406,67 @@ class SqlAuthRepository:
         require_aware(now)
         if ttl <= timedelta(0):
             raise ValueError("operator ttl must be positive")
+        granted = ROLE_SCOPES[role] if scopes is None else scopes
         token = f"{OPERATOR_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
-        issued = IssuedOperator(new_operator_id(), token, role, now + ttl)
+        issued = IssuedOperator(new_operator_id(), token, role_for(granted), now + ttl, granted)
         with self._db.transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO operators (
-                    operator_id, token_hash, role, label, invite_id, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+                    operator_id, token_hash, role, label, invite_id, created_at, expires_at,
+                    scopes
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
                 """,
                 (
                     str(issued.operator_id),
                     _hash(token),
-                    role.value,
+                    issued.role.value,
                     label,
                     self._db.timestamp(now),
                     self._db.timestamp(issued.expires_at),
+                    _encode_scopes(granted),
                 ),
             )
         return issued
+
+    def set_operator_scopes(
+        self, operator_id: OperatorId, scopes: frozenset[Scope], now: datetime
+    ) -> OperatorIdentity:
+        """Replace an operator's scopes (the role label follows). Keeps at least one admin."""
+        with self._db.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM operators WHERE operator_id = ? AND revoked = 0",
+                (str(operator_id),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(str(operator_id))
+            before = _identity(row)
+            if Scope.ADMIN_MANAGE in before.scopes and Scope.ADMIN_MANAGE not in scopes:
+                self._require_other_admin(connection, operator_id)
+            role = role_for(scopes)
+            connection.execute(
+                "UPDATE operators SET role = ?, scopes = ? WHERE operator_id = ?",
+                (role.value, _encode_scopes(scopes), str(operator_id)),
+            )
+            record_event(
+                self._db,
+                connection,
+                "OPERATOR_SCOPES_CHANGED",
+                "operator",
+                str(operator_id),
+                1,
+                {"before": before.scope_list(), "after": sorted(scope.value for scope in scopes)},
+                now,
+            )
+        return OperatorIdentity(operator_id, role, before.label, scopes)
+
+    def _require_other_admin(self, connection: Any, operator_id: OperatorId) -> None:
+        rows = connection.execute(
+            "SELECT * FROM operators WHERE revoked = 0 AND operator_id <> ?",
+            (str(operator_id),),
+        ).fetchall()
+        if not any(Scope.ADMIN_MANAGE in _identity(row).scopes for row in rows):
+            raise ValueError("the cluster must keep at least one credential with admin:manage")
 
     def list_operator_records(self) -> tuple[OperatorRecord, ...]:
         with self._db.read() as connection:
@@ -422,9 +475,7 @@ class SqlAuthRepository:
             ).fetchall()
         return tuple(
             OperatorRecord(
-                OperatorIdentity(
-                    OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
-                ),
+                _identity(row),
                 parse_timestamp(row["created_at"]),
                 parse_timestamp(row["expires_at"]),
             )
@@ -483,9 +534,7 @@ class SqlAuthRepository:
             or parse_timestamp(row["expires_at"]) <= now
         ):
             raise AuthenticationError("session expired; sign in again")
-        identity = OperatorIdentity(
-            OperatorId(row["operator_id"]), OperatorRole(row["role"]), row["label"]
-        )
+        identity = _identity(row)
         return WebSession(
             token, row["csrf_token"], identity, parse_timestamp(row["session_expires"])
         )
@@ -561,3 +610,15 @@ def _invite(row: Any) -> Invite:
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _encode_scopes(scopes: frozenset[Scope]) -> str:
+    return ",".join(sorted(scope.value for scope in scopes))
+
+
+def _identity(row: Any) -> OperatorIdentity:
+    """Identity from an operators row; an empty scopes column means the role's scopes."""
+    role = OperatorRole(row["role"])
+    stored = row["scopes"] if "scopes" in row.keys() else ""  # noqa: SIM118
+    scopes = parse_scopes(stored) if stored else ROLE_SCOPES[role]
+    return OperatorIdentity(OperatorId(row["operator_id"]), role, row["label"], scopes)

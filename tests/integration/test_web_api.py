@@ -153,7 +153,7 @@ def test_viewer_cannot_change_anything(web: Web) -> None:
     )
 
     assert response.status_code == 403
-    assert "operator" in response.json()["detail"]
+    assert "experiment:control" in response.json()["detail"]
     assert web.client.get("/api/admin/invites").status_code == 403
 
 
@@ -203,7 +203,7 @@ def test_read_only_pages(web: Web) -> None:
     assert overview["nodes"] == {"total": 0, "online": 0}
     assert presets["6max-rule-smoke"]["players"] == 6
     assert diagnostics["certificate"]["present"] is True
-    assert diagnostics["schema_version"] == 5
+    assert diagnostics["schema_version"] == 6
     assert web.client.get("/api/nodes").json() == []
     assert web.client.get("/api/checkpoints").json() == []
     assert isinstance(web.client.get("/api/events").json(), list)

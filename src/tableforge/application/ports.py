@@ -15,6 +15,7 @@ from tableforge.domain.auth import (
     OperatorRecord,
     OperatorRole,
     Redemption,
+    Scope,
     WebSession,
 )
 from tableforge.domain.capabilities import NodeCapability
@@ -245,8 +246,17 @@ class AuthRepository(Protocol):
     def revoke_operator(self, operator_id: OperatorId) -> bool: ...
 
     def issue_operator(
-        self, role: OperatorRole, label: str, now: datetime, ttl: timedelta
+        self,
+        role: OperatorRole,
+        label: str,
+        now: datetime,
+        ttl: timedelta,
+        scopes: frozenset[Scope] | None = None,
     ) -> IssuedOperator: ...
+
+    def set_operator_scopes(
+        self, operator_id: OperatorId, scopes: frozenset[Scope], now: datetime
+    ) -> OperatorIdentity: ...
 
     def list_operator_records(self) -> tuple[OperatorRecord, ...]: ...
 

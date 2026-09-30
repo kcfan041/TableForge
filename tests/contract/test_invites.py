@@ -171,8 +171,8 @@ def test_invite_scope_round_trip() -> None:
         InviteScope.decode("node,owner")
     with pytest.raises(ValueError):
         InviteScope.decode("viewer,operator")
-    assert OperatorRole.OPERATOR.allows(OperatorRole.VIEWER)
-    assert not OperatorRole.VIEWER.allows(OperatorRole.OPERATOR)
+    assert OperatorRole.VIEWER.scopes <= OperatorRole.OPERATOR.scopes
+    assert not OperatorRole.OPERATOR.scopes <= OperatorRole.VIEWER.scopes
 
 
 def test_admin_invites_need_confirmation_and_a_short_lifetime() -> None:

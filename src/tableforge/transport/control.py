@@ -17,12 +17,18 @@ from tableforge.application.ports import (
     JobNotFoundError,
 )
 from tableforge.coordinator.experiments import ExperimentService
-from tableforge.domain.auth import AuthenticationError, OperatorIdentity, OperatorRole
+from tableforge.domain.auth import AuthenticationError, OperatorIdentity, Scope
 from tableforge.domain.experiments import BUILTIN_PRESETS, Experiment
 from tableforge.domain.ids import AgentId, ExperimentId
 from tableforge.transport import convert
 from tableforge.transport.errors import ERROR_METADATA_KEY
-from tableforge.web.views import COMMAND_ROLES, QUERY_ROLES, ClusterViews, ViewError
+from tableforge.web.views import (
+    COMMAND_SCOPES,
+    QUERY_SCOPES,
+    ClusterViews,
+    ViewError,
+    missing_scope,
+)
 
 T = TypeVar("T")
 
@@ -60,7 +66,10 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
         self._views = views
         return self
 
-    def _operator(self, context: grpc.ServicerContext, required: OperatorRole) -> OperatorIdentity:
+    def _operator(
+        self, context: grpc.ServicerContext, required: Scope | None
+    ) -> OperatorIdentity:
+        """Authenticate; `required` None means any valid credential (e.g. WhoAmI)."""
         header = dict(context.invocation_metadata()).get("authorization", "")
         if not isinstance(header, str) or not header.startswith("Bearer "):
             _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", "missing token")
@@ -70,13 +79,9 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
             )
         except AuthenticationError as error:
             _abort(context, grpc.StatusCode.UNAUTHENTICATED, "UNAUTHENTICATED", str(error))
-        if not identity.role.allows(required):
-            _abort(
-                context,
-                grpc.StatusCode.PERMISSION_DENIED,
-                "ROLE_REQUIRED",
-                f"requires the {required.value} role; this credential is {identity.role.value}",
-            )
+        problem = missing_scope(required, identity) if required is not None else None
+        if problem:
+            _abort(context, grpc.StatusCode.PERMISSION_DENIED, "ROLE_REQUIRED", problem)
         return identity
 
     def _run(self, context: grpc.ServicerContext, operation: Callable[[], T]) -> T:
@@ -107,24 +112,25 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def WhoAmI(
         self, request: control_pb2.WhoAmIRequest, context: grpc.ServicerContext
     ) -> control_pb2.WhoAmIResponse:
-        identity = self._operator(context, OperatorRole.VIEWER)
+        identity = self._operator(context, None)
         return control_pb2.WhoAmIResponse(
             cluster_id=str(self._auth.cluster_id(self._clock.now())),
             operator_id=str(identity.operator_id),
             role=identity.role.value,
             label=identity.label,
+            scopes=identity.scope_list(),
         )
 
     def ListPresets(
         self, request: control_pb2.ListPresetsRequest, context: grpc.ServicerContext
     ) -> control_pb2.ListPresetsResponse:
-        self._operator(context, OperatorRole.VIEWER)
+        self._operator(context, Scope.EXPERIMENT_READ)
         return control_pb2.ListPresetsResponse(presets=[preset.key for preset in BUILTIN_PRESETS])
 
     def ListExperiments(
         self, request: control_pb2.ListExperimentsRequest, context: grpc.ServicerContext
     ) -> control_pb2.ListExperimentsResponse:
-        self._operator(context, OperatorRole.VIEWER)
+        self._operator(context, Scope.EXPERIMENT_READ)
         experiments = self._experiments.list_experiments()
         return control_pb2.ListExperimentsResponse(
             experiments=[self._view(experiment) for experiment in experiments]
@@ -133,7 +139,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def GetExperiment(
         self, request: control_pb2.GetExperimentRequest, context: grpc.ServicerContext
     ) -> control_pb2.ExperimentView:
-        self._operator(context, OperatorRole.VIEWER)
+        self._operator(context, Scope.EXPERIMENT_READ)
         experiment = self._run(
             context,
             lambda: self._experiments.experiments.get(ExperimentId(request.experiment_id)),
@@ -143,7 +149,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def CreateExperiment(
         self, request: control_pb2.CreateExperimentRequest, context: grpc.ServicerContext
     ) -> control_pb2.ExperimentView:
-        self._operator(context, OperatorRole.OPERATOR)
+        self._operator(context, Scope.EXPERIMENT_CONTROL)
         experiment = self._run(
             context, lambda: self._experiments.create(request.preset, self._clock.now())
         )
@@ -152,7 +158,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def StartExperiment(
         self, request: control_pb2.ExperimentRequest, context: grpc.ServicerContext
     ) -> control_pb2.ExperimentView:
-        self._operator(context, OperatorRole.OPERATOR)
+        self._operator(context, Scope.EXPERIMENT_CONTROL)
         experiment = self._run(
             context,
             lambda: self._experiments.start(ExperimentId(request.experiment_id), self._clock.now()),
@@ -162,7 +168,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def StopExperiment(
         self, request: control_pb2.ExperimentRequest, context: grpc.ServicerContext
     ) -> control_pb2.ExperimentView:
-        self._operator(context, OperatorRole.OPERATOR)
+        self._operator(context, Scope.EXPERIMENT_CONTROL)
         experiment = self._run(
             context,
             lambda: self._experiments.stop(ExperimentId(request.experiment_id), self._clock.now()),
@@ -172,7 +178,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def ListCheckpoints(
         self, request: control_pb2.ListCheckpointsRequest, context: grpc.ServicerContext
     ) -> control_pb2.ListCheckpointsResponse:
-        self._operator(context, OperatorRole.VIEWER)
+        self._operator(context, Scope.EXPERIMENT_READ)
         agent = AgentId(request.agent_id) if request.agent_id else None
         return control_pb2.ListCheckpointsResponse(
             checkpoints=[
@@ -193,7 +199,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def GetLeagueMatrix(
         self, request: control_pb2.ExperimentRequest, context: grpc.ServicerContext
     ) -> control_pb2.LeagueMatrixView:
-        self._operator(context, OperatorRole.VIEWER)
+        self._operator(context, Scope.EXPERIMENT_READ)
         matrix = self._run(
             context,
             lambda: self._experiments.league_matrix(ExperimentId(request.experiment_id)),
@@ -212,7 +218,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
         self, request: control_pb2.QueryRequest, context: grpc.ServicerContext
     ) -> control_pb2.QueryResponse:
         views = self._require_views(context)
-        required = QUERY_ROLES.get(request.resource)
+        required = QUERY_SCOPES.get(request.resource)
         if required is None:
             _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", "unknown resource")
         identity = self._operator(context, required)
@@ -225,7 +231,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
         self, request: control_pb2.CommandRequest, context: grpc.ServicerContext
     ) -> control_pb2.QueryResponse:
         views = self._require_views(context)
-        required = COMMAND_ROLES.get(request.action)
+        required = COMMAND_SCOPES.get(request.action)
         if required is None:
             _abort(context, grpc.StatusCode.NOT_FOUND, "NOT_FOUND", "unknown action")
         identity = self._operator(context, required)
@@ -266,7 +272,7 @@ class ControlServicer(control_pb2_grpc.ControlServiceServicer):
     def ListNodes(
         self, request: control_pb2.ListNodesRequest, context: grpc.ServicerContext
     ) -> control_pb2.ListNodesResponse:
-        self._operator(context, OperatorRole.VIEWER)
+        self._operator(context, Scope.EXPERIMENT_READ)
         return control_pb2.ListNodesResponse(
             nodes=[
                 control_pb2.NodeView(

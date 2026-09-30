@@ -359,6 +359,10 @@ CREATE INDEX web_sessions_operator ON web_sessions(operator_id)
 SQLITE_V5 = _V5_COMMON.format(ts="TEXT")
 POSTGRES_V5 = _V5_COMMON.format(ts="TIMESTAMPTZ")
 
+# Operator scopes (comma-separated). Empty means "the scopes of the role", so credentials
+# created before scopes existed keep exactly the permissions they had.
+OPERATOR_SCOPES_V6 = "ALTER TABLE operators ADD COLUMN scopes TEXT NOT NULL DEFAULT ''"
+
 _LEGACY_ATTEMPT_COLUMNS = {
     "error_code": "TEXT",
     "error_summary": "TEXT",
@@ -410,6 +414,7 @@ MIGRATIONS: dict[str, tuple[Migration, ...]] = {
         Migration(3, "multi-use enrollment tokens", _script(SQLITE_V3)),
         Migration(4, "cluster identity, invites, operators, worker slots", _script(SQLITE_V4)),
         Migration(5, "web sessions", _script(SQLITE_V5)),
+        Migration(6, "operator scopes", _script(OPERATOR_SCOPES_V6)),
     ),
     "postgres": (
         Migration(1, "initial schema", _script(POSTGRES_V1)),
@@ -417,6 +422,7 @@ MIGRATIONS: dict[str, tuple[Migration, ...]] = {
         Migration(3, "multi-use enrollment tokens", _script(POSTGRES_V3)),
         Migration(4, "cluster identity, invites, operators, worker slots", _script(POSTGRES_V4)),
         Migration(5, "web sessions", _script(POSTGRES_V5)),
+        Migration(6, "operator scopes", _script(OPERATOR_SCOPES_V6)),
     ),
 }
 

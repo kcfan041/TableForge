@@ -87,6 +87,36 @@ Worker 永遠主動連出到 Coordinator 與 storage，Coordinator 從不連入 
 - 使用者 token 只能呼叫控制面 RPC（實驗、查詢、自己的節點管理），不能領取 Job。
 - CLI 改為透過 Coordinator 的 gRPC 控制面操作，不再直接存取資料庫。只有管理者在 Coordinator 主機上的維運指令（schema 升級、資料搬移）例外。
 
+### 4.2.1 權限以 scope 表示（已實作）
+
+操作者憑證的權限是一組彼此獨立的 scope，所有檢查都依 scope，不比較角色高低：
+
+| Scope | 允許 |
+|---|---|
+| `experiment:read` | 查看叢集、實驗、Job、checkpoint、事件與診斷 |
+| `experiment:control` | 建立、開始、停止實驗 |
+| `model:read` | 查看模型清單，以及已產生的重播與策略表 |
+| `model:download` | 把模型下載到自己的電腦 |
+| `model:manage` | 把實驗的 checkpoint 存成模型 |
+| `analysis:run` | 產生重播、策略表等會佔用 Worker 算力的分析 |
+| `play:remote` | 在叢集主機上和模型對打 |
+| `admin:manage` | 邀請碼、憑證與權限、撤銷節點、刪除模型 |
+
+角色只是常用組合（憑證上的角色只是標籤，scope 不符合任何組合時顯示「自訂」）：
+
+| 角色 | Scope |
+|---|---|
+| viewer | `experiment:read`、`model:read` |
+| operator | viewer + `experiment:control`、`play:remote`、`analysis:run`、`model:manage` |
+| model_recipient | viewer + `model:download` |
+| admin | 全部 |
+
+- operator 另外包含 `analysis:run` 與 `model:manage`，是為了讓升級前的 operator 保有原本就能做的事（產生重播與策略表、存成模型）。
+- 邀請碼可以給一個角色或一組 scope（編碼為 `scope:model:read,scope:model:download`）；舊格式（`node,operator`）照常可用。含 `admin:manage` 的邀請碼需要明確確認且最多 1 小時有效。
+- 管理者可以修改任何人的 scope（寫入 `OPERATOR_SCOPES_CHANGED` 事件）；不能拿掉自己的 `admin:manage`，叢集至少保留一個有 `admin:manage` 的憑證。
+- 資料庫 schema 6 在 `operators` 新增 `scopes` 欄位；空值代表「角色的 scope」，因此升級前的憑證權限完全不變。
+- HTTP API 與 gRPC `ControlService` 使用同一張「查詢／指令 → scope」對照表；`WhoAmI` 回傳 scopes，任何有效憑證都可以呼叫。
+
 ### 4.3 專案與權限
 
 新增 **project**（專案）作為實驗、checkpoint 與 artifact 的歸屬單位。每位使用者在每個專案有一個角色：

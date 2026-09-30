@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   api,
   ApiError,
+  can,
   type ExperimentDetail,
   type Interval,
   type Session,
@@ -298,7 +299,7 @@ export function ExperimentPage({ session }: { session: Session }) {
               <pre className="config">{JSON.stringify(data.config, null, 2)}</pre>
             </Card>
           </div>
-          {data.kind === "nfsp_iterative" && data.status === "completed" && canOperate(session) ? (
+          {data.kind === "nfsp_iterative" && data.status === "completed" && can(session, "model:manage") ? (
             <SaveModel
               experimentId={data.experiment_id}
               defaultId={`${data.preset.replace(/-train$/, "")}-s${data.seed ?? 0}`}
