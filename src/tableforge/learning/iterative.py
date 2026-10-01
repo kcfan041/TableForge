@@ -255,7 +255,12 @@ def load_pool(fetch: Fetch, artifact_id: str, sha256: str, models_only: bool = F
     members = [] if models_only else rule_members(spec.rules)
     for model in spec.models:
         members.append(
-            model_member(model.name, verified(fetch(model.artifact_id), model.sha256), model.kind)
+            model_member(
+                model.name,
+                verified(fetch(model.artifact_id), model.sha256),
+                model.kind,
+                algorithm=model.algorithm,
+            )
         )
     if not members:
         return None

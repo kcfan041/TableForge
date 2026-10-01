@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：661 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：669 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -502,6 +502,12 @@
   - 對 baseline bot：c1 +8.8%、s12 +13.4%（兩者 95% 信賴區間下限 > 0），其他模型 −1.9% ~ +3.0%（不顯著）；baseline bot 對 c1 +2.0%、對 platform +4.9%（不顯著）。
   - 和 C 階段的結論一致：c1 與 s12 是目前最強的兩個 10 BB 模型；s12 對 s11、s13 顯著為正，platform 對 c1 顯著為負（−11.9%）。
   - 結果檔在研究結果資料夾（`research-results/p2/comparison.json`）。
+
+### A0 演算法介面（完成）
+- 規格見 [architecture/01-system.md](architecture/01-system.md) 6.2。`learning/algorithms.py` 的 `AlgorithmSpec`（打法、說明器、牌桌玩家、Worker executor、checkpoint schema）與 Coordinator 端的 `ORCHESTRATORS`（每個演算法的輪次流程）；NFSP 是第一個實作。
+- 原本寫死 NFSP 的地方都改走介面：模型頁打法、上傳 checkpoint、遠端與本機對打、練習、牌譜檢討、重播與策略表 Job、對手池、模型比較、benchmark 的模型成員、Worker executor 註冊、實驗的學習者 agent id 與存成模型。實驗設定新增 `algorithm`（預設 `nfsp`）。
+- **位元一致**：導入介面前用 `scripts/algorithm_baseline.py` 端對端錄下三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population，共 20 個 Job）每個 Job 的 payload 與輸出 sha256，以及 checkpoint 與訓練曲線；改完後完全相同。這份紀錄存在 `tests/fixtures/nfsp_fingerprint.json`，由 `tests/integration/test_nfsp_fingerprint.py` 每次比對（CI 的 Linux 上只比對 payload）。
+- 驗收：單元測試加入一個假的演算法（checkpoint 就是一個 Rule Bot 名稱），不改核心程式就能在模型頁顯示打法、上桌對打、當對手池成員、註冊 Worker executor；兩個演算法不能宣告同一種 Job；不是 NFSP 時對手池與比較 payload 才寫出演算法欄位。
 
 ### H1 匯入 GG／Natural8 牌譜（完成，**尚未用真實匯出檔驗證**）
 - 依 GG 公開的文字牌譜格式（和 PokerStars 相同的版面）撰寫：`poker/hand_history.py` 讀取錦標賽手牌的標頭（賽事、等級、盲注、ante、日期）、座位與籌碼（含座位上的 bounty 金額）、ante 與盲注、發到的手牌、各街動作、公牌、攤牌、未跟注退回與彩池分配。UI 與文件都標明「尚未用真實牌譜驗證」，`verified_against_real_exports` 為 false。
@@ -991,7 +997,7 @@ uv run tableforge doctor
 2. **S4 可剝削程度量測**：完成（見上）。
 3. **H2 練習模式**：完成（見上）。
 4. **H1 匯入 GG／Natural8 牌譜**：完成，尚未用真實牌譜驗證（見上；有樣本後補驗收）。
-5. **A0 演算法介面**：把只給 NFSP 用的地方改成可插拔，NFSP 結果位元一致。
+5. **A0 演算法介面**：完成（見上）。
 6. **encoder v3 與新動作格式（一次包含 S2 下注尺度、T4 9 人桌、S3 多結構訓練）**，只重訓一次。
 7. **新訓練演算法**：PPO → MMD 正則化 → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
 8. **T5 MTT 階段模擬**。

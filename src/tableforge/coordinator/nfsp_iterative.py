@@ -76,7 +76,8 @@ def _match_payload(config: ExperimentConfig, **fields: Any) -> NfspMatchPayload:
 
 
 def agent_id_for(experiment: Experiment) -> AgentId:
-    return AgentId(f"nfsp:{experiment.experiment_id}")
+    """The learner of an experiment: ``<algorithm>:<experiment id>``."""
+    return AgentId(f"{experiment.config.algorithm}:{experiment.experiment_id}")
 
 
 def _key(experiment: Experiment, stage: str) -> str:
@@ -534,7 +535,9 @@ class IterativeNfspOrchestrator:
         for info in library.list():
             if wanted is not None and info.model_id not in wanted:
                 continue
-            if info.algorithm != "nfsp":
+            from tableforge.learning.algorithms import algorithm, is_known
+
+            if not is_known(info.algorithm):
                 continue
             from tableforge.coordinator.analysis import AnalysisError
             from tableforge.coordinator.analysis import tournament_json as model_tournament
@@ -551,13 +554,16 @@ class IterativeNfspOrchestrator:
                     _content_id(content),
                     ArtifactKind.MODEL_CHECKPOINT,
                     "application/zip",
-                    "tableforge.nfsp-checkpoint.v1",
+                    algorithm(info.algorithm).checkpoint_schema,
                 ),
                 content,
             )
             found.append(
                 PoolModel(
-                    f"model:{info.model_id}", str(artifact.descriptor.artifact_id), artifact.sha256
+                    f"model:{info.model_id}",
+                    str(artifact.descriptor.artifact_id),
+                    artifact.sha256,
+                    algorithm=info.algorithm,
                 )
             )
         return found

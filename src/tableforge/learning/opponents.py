@@ -111,26 +111,20 @@ def rule_members(names: Sequence[str]) -> list[PoolMember]:
 
 
 def model_member(
-    name: str, bundle: bytes, kind: str = "model", mode: str = "average"
+    name: str,
+    bundle: bytes,
+    kind: str = "model",
+    mode: str = "average",
+    algorithm: str = "nfsp",
 ) -> PoolMember:
     """A frozen model; every seat shares one set of weights (acting is stateless per seat)."""
-    from tableforge.learning.nfsp import NfspAgent
-    from tableforge.learning.tournament_training import (
-        FrozenTournamentPlayer,
-        GreedyTournamentPlayer,
-    )
+    from tableforge.learning.algorithms import algorithm as spec_for
 
-    if mode == "best_response":
-        greedy = NfspAgent.from_actor_bundle(bundle)
+    spec = spec_for(algorithm)
+    factory = spec.player(bundle, spec.mode(mode))
 
-        def build(seed: int) -> TableAgent:
-            del seed
-            return GreedyTournamentPlayer(greedy)
-    else:
-        frozen = NfspAgent.from_bundle(bundle, inference_only=True)
-
-        def build(seed: int) -> TableAgent:
-            del seed
-            return FrozenTournamentPlayer(frozen)
+    def build(seed: int) -> TableAgent:
+        del seed
+        return factory()
 
     return PoolMember(name, build, kind)

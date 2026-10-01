@@ -213,9 +213,28 @@ class DecisionExplainer(Protocol):
 - 目前的實作：`NfspExplainer`（打法：平均策略、最佳回應；details 為各動作 Q 值，錦標賽單位是 buy-in）、`RuleBotExplainer`。
 - 分析 Job：`TournamentReplayJobPayload`（一整場錦標賽的完整牌譜與模型座位的決策說明）、`StrategyTableJobPayload`（翻牌前 169 種起手牌在各位置、籌碼深度與 bounty 倍數下的打法）。兩者不屬於任何實驗，以內容做冪等，同一個請求只算一次。
 
+### 6.2 演算法介面（A0，已實作）
+
+演算法以外的程式一律透過 `learning/algorithms.py` 的 `AlgorithmSpec` 使用模型，不直接寫出演算法名稱：
+
+| 欄位 | 用途 | 使用者 |
+|---|---|---|
+| `key`、`label` | 模型與 checkpoint 上記錄的演算法名稱 | 模型庫、實驗設定 |
+| `checkpoint_schema` | checkpoint artifact 的 schema | 上傳模型、對手池 |
+| `play_modes` | 打法（第一個是預設） | UI、重播、策略表、對打、比較 |
+| `explainer(checkpoint)` | 一個座位的 `DecisionExplainer` | 重播、策略表、對打、練習、牌譜檢討 |
+| `player(checkpoint, mode)` | 快速的牌桌玩家工廠（不產生說明） | 對手池、benchmark、模型比較、可剝削程度 |
+| `executors(fetch)` | Worker 的 Job executor（依 payload type） | Worker 註冊 |
+
+- 註冊：`ALGORITHMS`（Worker 端）與 `coordinator/experiments.ORCHESTRATORS`（Coordinator 端，每個演算法的輪次流程：actor → learner → 評估 → 採用）。實驗設定新增 `algorithm`（預設 `nfsp`），學習者的 agent id 是 `<algorithm>:<實驗 id>`。
+- 模型庫的模型、對手池成員（`PoolModel.algorithm`）、模型比較的參賽者（`Competitor.algorithm`）都帶演算法；只有不是 NFSP 時才寫進 payload，所以現有的 Job payload 與冪等鍵完全不變。
+- 匯入很輕：只有真的載入模型時才 import PyTorch，Coordinator 與 Rule Bot Worker 可以使用 registry。
+- 位元一致驗證：`scripts/algorithm_baseline.py` 端對端跑三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population），記錄每個 Job 的 payload 與輸出的 sha256（artifact id 以佔位符取代）；`tests/fixtures/nfsp_fingerprint.json` 是導入介面前錄下的結果，`tests/integration/test_nfsp_fingerprint.py` 每次都比對（payload 在所有平台比對，輸出與 checkpoint 在錄製的 Windows 上比對）。
+- 新增演算法時：實作一個 `AlgorithmSpec` 與它的 executor，加入 `ALGORITHMS`；實作 coordinator 端的 `Orchestrator`（`reconcile`、`matrix`），加入 `ORCHESTRATORS`；新增 workload profile。其餘功能（模型頁、重播、策略表、對打、練習、牌譜檢討、模型比較、對手池、可剝削程度）自動支援。
+
 ## 7. 擴展邊界
 
-- 新演算法：新增 executor、AgentManifest schema extension、artifact type，不改 Job lifecycle。
+- 新演算法：見 6.2，新增 `AlgorithmSpec`、executor、orchestrator 與 workload profile，不改 Job lifecycle。
 - 6-Max：擴充 GameConfig 與 Poker Engine 測試，不改 Worker protocol。
 - 多 Coordinator：未來以 replicated event log/consensus 替換 MetadataRepository；Worker protocol 與 JobSpec 不變。
 - 多租戶：在所有 aggregate ID 上加入 namespace/owner authorization，不改 artifact hash。

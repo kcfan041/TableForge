@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from tableforge.learning.actions import AbstractAction
+from tableforge.learning.algorithms import NFSP_AVERAGE, NFSP_BEST_RESPONSE
 from tableforge.learning.explain import ACTIONS, DecisionExplanation, Detail, PlayMode
 from tableforge.learning.nfsp import MASKED, NfspAgent
 from tableforge.poker.betting import Action, LegalActions
@@ -20,17 +21,7 @@ _CANONICAL = {
 }
 _SIZES = {AbstractAction.RAISE_HALF_POT: "half_pot", AbstractAction.RAISE_POT: "pot"}
 
-AVERAGE = PlayMode(
-    "average",
-    "Average policy",
-    "NFSP's average strategy: mixes actions with these probabilities "
-    "(balanced, harder to exploit).",
-)
-BEST_RESPONSE = PlayMode(
-    "best_response",
-    "Best response",
-    "Always the action with the highest Q value (the best reply to the training opponents).",
-)
+AVERAGE, BEST_RESPONSE = NFSP_AVERAGE, NFSP_BEST_RESPONSE
 
 
 class NfspExplainer:

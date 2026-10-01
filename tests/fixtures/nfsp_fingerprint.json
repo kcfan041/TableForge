@@ -1,0 +1,897 @@
+{
+ "0:6max-pko-10bb-smoke": [
+  {
+   "key": "round:0:init",
+   "output": "52b5c608c6324acf",
+   "payload": "69367d2aa0e823c1",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspInitJobPayload"
+  },
+  {
+   "key": "round:1:actor:0",
+   "output": "7af10a07b4950721",
+   "payload": "00f254de46a8dd76",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:1:actor:1",
+   "output": "f7bd8f42d9d8028c",
+   "payload": "9e4461b639befc93",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:1:learn",
+   "output": "70dc802f459634d2",
+   "payload": "582cc5f6bd6f84b0",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspLearnerJobPayload"
+  },
+  {
+   "key": "round:1:match",
+   "output": "8afa2efb55d17dc0",
+   "payload": "aba5e95675763064",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspMatchJobPayload"
+  },
+  {
+   "key": "round:2:actor:0",
+   "output": "db0cf068dab21957",
+   "payload": "a4ac8904fe1d43ac",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:2:actor:1",
+   "output": "8310136242f32bb5",
+   "payload": "cdf0c153db9d8475",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:2:learn",
+   "output": "3baeee6c361c194f",
+   "payload": "01d696a9dd8d0108",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspLearnerJobPayload"
+  },
+  {
+   "key": "round:2:match",
+   "output": "1c37974db9411a93",
+   "payload": "98fbe3d2dce7e0b5",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspMatchJobPayload"
+  },
+  {
+   "checkpoints": [
+    [
+     0,
+     "retired",
+     "52b5c608c6324acf"
+    ],
+    [
+     1,
+     "retired",
+     "70dc802f459634d2"
+    ],
+    [
+     2,
+     "active",
+     "3baeee6c361c194f"
+    ]
+   ],
+   "curve": [
+    {
+     "benchmark": {
+      "average": {
+       "bb_per_100": -54.125,
+       "hands": 60,
+       "high": -24.365134,
+       "low": -83.884866
+      },
+      "best_response": {
+       "bb_per_100": 7.6875,
+       "hands": 60,
+       "high": 81.24516,
+       "low": -65.87016
+      }
+     },
+     "head_to_head": {
+      "bb_per_100": -32.8,
+      "confidence_high": 14.055043,
+      "confidence_low": -79.655043,
+      "hands": 60,
+      "standard_error": 23.905634,
+      "unit": "roi_points"
+     },
+     "round": 1,
+     "tournament": {
+      "average": {
+       "average_hands": 34.43,
+       "average_place": {
+        "high": 3.278,
+        "low": 2.656,
+        "mean": 2.967
+       },
+       "bounty_ev": {
+        "high": 0.2687,
+        "low": -0.0062,
+        "mean": 0.1313
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4215,
+        "low": 0.1452,
+        "mean": 0.2833
+       },
+       "place_share": [
+        0.0333,
+        0.25,
+        0.45,
+        0.25,
+        0.0167,
+        0.0
+       ],
+       "prize_ev": {
+        "high": 0.5017,
+        "low": 0.1533,
+        "mean": 0.3275
+       },
+       "roi": {
+        "high": -0.2437,
+        "low": -0.8388,
+        "mean": -0.5413
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": -0.2437,
+        "low": -0.8388,
+        "mean": -0.5413
+       },
+       "tournaments": 60
+      },
+      "baseline": {
+       "average_hands": 24.87,
+       "average_place": {
+        "high": 3.588,
+        "low": 2.745,
+        "mean": 3.167
+       },
+       "bounty_ev": {
+        "high": 0.6542,
+        "low": 0.2083,
+        "mean": 0.4313
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.3616,
+        "low": 0.1384,
+        "mean": 0.25
+       },
+       "place_share": [
+        0.15,
+        0.1,
+        0.35,
+        0.2667,
+        0.1,
+        0.0333
+       ],
+       "prize_ev": {
+        "high": 0.5067,
+        "low": 0.2043,
+        "mean": 0.3555
+       },
+       "roi": {
+        "high": 0.1524,
+        "low": -0.5789,
+        "mean": -0.2132
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.1524,
+        "low": -0.5789,
+        "mean": -0.2132
+       },
+       "tournaments": 60
+      },
+      "best_response": {
+       "average_hands": 22.6,
+       "average_place": {
+        "high": 3.654,
+        "low": 2.513,
+        "mean": 3.083
+       },
+       "bounty_ev": {
+        "high": 0.9816,
+        "low": 0.1871,
+        "mean": 0.5844
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4659,
+        "low": 0.1008,
+        "mean": 0.2833
+       },
+       "place_share": [
+        0.2167,
+        0.0667,
+        0.3167,
+        0.25,
+        0.1167,
+        0.0333
+       ],
+       "prize_ev": {
+        "high": 0.8326,
+        "low": 0.1524,
+        "mean": 0.4925
+       },
+       "roi": {
+        "high": 0.8125,
+        "low": -0.6587,
+        "mean": 0.0769
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.8125,
+        "low": -0.6587,
+        "mean": 0.0769
+       },
+       "tournaments": 60
+      }
+     },
+     "train_steps": 100,
+     "unit": "roi_percent"
+    },
+    {
+     "benchmark": {
+      "average": {
+       "bb_per_100": 9.929167,
+       "hands": 60,
+       "high": 44.374786,
+       "low": -24.516453
+      },
+      "best_response": {
+       "bb_per_100": -4.404167,
+       "hands": 60,
+       "high": 28.409433,
+       "low": -37.217766
+      }
+     },
+     "head_to_head": {
+      "bb_per_100": 64.054167,
+      "confidence_high": 98.840869,
+      "confidence_low": 29.267464,
+      "hands": 60,
+      "standard_error": 17.748318,
+      "unit": "roi_points"
+     },
+     "round": 2,
+     "tournament": {
+      "average": {
+       "average_hands": 25.7,
+       "average_place": {
+        "high": 3.431,
+        "low": 2.536,
+        "mean": 2.983
+       },
+       "bounty_ev": {
+        "high": 0.8388,
+        "low": 0.4258,
+        "mean": 0.6323
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.3815,
+        "low": 0.2185,
+        "mean": 0.3
+       },
+       "place_share": [
+        0.2,
+        0.1,
+        0.35,
+        0.2333,
+        0.1,
+        0.0167
+       ],
+       "prize_ev": {
+        "high": 0.608,
+        "low": 0.326,
+        "mean": 0.467
+       },
+       "roi": {
+        "high": 0.4437,
+        "low": -0.2452,
+        "mean": 0.0993
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.4437,
+        "low": -0.2452,
+        "mean": 0.0993
+       },
+       "tournaments": 60
+      },
+      "baseline": {
+       "average_hands": 34.43,
+       "average_place": {
+        "high": 3.278,
+        "low": 2.656,
+        "mean": 2.967
+       },
+       "bounty_ev": {
+        "high": 0.2687,
+        "low": -0.0062,
+        "mean": 0.1313
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4215,
+        "low": 0.1452,
+        "mean": 0.2833
+       },
+       "place_share": [
+        0.0333,
+        0.25,
+        0.45,
+        0.25,
+        0.0167,
+        0.0
+       ],
+       "prize_ev": {
+        "high": 0.5017,
+        "low": 0.1533,
+        "mean": 0.3275
+       },
+       "roi": {
+        "high": -0.2437,
+        "low": -0.8388,
+        "mean": -0.5413
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": -0.2437,
+        "low": -0.8388,
+        "mean": -0.5413
+       },
+       "tournaments": 60
+      },
+      "best_response": {
+       "average_hands": 25.5,
+       "average_place": {
+        "high": 3.613,
+        "low": 2.687,
+        "mean": 3.15
+       },
+       "bounty_ev": {
+        "high": 0.7683,
+        "low": 0.3796,
+        "mean": 0.574
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.3204,
+        "low": 0.1462,
+        "mean": 0.2333
+       },
+       "place_share": [
+        0.1833,
+        0.05,
+        0.3333,
+        0.3167,
+        0.1,
+        0.0167
+       ],
+       "prize_ev": {
+        "high": 0.5187,
+        "low": 0.2453,
+        "mean": 0.382
+       },
+       "roi": {
+        "high": 0.2841,
+        "low": -0.3722,
+        "mean": -0.044
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.2841,
+        "low": -0.3722,
+        "mean": -0.044
+       },
+       "tournaments": 60
+      }
+     },
+     "train_steps": 200,
+     "unit": "roi_percent"
+    }
+   ]
+  }
+ ],
+ "1:6max-pko-10bb-smoke": [
+  {
+   "key": "round:0:init",
+   "output": "52b5c608c6324acf",
+   "payload": "69367d2aa0e823c1",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspInitJobPayload"
+  },
+  {
+   "key": "round:1:actor:0",
+   "output": "818939e274ae19ab",
+   "payload": "9902b1c82f43c32e",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:1:actor:1",
+   "output": "a3a3e9da90cdc536",
+   "payload": "cb8e6700a003af50",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:1:learn",
+   "output": "bd73da53baffee5c",
+   "payload": "582cc5f6bd6f84b0",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspLearnerJobPayload"
+  },
+  {
+   "key": "round:1:match",
+   "output": "8504c0746bc7e11b",
+   "payload": "25f279dcf7feef68",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspMatchJobPayload"
+  },
+  {
+   "key": "round:2:actor:0",
+   "output": "b820c0f2e520b8bf",
+   "payload": "36d6256e4474bb2d",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:2:actor:1",
+   "output": "400fff14160bd0df",
+   "payload": "d0a445abe496f8b1",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspActorJobPayload"
+  },
+  {
+   "key": "round:2:learn",
+   "output": "ca0742a388b5f358",
+   "payload": "8f84ba8364215243",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspLearnerJobPayload"
+  },
+  {
+   "key": "round:2:match",
+   "output": "d7782fd25cc8c3b9",
+   "payload": "8a832c9f8ed663d0",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspMatchJobPayload"
+  },
+  {
+   "checkpoints": [
+    [
+     0,
+     "retired",
+     "52b5c608c6324acf"
+    ],
+    [
+     1,
+     "retired",
+     "bd73da53baffee5c"
+    ],
+    [
+     2,
+     "active",
+     "ca0742a388b5f358"
+    ]
+   ],
+   "curve": [
+    {
+     "benchmark": {
+      "average": {
+       "bb_per_100": -53.083333,
+       "hands": 60,
+       "high": -27.852518,
+       "low": -78.314148
+      },
+      "best_response": {
+       "bb_per_100": 22.058333,
+       "hands": 60,
+       "high": 82.63797,
+       "low": -38.521303
+      }
+     },
+     "head_to_head": {
+      "bb_per_100": -31.758333,
+      "confidence_high": 0.332799,
+      "confidence_low": -63.849465,
+      "hands": 60,
+      "standard_error": 16.373026,
+      "unit": "roi_points"
+     },
+     "round": 1,
+     "tournament": {
+      "average": {
+       "average_hands": 30.82,
+       "average_place": {
+        "high": 3.316,
+        "low": 2.684,
+        "mean": 3.0
+       },
+       "bounty_ev": {
+        "high": 0.2025,
+        "low": 0.0058,
+        "mean": 0.1042
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4873,
+        "low": 0.1793,
+        "mean": 0.3333
+       },
+       "place_share": [
+        0.0167,
+        0.3167,
+        0.3833,
+        0.2167,
+        0.0667,
+        0.0
+       ],
+       "prize_ev": {
+        "high": 0.5425,
+        "low": 0.1875,
+        "mean": 0.365
+       },
+       "roi": {
+        "high": -0.2785,
+        "low": -0.7831,
+        "mean": -0.5308
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": -0.2785,
+        "low": -0.7831,
+        "mean": -0.5308
+       },
+       "tournaments": 60
+      },
+      "baseline": {
+       "average_hands": 24.87,
+       "average_place": {
+        "high": 3.588,
+        "low": 2.745,
+        "mean": 3.167
+       },
+       "bounty_ev": {
+        "high": 0.6542,
+        "low": 0.2083,
+        "mean": 0.4313
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.3616,
+        "low": 0.1384,
+        "mean": 0.25
+       },
+       "place_share": [
+        0.15,
+        0.1,
+        0.35,
+        0.2667,
+        0.1,
+        0.0333
+       ],
+       "prize_ev": {
+        "high": 0.5067,
+        "low": 0.2043,
+        "mean": 0.3555
+       },
+       "roi": {
+        "high": 0.1524,
+        "low": -0.5789,
+        "mean": -0.2132
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.1524,
+        "low": -0.5789,
+        "mean": -0.2132
+       },
+       "tournaments": 60
+      },
+      "best_response": {
+       "average_hands": 24.85,
+       "average_place": {
+        "high": 3.22,
+        "low": 2.414,
+        "mean": 2.817
+       },
+       "bounty_ev": {
+        "high": 1.009,
+        "low": 0.3452,
+        "mean": 0.6771
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4496,
+        "low": 0.1838,
+        "mean": 0.3167
+       },
+       "place_share": [
+        0.25,
+        0.0667,
+        0.4167,
+        0.15,
+        0.1167,
+        0.0
+       ],
+       "prize_ev": {
+        "high": 0.8215,
+        "low": 0.2655,
+        "mean": 0.5435
+       },
+       "roi": {
+        "high": 0.8264,
+        "low": -0.3852,
+        "mean": 0.2206
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.8264,
+        "low": -0.3852,
+        "mean": 0.2206
+       },
+       "tournaments": 60
+      }
+     },
+     "train_steps": 100,
+     "unit": "roi_percent"
+    },
+    {
+     "benchmark": {
+      "average": {
+       "bb_per_100": -10.425,
+       "hands": 60,
+       "high": 36.602713,
+       "low": -57.452713
+      },
+      "best_response": {
+       "bb_per_100": 7.329167,
+       "hands": 60,
+       "high": 77.192428,
+       "low": -62.534095
+      },
+      "pool": {
+       "bb_per_100": 180.42,
+       "hands": 12,
+       "high": 269.43,
+       "low": 91.4
+      }
+     },
+     "head_to_head": {
+      "bb_per_100": 42.658333,
+      "confidence_high": 98.615635,
+      "confidence_low": -13.298969,
+      "hands": 60,
+      "standard_error": 28.549644,
+      "unit": "roi_points"
+     },
+     "round": 2,
+     "tournament": {
+      "average": {
+       "average_hands": 25.08,
+       "average_place": {
+        "high": 3.441,
+        "low": 2.493,
+        "mean": 2.967
+       },
+       "bounty_ev": {
+        "high": 0.7628,
+        "low": 0.2247,
+        "mean": 0.4938
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.3879,
+        "low": 0.1454,
+        "mean": 0.2667
+       },
+       "place_share": [
+        0.1667,
+        0.1,
+        0.4167,
+        0.2333,
+        0.0833,
+        0.0
+       ],
+       "prize_ev": {
+        "high": 0.6075,
+        "low": 0.1965,
+        "mean": 0.402
+       },
+       "roi": {
+        "high": 0.366,
+        "low": -0.5745,
+        "mean": -0.1042
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.366,
+        "low": -0.5745,
+        "mean": -0.1042
+       },
+       "tournaments": 60
+      },
+      "baseline": {
+       "average_hands": 30.82,
+       "average_place": {
+        "high": 3.316,
+        "low": 2.684,
+        "mean": 3.0
+       },
+       "bounty_ev": {
+        "high": 0.2025,
+        "low": 0.0058,
+        "mean": 0.1042
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4873,
+        "low": 0.1793,
+        "mean": 0.3333
+       },
+       "place_share": [
+        0.0167,
+        0.3167,
+        0.3833,
+        0.2167,
+        0.0667,
+        0.0
+       ],
+       "prize_ev": {
+        "high": 0.5425,
+        "low": 0.1875,
+        "mean": 0.365
+       },
+       "roi": {
+        "high": -0.2785,
+        "low": -0.7831,
+        "mean": -0.5308
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": -0.2785,
+        "low": -0.7831,
+        "mean": -0.5308
+       },
+       "tournaments": 60
+      },
+      "best_response": {
+       "average_hands": 21.8,
+       "average_place": {
+        "high": 3.417,
+        "low": 2.35,
+        "mean": 2.883
+       },
+       "bounty_ev": {
+        "high": 0.9857,
+        "low": 0.2039,
+        "mean": 0.5948
+       },
+       "config": "6max-pko-10bb-65-35",
+       "itm": {
+        "high": 0.4659,
+        "low": 0.1008,
+        "mean": 0.2833
+       },
+       "place_share": [
+        0.2167,
+        0.0667,
+        0.4333,
+        0.2,
+        0.0667,
+        0.0167
+       ],
+       "prize_ev": {
+        "high": 0.7894,
+        "low": 0.1676,
+        "mean": 0.4785
+       },
+       "roi": {
+        "high": 0.7719,
+        "low": -0.6253,
+        "mean": 0.0733
+       },
+       "seeds": 10,
+       "total_ev": {
+        "high": 0.7719,
+        "low": -0.6253,
+        "mean": 0.0733
+       },
+       "tournaments": 60
+      },
+      "pool": {
+       "matchups": {
+        "history:round-1": {
+         "bounty_ev": {
+          "high": 2.7883,
+          "low": 0.42,
+          "mean": 1.6042
+         },
+         "itm": {
+          "high": 1.0733,
+          "low": 0.0933,
+          "mean": 0.5833
+         },
+         "roi": {
+          "high": 3.8813,
+          "low": -0.398,
+          "mean": 1.7417
+         },
+         "tournaments": 12
+        }
+       },
+       "members": [
+        "history:round-1"
+       ],
+       "overall": {
+        "average_place": {
+         "high": 2.827,
+         "low": 2.173,
+         "mean": 2.5
+        },
+        "bounty_ev": {
+         "high": 2.2383,
+         "low": 1.095,
+         "mean": 1.6667
+        },
+        "itm": {
+         "high": 0.7467,
+         "low": 0.42,
+         "mean": 0.5833
+        },
+        "prize_ev": {
+         "high": 1.456,
+         "low": 0.819,
+         "mean": 1.1375
+        },
+        "roi": {
+         "high": 2.6943,
+         "low": 0.914,
+         "mean": 1.8042
+        },
+        "tournaments": 12
+       }
+      }
+     },
+     "train_steps": 200,
+     "unit": "roi_percent"
+    }
+   ]
+  }
+ ],
+ "2:hu-nfsp-cpu-smoke": [
+  {
+   "key": "evaluate",
+   "output": "b9055bee85a02e2d",
+   "payload": "644c9c7a709de69b",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspEvaluationJobPayload"
+  },
+  {
+   "key": "train",
+   "output": "6eadc3028453b4d4",
+   "payload": "6c77f96728ad9f48",
+   "status": "succeeded",
+   "type": "tableforge.v1.NfspTrainingJobPayload"
+  },
+  {
+   "checkpoints": [],
+   "curve": []
+  }
+ ]
+}

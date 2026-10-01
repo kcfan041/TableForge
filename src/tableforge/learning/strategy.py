@@ -329,9 +329,7 @@ def pushfold_tables(
                 cache_key = (stack, multiple, shover if multiple != 1.0 else None)
                 solution = solved.get(cache_key)
                 if solution is None:
-                    solution = solve(
-                        spot_game(config, level, stack, multiple, shover), 800, 0.0005
-                    )
+                    solution = solve(spot_game(config, level, stack, multiple, shover), 800, 0.0005)
                     solved[cache_key] = solution
                 hero_seat = seat_of(hero, players)
                 if scenario == "open":
@@ -364,14 +362,11 @@ class StrategyTableExecutor:
     def execute(
         self, payload_bytes: bytes, on_progress: Callable[[int], None] | None = None
     ) -> bytes:
+        from tableforge.learning.algorithms import algorithm
         from tableforge.learning.experience import verified
 
         payload = StrategyTablePayload.from_bytes(payload_bytes)
-        if payload.algorithm != "nfsp":
-            raise ValueError(f"unsupported algorithm: {payload.algorithm}")
-        from tableforge.learning.nfsp_explain import NfspExplainer
-
-        explainer = NfspExplainer(
+        explainer = algorithm(payload.algorithm).explainer(
             verified(self.fetch_artifact(payload.artifact_id), payload.sha256)
         )
         result = build_strategy(

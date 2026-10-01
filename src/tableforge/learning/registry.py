@@ -4,24 +4,8 @@ from collections.abc import Callable
 from typing import Protocol
 
 from tableforge.domain.artifacts import ArtifactKind
-from tableforge.domain.league import MATCHUP_PAYLOAD_TYPE
-from tableforge.domain.learning import (
-    ACTOR_PAYLOAD_TYPE,
-    EVALUATION_PAYLOAD_TYPE,
-    INIT_PAYLOAD_TYPE,
-    LEARNER_PAYLOAD_TYPE,
-    MATCH_PAYLOAD_TYPE,
-    TRAINING_PAYLOAD_TYPE,
-)
+from tableforge.learning.algorithms import all_executors
 from tableforge.learning.comparison import COMPARISON_PAYLOAD_TYPE, ComparisonExecutor
-from tableforge.learning.executors import NfspEvaluationExecutor, NfspTrainingExecutor
-from tableforge.learning.iterative import (
-    NfspActorExecutor,
-    NfspInitExecutor,
-    NfspLearnerExecutor,
-    NfspMatchExecutor,
-)
-from tableforge.learning.league import LeagueMatchupExecutor
 from tableforge.learning.replay import REPLAY_PAYLOAD_TYPE, ReplayExecutor
 from tableforge.learning.strategy import STRATEGY_PAYLOAD_TYPE, StrategyTableExecutor
 from tableforge.worker.runtime import OutputSpec, RegisteredExecutor
@@ -43,14 +27,10 @@ class DescribedExecutor(Protocol):
 
 
 def learning_executors(fetch: Callable[[str], bytes]) -> dict[str, RegisteredExecutor]:
+    """Every learning executor: each algorithm's own jobs (`learning.algorithms`), and the
+    analysis jobs that work with any algorithm (replays, strategy tables, comparisons)."""
     executors: dict[str, DescribedExecutor] = {
-        TRAINING_PAYLOAD_TYPE: NfspTrainingExecutor(),
-        EVALUATION_PAYLOAD_TYPE: NfspEvaluationExecutor(fetch),
-        INIT_PAYLOAD_TYPE: NfspInitExecutor(),
-        ACTOR_PAYLOAD_TYPE: NfspActorExecutor(fetch),
-        LEARNER_PAYLOAD_TYPE: NfspLearnerExecutor(fetch),
-        MATCH_PAYLOAD_TYPE: NfspMatchExecutor(fetch),
-        MATCHUP_PAYLOAD_TYPE: LeagueMatchupExecutor(fetch),
+        **all_executors(fetch),
         REPLAY_PAYLOAD_TYPE: ReplayExecutor(fetch),
         STRATEGY_PAYLOAD_TYPE: StrategyTableExecutor(fetch),
         COMPARISON_PAYLOAD_TYPE: ComparisonExecutor(fetch),

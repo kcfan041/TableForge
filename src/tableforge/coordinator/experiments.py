@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from tableforge.application.ports import CheckpointRepository, ExperimentRepository
 from tableforge.capability.workloads import BUILTIN_WORKLOADS
@@ -38,6 +38,29 @@ from tableforge.domain.tournament import TOURNAMENT_PAYLOAD_TYPE, TournamentJobP
 _TERMINAL = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
 
 
+def config_algorithm(config: ExperimentConfig) -> str:
+    """The algorithm an experiment trains."""
+    return config.algorithm
+
+
+class Orchestrator(Protocol):
+    """Drives an iterative training experiment: creates its jobs round by round."""
+
+    def reconcile(self, experiment: Experiment, now: datetime) -> bool:
+        """Create the jobs that can be created now; True when the experiment is finished."""
+        ...
+
+    def matrix(self, experiment: Experiment) -> dict[str, dict[str, MatrixCell]] | None: ...
+
+
+OrchestratorFactory = Callable[
+    [CoordinatorService, CheckpointRepository, Callable[..., WorkloadProfile], Path | None],
+    Orchestrator,
+]
+ORCHESTRATORS: dict[str, OrchestratorFactory] = {"nfsp": IterativeNfspOrchestrator}
+"""The round pipeline of each training algorithm (`learning.algorithms` has the workers' side)."""
+
+
 def _profile(payload_type: str, key: str | None = None, runtime: str = "cpu") -> WorkloadProfile:
     matches = [
         profile
@@ -59,12 +82,14 @@ class ExperimentService:
     checkpoints: CheckpointRepository | None = None
     models_root: Path | None = None
 
-    def _orchestrator(self) -> IterativeNfspOrchestrator:
+    def _orchestrator(self, algorithm: str = "nfsp") -> Orchestrator:
+        """The round pipeline (actors, learner, evaluation) of a training algorithm."""
         if self.checkpoints is None:
-            raise ValueError("iterative NFSP experiments require a checkpoint repository")
-        return IterativeNfspOrchestrator(
-            self.coordinator, self.checkpoints, _profile, self.models_root
-        )
+            raise ValueError("iterative training experiments require a checkpoint repository")
+        factory = ORCHESTRATORS.get(algorithm)
+        if factory is None:
+            raise ValueError(f"no training pipeline for algorithm {algorithm!r}")
+        return factory(self.coordinator, self.checkpoints, _profile, self.models_root)
 
     def reconcile_all(self, now: datetime) -> int:
         advanced = 0
@@ -117,8 +142,12 @@ class ExperimentService:
             info = ModelLibrary(self.models_root).info(target)
         except KeyError as error:
             raise ValueError(f"no such model: {target}") from error
-        if info.algorithm != "nfsp":
-            raise ValueError(f"model {target} uses {info.algorithm}, which cannot be exploited yet")
+        if info.algorithm != config_algorithm(config):
+            # The learner starts as a copy of the target, so both use the same algorithm.
+            raise ValueError(
+                f"model {target} uses {info.algorithm}; this experiment trains "
+                f"{config_algorithm(config)}"
+            )
         tournament = TournamentConfig.from_json(tournament_json(info))
         return replace(config, tournament_json=tournament.to_json(), players=tournament.players)
 
@@ -193,7 +222,7 @@ class ExperimentService:
         if experiment.config.kind is ExperimentKind.NFSP_PIPELINE:
             self._create_training_job(experiment)
         elif experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
-            self._orchestrator()
+            self._orchestrator(experiment.config.algorithm)
         elif experiment.config.kind is ExperimentKind.TOURNAMENT_BENCHMARK:
             self._create_tournament_jobs(experiment)
         else:
@@ -205,7 +234,7 @@ class ExperimentService:
             now,
         )
         if experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
-            self._orchestrator().reconcile(running, now)
+            self._orchestrator(running.config.algorithm).reconcile(running, now)
         return running
 
     def _create_simulation_jobs(self, experiment: Experiment) -> None:
@@ -368,7 +397,9 @@ class ExperimentService:
             return experiment
         if experiment.config.kind is ExperimentKind.NFSP_ITERATIVE:
             try:
-                finished = self._orchestrator().reconcile(experiment, now)
+                finished = self._orchestrator(experiment.config.algorithm).reconcile(
+                    experiment, now
+                )
             except PipelineFailedError:
                 return self.experiments.update_status(
                     experiment_id, experiment.revision, ExperimentStatus.FAILED, now
@@ -419,7 +450,7 @@ class ExperimentService:
         experiment = self.experiments.get(experiment_id)
         if not experiment.config.league:
             raise ValueError("experiment is not a league experiment")
-        return self._orchestrator().matrix(experiment)
+        return self._orchestrator(experiment.config.algorithm).matrix(experiment)
 
     def evaluation_result(self, experiment_id: ExperimentId) -> dict[str, object] | None:
         for job in self.coordinator.jobs.list_jobs(experiment_id):

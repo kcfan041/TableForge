@@ -20,12 +20,16 @@ class PoolModel:
     sha256: str
     kind: str = "model"
     """``model`` (from the model library) or ``history`` (an earlier round)."""
+    algorithm: str = "nfsp"
+    """Written to the pool only when not NFSP, so existing pools keep their bytes."""
 
     def __post_init__(self) -> None:
         if len(self.sha256) != 64 or not self.artifact_id or not self.name:
             raise ValueError("pool model reference is invalid")
         if self.kind not in ("model", "history"):
             raise ValueError("pool model kind must be model or history")
+        if not self.algorithm:
+            raise ValueError("pool model algorithm cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,7 @@ class OpponentPoolSpec:
                         "artifact_id": model.artifact_id,
                         "sha256": model.sha256,
                         "kind": model.kind,
+                        **({} if model.algorithm == "nfsp" else {"algorithm": model.algorithm}),
                     }
                     for model in self.models
                 ],

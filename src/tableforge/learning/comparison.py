@@ -39,6 +39,7 @@ class Competitor:
     artifact_id: str = ""
     sha256: str = ""
     mode: str = ""
+    algorithm: str = "nfsp"
 
     def __post_init__(self) -> None:
         kind, _, rest = self.name.partition(":")
@@ -89,6 +90,8 @@ class ComparisonPayload:
                         "artifact_id": item.artifact_id,
                         "sha256": item.sha256,
                         "mode": item.mode,
+                        # Only written when not NFSP, so existing payloads keep their bytes.
+                        **({} if item.algorithm == "nfsp" else {"algorithm": item.algorithm}),
                     }
                     for item in self.competitors
                 ],
@@ -220,7 +223,10 @@ def build_members(
             member = rule_members([rest])[0]
         else:
             member = model_member(
-                competitor.name, fetch(competitor), mode=competitor.mode or "average"
+                competitor.name,
+                fetch(competitor),
+                mode=competitor.mode or "average",
+                algorithm=competitor.algorithm,
             )
         member.name = competitor.label
         members.append(member)

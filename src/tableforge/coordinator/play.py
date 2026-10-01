@@ -49,12 +49,14 @@ class ModelSeats:
 
     def __call__(self, choice: SeatChoice, player: int) -> DecisionExplainer:
         del player
-        info = self.info(choice.name)
-        if info.algorithm != "nfsp":
-            raise PlayError(f"model {info.model_id} uses {info.algorithm}, which cannot play yet")
-        from tableforge.learning.nfsp_explain import NfspExplainer
+        from tableforge.learning.algorithms import UnknownAlgorithmError, algorithm
 
-        return NfspExplainer(self._bundle(info))
+        info = self.info(choice.name)
+        try:
+            spec = algorithm(info.algorithm)
+        except UnknownAlgorithmError as error:
+            raise PlayError(f"model {info.model_id}: {error}") from error
+        return spec.explainer(self._bundle(info))
 
     def _bundle(self, info: ModelInfo) -> bytes:
         key = info.sha256

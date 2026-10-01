@@ -218,7 +218,11 @@ def request_comparison(services: Services, arguments: dict[str, Any]) -> dict[st
         artifact_id, sha = checkpoint_artifact(services, model_id)
         competitors.append(
             Competitor(
-                f"model:{model_id}", artifact_id, sha, _mode(info, str(modes.get(model_id, "")))
+                f"model:{model_id}",
+                artifact_id,
+                sha,
+                _mode(info, str(modes.get(model_id, ""))),
+                info.algorithm,
             )
         )
     competitors.extend(Competitor(f"rule:{rule}") for rule in rules)

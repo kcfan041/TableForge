@@ -45,10 +45,11 @@ def library_pool(
 ) -> list[PoolMember]:
     """Every model in `library` trained for `config`, except `exclude`."""
     from tableforge.coordinator.analysis import AnalysisError, tournament_json
+    from tableforge.learning.algorithms import is_known
 
     members = []
     for info in library.list():
-        if info.model_id in exclude or info.algorithm != "nfsp":
+        if info.model_id in exclude or not is_known(info.algorithm):
             continue
         try:
             model_config = TournamentConfig.from_json(tournament_json(info))
@@ -56,7 +57,12 @@ def library_pool(
             continue
         if same_tournament(model_config, config):
             members.append(
-                model_member(f"model:{info.model_id}", library.checkpoint(info.model_id), mode=mode)
+                model_member(
+                    f"model:{info.model_id}",
+                    library.checkpoint(info.model_id),
+                    mode=mode,
+                    algorithm=info.algorithm,
+                )
             )
     return members
 

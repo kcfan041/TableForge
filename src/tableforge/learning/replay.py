@@ -284,13 +284,12 @@ class ReplayExecutor:
                 )
                 labels.append(seat.name)
                 continue
-            if seat.algorithm != "nfsp":
-                raise ValueError(f"unsupported algorithm: {seat.algorithm}")
-            from tableforge.learning.nfsp_explain import NfspExplainer
+            from tableforge.learning.algorithms import algorithm
 
+            spec = algorithm(seat.algorithm)
             # Each seat gets its own explainer: agents keep per-hand state.
             content = verified(self.fetch_artifact(seat.artifact_id), seat.sha256)
-            explainer = NfspExplainer(content)
+            explainer = spec.explainer(content)
             players.append((explainer, seat.mode or explainer.play_modes[0].key, True))
             labels.append(seat.name)
         replay = play_replay(config, payload.seed, players, labels, on_progress)

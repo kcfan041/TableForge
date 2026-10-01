@@ -69,8 +69,12 @@ class ExperimentConfig:
     """S4: a model id; every other seat is this frozen model and the learner trains to beat
     it. The learner's best-response ROI against a field of the target is a lower bound on
     how much the target can be exploited."""
+    algorithm: str = "nfsp"
+    """The training algorithm (`learning.algorithms`) of an iterative training experiment."""
 
     def __post_init__(self) -> None:
+        if not self.algorithm or len(self.algorithm) > 32:
+            raise ValueError("algorithm must be a short name")
         if self.exploit_target:
             if self.kind is not ExperimentKind.NFSP_ITERATIVE or not self.tournament_json:
                 raise ValueError("an exploit target needs tournament NFSP training")
@@ -212,6 +216,7 @@ class ExperimentPreset:
     pfsp: str = "uniform"
     pool_eval_seeds: int = 0
     exploit_target: str = ""
+    algorithm: str = "nfsp"
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -256,6 +261,7 @@ class ExperimentPreset:
             pfsp=self.pfsp,
             pool_eval_seeds=self.pool_eval_seeds,
             exploit_target=self.exploit_target,
+            algorithm=self.algorithm,
         )
 
 
