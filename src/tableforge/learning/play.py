@@ -13,25 +13,45 @@ inference node can later provide the same interface.
 
 A finished game becomes a replay document (the same format as replay jobs, every hole
 card shown) and a plain-text hand history.
+
+**Practice mode** (H2): a coach model looks at every decision of the person, after the
+person has acted, and records what it would have done (its probabilities and Q values).
+The person sees this feedback right after each decision; `report()` groups all decisions by
+position, stack depth, situation and street and lists the costliest ones. The coach's
+numbers are a model's estimates, not the truth: "Q loss" is how much less the chosen action
+is worth than the coach's best one, in the coach's own estimate.
+
+Games can be saved (`PlayService(store=...)`): a game is stored as its settings plus the
+person's actions, and restored by replaying them (every seat is deterministic for a given
+seed), so games survive a restart of the service.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 import secrets
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from tableforge.learning.explain import DecisionExplainer
+from tableforge.learning.explain import DecisionExplainer, DecisionExplanation, canonical_action
 from tableforge.learning.replay import (
     action_entry,
     hand_document,
     replay_document,
     rule_explainer,
 )
-from tableforge.poker.betting import Action, IllegalActionError, LegalActions
+from tableforge.poker.betting import (
+    Action,
+    ActionType,
+    IllegalActionError,
+    LegalActions,
+    Street,
+)
 from tableforge.poker.table import TableHand, TableObservation
 from tableforge.poker.tournament import (
     StartedHand,
@@ -45,6 +65,14 @@ HUMAN = "human"
 MAX_GAME_HANDS = 1_000
 MAX_BOT_ACTIONS = 2_000
 RULE_BOTS = ("random", "call", "tight", "aggro", "pushfold", "hunter", "pushfold_nash")
+RECORD_SCHEMA = "tableforge.play-record.v1"
+REPORT_SCHEMA = "tableforge.practice-report.v1"
+MISTAKE_Q_LOSS = 0.02
+"""Buy-ins: a decision is flagged when it is worth at least this much less than the
+coach's best action (in the coach's estimate) and the coach would rarely choose it."""
+MISTAKE_PROBABILITY = 0.1
+STACK_BUCKETS = ((5.0, "0-5"), (10.0, "5-10"), (20.0, "10-20"), (40.0, "20-40"))
+_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 
 class PlayError(ValueError):
@@ -144,7 +172,10 @@ class GameSession:
     tournament: Tournament
     agents: list[_Bot | _Human]
     hint_explainer: DecisionExplainer | None
+    """The coach: explains the person's spots (hints before acting, practice after)."""
     hint_mode: str
+    practice: bool = False
+    coach: SeatChoice | None = None
     created: float = field(default_factory=time.monotonic)
     touched: float = field(default_factory=time.monotonic)
     log: list[dict[str, object]] = field(default_factory=list)
@@ -152,6 +183,9 @@ class GameSession:
     started: StartedHand | None = None
     last_hand: dict[str, object] | None = None
     final: dict[str, object] | None = None
+    actions: list[tuple[str, int | None]] = field(default_factory=list)
+    """The person's actions in order (a saved game is its settings plus these)."""
+    reviews: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def human(self) -> int:
@@ -213,11 +247,37 @@ class GameSession:
         legal = observation.legal_actions
         assert legal is not None
         action = _human_action(kind, amount, legal)
+        explanation = (
+            self.hint_explainer.explain(observation, legal, self.hint_mode)
+            if self.hint_explainer is not None
+            else None
+        )
         try:
             hand.act(seat, action)
         except IllegalActionError as error:
             raise PlayError(str(error)) from error
-        self.log.append(action_entry(self.human, observation, legal, action, None))
+        self.actions.append((kind, amount))
+        self.log.append(
+            action_entry(
+                self.human,
+                observation,
+                legal,
+                action,
+                explanation.as_dict() if explanation is not None else None,
+            )
+        )
+        if self.practice and explanation is not None:
+            self.reviews.append(
+                review(
+                    started,
+                    seat,
+                    self.tournament.hand_number + 1,
+                    observation,
+                    legal,
+                    action,
+                    explanation,
+                )
+            )
         self.advance()
 
     def _finish_hand(self) -> None:
@@ -269,6 +329,10 @@ class GameSession:
                 {"kind": seat.kind, "name": seat.name, "mode": seat.mode} for seat in self.seats
             ],
             "hints": self.hints,
+            "practice": self.practice,
+            "coach": self.coach.name if self.coach is not None else None,
+            "feedback": self.reviews[-1] if self.practice and self.reviews else None,
+            "reviews": len(self.reviews),
             "config": json.loads(config.to_json()),
             "hands_played": len(self.hands),
             "stacks": list(tournament.stacks),
@@ -296,7 +360,8 @@ class GameSession:
             legal = observation.legal_actions
             assert legal is not None
             view["turn"] = _turn_view(observation, legal)
-            if self.hint_explainer is not None:
+            # Practice mode alone gives feedback only after the person has acted.
+            if self.hints and self.hint_explainer is not None:
                 view["hint"] = self.hint_explainer.explain(
                     observation, legal, self.hint_mode
                 ).as_dict()
@@ -348,6 +413,216 @@ class GameSession:
     def hand_history(self) -> str:
         """A plain-text hand history of every finished hand."""
         return hand_history_text(self.config, [seat.label for seat in self.seats], self.hands)
+
+    def report(self) -> dict[str, object]:
+        """Practice report: the person's decisions grouped, with the costliest ones."""
+        if not self.practice:
+            raise PlayError("this game was not played in practice mode")
+        return practice_report(self.reviews, self.coach.label if self.coach else "")
+
+    def record(self) -> dict[str, object]:
+        """Everything needed to restore this game (see `restore_session`)."""
+        return {
+            "schema_version": RECORD_SCHEMA,
+            "session_id": self.session_id,
+            "owner": self.owner,
+            "config_json": self.config.to_json(),
+            "seed": self.seed,
+            "seats": [_seat_dict(seat) for seat in self.seats],
+            "hints": self.hints,
+            "practice": self.practice,
+            "coach": _seat_dict(self.coach) if self.coach is not None else None,
+            "actions": [[kind, amount] for kind, amount in self.actions],
+            "summary": self.summary(),
+            "updated": time.time(),
+        }
+
+    def summary(self) -> dict[str, object]:
+        return {
+            "session_id": self.session_id,
+            "labels": [seat.label for seat in self.seats],
+            "hands_played": len(self.hands),
+            "complete": self.complete,
+            "practice": self.practice,
+        }
+
+
+def _seat_dict(seat: SeatChoice) -> dict[str, str]:
+    return {"kind": seat.kind, "name": seat.name, "mode": seat.mode}
+
+
+# --- practice ----------------------------------------------------------------------------
+
+_EARLY = {
+    1: ("UTG",),
+    2: ("UTG", "CO"),
+    3: ("UTG", "HJ", "CO"),
+    4: ("UTG", "LJ", "HJ", "CO"),
+    5: ("UTG", "UTG1", "LJ", "HJ", "CO"),
+    6: ("UTG", "UTG1", "UTG2", "LJ", "HJ", "CO"),
+}
+"""Names of the seats between the big blind and the button, by how many there are
+(6-max: UTG, HJ, CO, as in strategy tables)."""
+
+
+def position_name(players: int, relative: int) -> str:
+    """Position of the seat `relative` places after the button (0 = button)."""
+    if players == 2:
+        return "SB" if relative == 0 else "BB"
+    if relative == 0:
+        return "BTN"
+    if relative == 1:
+        return "SB"
+    if relative == 2:
+        return "BB"
+    return _EARLY[players - 3][relative - 3]
+
+
+def situation(observation: TableObservation) -> str:
+    """What the decision faces: ``unopened``, ``limped``, ``facing_raise``,
+    ``facing_reraise``, ``facing_all_in`` (preflop) or ``postflop``."""
+    if observation.street is not Street.PREFLOP:
+        return "postflop"
+    history = observation.action_history
+    raises = [item for item in history if item.action_type is ActionType.RAISE_TO]
+    if not raises:
+        limped = any(item.action_type is ActionType.CALL for item in history)
+        return "limped" if limped else "unopened"
+    if observation.players[raises[-1].actor].all_in:
+        return "facing_all_in"
+    return "facing_raise" if len(raises) == 1 else "facing_reraise"
+
+
+def stack_bucket(stack_bb: float) -> str:
+    for limit, name in STACK_BUCKETS:
+        if stack_bb <= limit:
+            return name
+    return "40+"
+
+
+def _value_key(action: Action, legal: LegalActions, observation: TableObservation) -> str:
+    """The coach's value entry for a concrete action (a raise: the nearest raise size)."""
+    name = canonical_action(action, legal)
+    if name != "raise" or action.amount is None:
+        return name
+    me = observation.players[observation.observer]
+    to_call = max(0, observation.current_bet - me.street_contribution)
+    pot_after_call = observation.pot + to_call
+    low = legal.min_raise_to or 0
+    high = legal.max_raise_to or 0
+    sizes = {
+        "raise_half_pot": min(max(observation.current_bet + pot_after_call // 2, low), high),
+        "raise_pot": min(max(observation.current_bet + pot_after_call, low), high),
+    }
+    amount = int(action.amount)
+    return min(sizes, key=lambda key: abs(sizes[key] - amount))
+
+
+def review(
+    started: StartedHand,
+    seat: int,
+    hand_number: int,
+    observation: TableObservation,
+    legal: LegalActions,
+    action: Action,
+    explanation: DecisionExplanation,
+) -> dict[str, object]:
+    """The coach's view of one of the person's decisions."""
+    info = started.infos[seat]
+    players = len(started.seat_players)
+    relative = (seat - started.hand.button) % players
+    stack_bb = started.stacks_before[seat] / info.big_blind
+    me = observation.players[observation.observer]
+    chosen = canonical_action(action, legal)
+    probabilities = {key: round(value, 4) for key, value in explanation.probabilities.items()}
+    recommended = max(probabilities, key=lambda key: probabilities[key])
+    values = dict(explanation.details[0].per_action) if explanation.details else {}
+    unit = explanation.details[0].unit if explanation.details else ""
+    key = _value_key(action, legal, observation)
+    q_chosen = values.get(key)
+    best_key = max(values, key=lambda item: values[item]) if values else None
+    q_loss = round(max(values.values()) - q_chosen, 4) if values and q_chosen is not None else None
+    chosen_probability = probabilities.get(chosen, 0.0)
+    return {
+        "hand": hand_number,
+        "street": observation.street.name.lower(),
+        "position": position_name(players, relative),
+        "situation": situation(observation),
+        "stack_bb": round(stack_bb, 1),
+        "stack": stack_bucket(stack_bb),
+        "hole_cards": [str(card) for card in observation.hole_cards],
+        "board": [str(card) for card in observation.board],
+        "pot": observation.pot,
+        "to_call": max(0, observation.current_bet - me.street_contribution),
+        "chosen": chosen,
+        "chosen_key": key,
+        "amount": action.amount,
+        "recommended": recommended,
+        "probabilities": probabilities,
+        "chosen_probability": chosen_probability,
+        "values": {name: round(value, 4) for name, value in values.items()},
+        "value_unit": unit,
+        "best_value_key": best_key,
+        "q_loss": q_loss,
+        "mistake": q_loss is not None
+        and q_loss > MISTAKE_Q_LOSS
+        and chosen_probability < MISTAKE_PROBABILITY,
+    }
+
+
+def _summarize(items: Sequence[dict[str, object]]) -> dict[str, object]:
+    losses = [float(str(item["q_loss"])) for item in items if item["q_loss"] is not None]
+    count = len(items)
+    return {
+        "decisions": count,
+        "agree": round(sum(item["chosen"] == item["recommended"] for item in items) / count, 4)
+        if count
+        else None,
+        "chosen_probability": round(
+            sum(float(str(item["chosen_probability"])) for item in items) / count, 4
+        )
+        if count
+        else None,
+        "q_loss_total": round(sum(losses), 4),
+        "q_loss_mean": round(sum(losses) / len(losses), 4) if losses else None,
+        "mistakes": sum(bool(item["mistake"]) for item in items),
+    }
+
+
+def practice_report(reviews: Sequence[dict[str, object]], coach: str) -> dict[str, object]:
+    """The person's decisions grouped by position, stack depth, situation and street."""
+    groups: dict[str, dict[str, list[dict[str, object]]]] = {
+        "position": {},
+        "stack": {},
+        "situation": {},
+        "street": {},
+    }
+    for item in reviews:
+        for dimension, buckets in groups.items():
+            buckets.setdefault(str(item[dimension]), []).append(item)
+    # Only decisions the coach's policy would not usually make: its policy and its Q values
+    # can disagree (e.g. it mostly folds a spot its Q network values higher for calling),
+    # and listing those as the person's worst decisions would be misleading.
+    worst = sorted(
+        (
+            item
+            for item in reviews
+            if item["q_loss"] is not None and item["chosen"] != item["recommended"]
+        ),
+        key=lambda item: -float(str(item["q_loss"])),
+    )[:10]
+    return {
+        "schema_version": REPORT_SCHEMA,
+        "coach": coach,
+        "unit": next((str(item["value_unit"]) for item in reviews if item["value_unit"]), ""),
+        "overall": _summarize(reviews),
+        "by": {
+            dimension: {name: _summarize(items) for name, items in buckets.items()}
+            for dimension, buckets in groups.items()
+        },
+        "worst": worst,
+        "thresholds": {"q_loss": MISTAKE_Q_LOSS, "probability": MISTAKE_PROBABILITY},
+    }
 
 
 def _public_actions(log: Sequence[dict[str, object]]) -> list[dict[str, object]]:
@@ -447,11 +722,13 @@ def create_session(
     factory: SeatFactory,
     hints: bool = False,
     hint_model: SeatChoice | None = None,
+    practice: bool = False,
+    session_id: str | None = None,
 ) -> GameSession:
     """Seat everyone and play until the person's first decision.
 
-    With `hints` on, `hint_model` (a model seat choice) explains the person's own spots;
-    by default the first model at the table does.
+    With `hints` or `practice` on, `hint_model` (a model seat choice, the coach) explains the
+    person's own spots; by default the first model at the table does.
     """
     if len(seats) != config.players:
         raise PlayError(f"give exactly {config.players} seats")
@@ -476,14 +753,16 @@ def create_session(
             agents.append(_Bot(player, explainer, mode, True, log))
     hint_explainer: DecisionExplainer | None = None
     hint_mode = ""
-    if hints:
+    coach: SeatChoice | None = None
+    if hints or practice:
         choice = hint_model or next((seat for seat in seats if seat.kind == "model"), None)
         if choice is None or choice.kind != "model":
-            raise PlayError("hints need a model; seat one or choose the hint model")
+            raise PlayError("hints and practice need a model; seat one or choose the coach")
         hint_explainer = factory(choice, -1)
         hint_mode = choice.mode or hint_explainer.play_modes[0].key
+        coach = SeatChoice("model", choice.name, hint_mode)
     session = GameSession(
-        session_id=secrets.token_urlsafe(12),
+        session_id=session_id or secrets.token_urlsafe(12),
         owner=owner,
         config=config,
         seed=seed,
@@ -493,18 +772,98 @@ def create_session(
         agents=agents,
         hint_explainer=hint_explainer,
         hint_mode=hint_mode,
+        practice=practice,
+        coach=coach,
         log=log,
     )
     session.advance()
     return session
 
 
+def restore_session(record: dict[str, object], factory: SeatFactory) -> GameSession:
+    """Rebuild a saved game by replaying the person's actions (every seat is
+    deterministic for a given seed, so the game ends up exactly where it was)."""
+    if record.get("schema_version") != RECORD_SCHEMA:
+        raise ValueError("unsupported saved game")
+    seats = parse_seats(
+        record["seats"], TournamentConfig.from_json(str(record["config_json"])).players
+    )
+    coach_data = record.get("coach")
+    coach = None
+    if isinstance(coach_data, dict):
+        coach = SeatChoice(
+            str(coach_data["kind"]), str(coach_data["name"]), str(coach_data["mode"])
+        )
+    session = create_session(
+        str(record["owner"]),
+        TournamentConfig.from_json(str(record["config_json"])),
+        seats,
+        int(str(record["seed"])),
+        factory,
+        hints=bool(record.get("hints")),
+        hint_model=coach,
+        practice=bool(record.get("practice")),
+        session_id=str(record["session_id"]),
+    )
+    actions = record.get("actions")
+    if not isinstance(actions, list):
+        raise ValueError("saved game has no actions")
+    for kind, amount in actions:
+        session.act(str(kind), None if amount is None else int(amount))
+    return session
+
+
+class GameStore:
+    """Saved games of one host: one JSON file per game (settings plus the person's
+    actions), written atomically after every action."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def _path(self, session_id: str) -> Path:
+        if not _SESSION_ID.match(session_id):
+            raise KeyError(session_id)
+        return self.root / f"{session_id}.json"
+
+    def save(self, session: GameSession) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self._path(session.session_id)
+        staging = path.with_suffix(".tmp")
+        staging.write_text(json.dumps(session.record()), encoding="utf-8")
+        os.replace(staging, path)
+
+    def load(self, session_id: str) -> dict[str, object] | None:
+        path = self._path(session_id)
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+
+    def delete(self, session_id: str) -> None:
+        self._path(session_id).unlink(missing_ok=True)
+
+    def records(self) -> list[dict[str, object]]:
+        if not self.root.is_dir():
+            return []
+        found = []
+        for path in self.root.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and data.get("schema_version") == RECORD_SCHEMA:
+                found.append(data)
+        return found
+
+
 class PlayService:
     """Keeps the game sessions of one host.
 
-    Sessions belong to whoever created them (another caller cannot see or play them),
-    are dropped after `idle_seconds` without activity, and each owner may keep at most
-    `per_owner` sessions (the oldest is dropped when a new one starts).
+    Sessions belong to whoever created them (another caller cannot see or play them). Games
+    in memory are dropped after `idle_seconds` without activity; with a `store`, every game
+    is also saved after each action and restored on demand (after a restart, or after it
+    was dropped from memory), and each owner keeps at most `saved_per_owner` saved games.
+    Without a store, each owner may keep at most `per_owner` games in memory.
     """
 
     def __init__(
@@ -513,11 +872,15 @@ class PlayService:
         idle_seconds: float = 2 * 3600.0,
         per_owner: int = 3,
         clock: Callable[[], float] = time.monotonic,
+        store: GameStore | None = None,
+        saved_per_owner: int = 20,
     ) -> None:
         self.factory = factory
         self.idle_seconds = idle_seconds
         self.per_owner = per_owner
         self.clock = clock
+        self.store = store
+        self.saved_per_owner = saved_per_owner
         self._sessions: dict[str, GameSession] = {}
         self._lock = threading.Lock()
 
@@ -529,8 +892,11 @@ class PlayService:
         seed: int,
         hints: bool = False,
         hint_model: SeatChoice | None = None,
+        practice: bool = False,
     ) -> dict[str, object]:
-        session = create_session(owner, config, seats, seed, self.factory, hints, hint_model)
+        session = create_session(
+            owner, config, seats, seed, self.factory, hints, hint_model, practice
+        )
         now = self.clock()
         session.created = session.touched = now
         with self._lock:
@@ -542,6 +908,8 @@ class PlayService:
             for old in mine[: max(0, len(mine) - self.per_owner + 1)]:
                 del self._sessions[old.session_id]
             self._sessions[session.session_id] = session
+            self._save(session)
+            self._trim_saved(owner)
             return session.view()
 
     def view(self, owner: str, session_id: str) -> dict[str, object]:
@@ -554,6 +922,7 @@ class PlayService:
         with self._lock:
             session = self._get(owner, session_id)
             session.act(kind, amount)
+            self._save(session)
             return session.view()
 
     def replay(self, owner: str, session_id: str) -> dict[str, object]:
@@ -564,29 +933,63 @@ class PlayService:
         with self._lock:
             return self._get(owner, session_id).hand_history()
 
+    def report(self, owner: str, session_id: str) -> dict[str, object]:
+        with self._lock:
+            return self._get(owner, session_id).report()
+
     def close(self, owner: str, session_id: str) -> None:
         with self._lock:
             self._get(owner, session_id)
-            del self._sessions[session_id]
+            self._sessions.pop(session_id, None)
+            if self.store is not None:
+                self.store.delete(session_id)
 
     def sessions(self, owner: str) -> list[dict[str, object]]:
         with self._lock:
             self._expire(self.clock())
-            return [
-                {
-                    "session_id": item.session_id,
-                    "labels": [seat.label for seat in item.seats],
-                    "hands_played": len(item.hands),
-                    "complete": item.complete,
-                }
+            found = {
+                item.session_id: item.summary()
                 for item in self._sessions.values()
                 if item.owner == owner
-            ]
+            }
+            for record in self._saved(owner):
+                summary = record.get("summary")
+                if isinstance(summary, dict):
+                    found.setdefault(str(record["session_id"]), summary)
+            return list(found.values())
+
+    def _save(self, session: GameSession) -> None:
+        if self.store is not None:
+            self.store.save(session)
+
+    def _saved(self, owner: str) -> list[dict[str, object]]:
+        if self.store is None:
+            return []
+        mine = [
+            record
+            for record in self.store.records()
+            if secrets.compare_digest(str(record.get("owner", "")), owner)
+        ]
+        return sorted(mine, key=lambda record: -float(str(record.get("updated", 0))))
+
+    def _trim_saved(self, owner: str) -> None:
+        if self.store is None:
+            return
+        for record in self._saved(owner)[self.saved_per_owner :]:
+            self.store.delete(str(record["session_id"]))
 
     def _get(self, owner: str, session_id: str) -> GameSession:
         now = self.clock()
         self._expire(now)
         session = self._sessions.get(session_id)
+        if session is None and self.store is not None:
+            try:
+                record = self.store.load(session_id)
+            except KeyError:
+                record = None
+            if record is not None and secrets.compare_digest(str(record.get("owner", "")), owner):
+                session = restore_session(record, self.factory)
+                self._sessions[session_id] = session
         if session is None or not secrets.compare_digest(session.owner, owner):
             raise KeyError(session_id)
         session.touched = now

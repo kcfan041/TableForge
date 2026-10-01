@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from tableforge.capability.cpu_topology import child_processes, set_affinity, spread_masks
 from tableforge.coordinator.play import ModelSeats
-from tableforge.learning.play import PlayService
+from tableforge.learning.play import GameStore, PlayService
 from tableforge.models import ModelLibrary
 from tableforge.processes import STOP_FILE_ENV, background_process_flags
 from tableforge.transport.control_client import ControlError, RemoteControl
@@ -474,7 +474,13 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
         return ModelLibrary(context.models_dir)
 
     local_seats = ModelSeats(local_library)
-    local_play = PlayService(local_seats)
+    # Local games are saved next to the downloaded models, so they survive a restart.
+    local_play = PlayService(
+        local_seats,
+        store=GameStore(context.models_dir.parent / "local-games")
+        if context.models_dir is not None
+        else None,
+    )
 
     @app.get("/api/local/models")
     def local_models() -> list[dict[str, object]]:

@@ -91,6 +91,7 @@ COMMAND_SCOPES: dict[str, Scope] = {
     "play_state": Scope.PLAY_REMOTE,
     "play_replay": Scope.PLAY_REMOTE,
     "play_history": Scope.PLAY_REMOTE,
+    "play_report": Scope.PLAY_REMOTE,
     "play_close": Scope.PLAY_REMOTE,
 }
 

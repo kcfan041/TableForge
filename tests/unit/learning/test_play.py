@@ -115,7 +115,7 @@ def test_hints_are_off_by_default_and_explain_the_persons_spot_when_on() -> None
     assert isinstance(hint, dict)
     assert sum(hint["probabilities"].values()) == pytest.approx(1.0)  # type: ignore[union-attr]
     no_model = (SeatChoice(HUMAN), SeatChoice("rule", "call"), SeatChoice("rule", "tight"))
-    with pytest.raises(PlayError, match="hints need a model"):
+    with pytest.raises(PlayError, match="need a model"):
         create_session("me", config, no_model, 5, factory, hints=True)
 
 
@@ -150,3 +150,141 @@ def test_service_keeps_sessions_private_and_expires_them() -> None:
         service.view("alice", session_id)
     now[0] = 120.0
     assert service.sessions("alice") == []
+
+
+class Coach:
+    """A fake model with probabilities and Q values: prefers all-in, folding is worst."""
+
+    @property
+    def play_modes(self):  # type: ignore[no-untyped-def]
+        from tableforge.learning.explain import PlayMode
+
+        return (PlayMode("average", "Average"),)
+
+    def begin_hand(self, info: object) -> None:
+        del info
+
+    def explain(self, observation, legal, mode):  # type: ignore[no-untyped-def]
+        from tableforge.learning.explain import DecisionExplanation, Detail
+
+        values = {"fold": -0.3, "check_call": 0.0, "raise_half_pot": 0.05, "raise_pot": 0.08}
+        values["all_in"] = 0.1
+        probabilities = {"fold": 0.0, "check_call": 0.2, "raise": 0.1, "all_in": 0.7}
+        if legal.max_raise_to is None:
+            probabilities = {"fold": 0.0, "check_call": 1.0, "raise": 0.0, "all_in": 0.0}
+            values = {"fold": -0.3, "check_call": 0.0}
+        if not legal.can_fold:
+            probabilities["check_call"] += probabilities.pop("fold")
+            probabilities["fold"] = 0.0
+        return DecisionExplanation(
+            probabilities, details=(Detail("Q", "buy-in", per_action=values),)
+        )
+
+    def act(self, observation, legal, mode):  # type: ignore[no-untyped-def]
+        from tableforge.poker.betting import Action
+
+        return (
+            Action.raise_to(legal.max_raise_to)
+            if legal.max_raise_to
+            else (Action.check() if legal.can_check else Action.call())
+        )
+
+
+def coach_factory(choice: SeatChoice, player: int) -> DecisionExplainer:
+    if choice.name == "coach":
+        return Coach()  # type: ignore[return-value]
+    return factory(choice, player)
+
+
+def practice_seats() -> tuple[SeatChoice, ...]:
+    return (SeatChoice(HUMAN), SeatChoice("model", "coach"), SeatChoice("rule", "tight"))
+
+
+def test_practice_reviews_every_decision_after_it_is_made() -> None:
+    config = preset_config(10, players=3, bounty=BountyConfig())
+    session = create_session("me", config, practice_seats(), 5, coach_factory, practice=True)
+    before = session.view()
+
+    assert before["practice"] and before["feedback"] is None and "hint" not in before
+    turn = before["turn"]
+    assert isinstance(turn, dict)
+    session.act("fold" if turn["can_fold"] else "check_call")
+    feedback = session.view()["feedback"]
+
+    assert isinstance(feedback, dict)
+    assert feedback["recommended"] == "all_in" or feedback["recommended"] == "check_call"
+    assert feedback["position"] in {"BTN", "SB", "BB"}
+    assert feedback["situation"] in {"unopened", "limped", "facing_raise", "facing_all_in"}
+    if feedback["chosen"] == "fold":
+        assert feedback["q_loss"] == pytest.approx(0.4) and feedback["mistake"]
+
+    def act(kind: str) -> dict[str, object]:
+        session.act(kind)
+        return session.view()
+
+    play_out(act, session.view())
+    report = session.report()
+    overall = report["overall"]
+    assert isinstance(overall, dict)
+    assert overall["decisions"] == len(session.reviews) > 0
+    assert set(report["by"]) == {"position", "stack", "situation", "street"}  # type: ignore[arg-type]
+    assert report["unit"] == "buy-in" and report["coach"] == "coach"
+    worst = report["worst"]
+    assert isinstance(worst, list) and worst == sorted(worst, key=lambda item: -item["q_loss"])
+    plain = create_session("me", config, practice_seats(), 5, coach_factory)
+    with pytest.raises(PlayError, match="practice"):
+        plain.report()
+
+
+def test_saved_games_are_restored_exactly(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from tableforge.learning.play import GameStore
+
+    config = preset_config(10, players=3, bounty=BountyConfig())
+    store = GameStore(tmp_path / "games")
+    first = PlayService(coach_factory, store=store)
+    started = first.start("alice", config, practice_seats(), 9, practice=True)
+    session_id = str(started["session_id"])
+    for _ in range(4):
+        view = first.view("alice", session_id)
+        if view["complete"]:
+            break
+        turn = view["turn"]
+        assert isinstance(turn, dict)
+        first.act("alice", session_id, "check_call")
+    before = first.view("alice", session_id)
+
+    restarted = PlayService(coach_factory, store=store)
+    after = restarted.view("alice", session_id)
+
+    assert after == before
+    assert restarted.report("alice", session_id) == first.report("alice", session_id)
+    assert [item["session_id"] for item in restarted.sessions("alice")] == [session_id]
+    with pytest.raises(KeyError):
+        restarted.view("bob", session_id)
+    restarted.close("alice", session_id)
+    assert PlayService(coach_factory, store=store).sessions("alice") == []
+
+
+def test_positions_and_situations() -> None:
+    from tableforge.learning.play import position_name, stack_bucket
+
+    assert [position_name(6, seat) for seat in range(6)] == ["BTN", "SB", "BB", "UTG", "HJ", "CO"]
+    assert [position_name(9, seat) for seat in range(9)] == [
+        "BTN",
+        "SB",
+        "BB",
+        "UTG",
+        "UTG1",
+        "UTG2",
+        "LJ",
+        "HJ",
+        "CO",
+    ]
+    assert position_name(2, 0) == "SB" and position_name(2, 1) == "BB"
+    assert [stack_bucket(value) for value in (3, 7.5, 12, 30, 80)] == [
+        "0-5",
+        "5-10",
+        "10-20",
+        "20-40",
+        "40+",
+    ]

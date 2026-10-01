@@ -121,7 +121,8 @@ Worker 永遠主動連出到 Coordinator 與 storage，Coordinator 從不連入 
 ### 4.2.2 對打與模型下載（已實作）
 
 - **遠端對打**（`play:remote`）：`play_start`、`play_act`、`play_state`、`play_list`、`play_replay`、`play_history`、`play_close` 指令。對局與模型推論都在 Coordinator 主機上執行，不經過 Worker Job，所以每個動作立即回應。模型從叢集模型庫讀取（sha256 檢查），網路權重有小型快取。
-- 每場對局屬於建立它的憑證：其他憑證（即使同樣有 `play:remote`）看不到、也不能操作；閒置 2 小時自動移除，每個憑證最多保留 3 場。
+- 每場對局屬於建立它的憑證：其他憑證（即使同樣有 `play:remote`）看不到、也不能操作。記憶體中閒置 2 小時移除，但每個動作後都存到叢集資料位置的 `games`（設定加上真人的動作，重新播放即還原），每個憑證最多保留 20 場；存檔內有擁有者，讀取時同樣檢查。
+- 練習模式（H2，`practice`）：教練模型在真人做完決定後才解釋那個情境（`feedback`），`play_report` 產生漏洞報告；開局前的提示仍只在 `hints` 開啟時給。
 - 對局進行中，回應只含自己的手牌與公開資訊；模型的決策說明（機率、Q 值）不隨動作送出，只在比賽結束後轉成重播時才出現。提示預設關閉，開啟後只解釋自己的位置。
 - 模型從哪裡來由 `SeatFactory` 決定（`tableforge.coordinator.play.ModelSeats`），之後改由專用推論節點提供時只要換一個 factory。
 - **模型下載**（`model:download`）：`download_model` 指令每次回傳 2 MB（base64），接收端依序組合，檢查大小與 sha256 後才存入；過程中叢集上的模型被替換會中止下載。

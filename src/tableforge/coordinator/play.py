@@ -20,6 +20,7 @@ from typing import Any
 
 from tableforge.learning.explain import DecisionExplainer
 from tableforge.learning.play import (
+    GameStore,
     PlayError,
     PlayService,
     SeatChoice,
@@ -114,6 +115,7 @@ def play_command(
             choices,
             int(seed) if seed is not None else _random_seed(),
             hints=bool(arguments.get("hints", False)),
+            practice=bool(arguments.get("practice", False)),
             hint_model=hint_model,
         )
     if action == "play_list":
@@ -133,6 +135,8 @@ def play_command(
         return service.replay(owner, session_id)
     if action == "play_history":
         return {"text": service.hand_history(owner, session_id)}
+    if action == "play_report":
+        return service.report(owner, session_id)
     if action == "play_close":
         service.close(owner, session_id)
         return {"ok": True}
@@ -146,6 +150,7 @@ PLAY_ACTIONS = (
     "play_state",
     "play_replay",
     "play_history",
+    "play_report",
     "play_close",
 )
 
@@ -168,5 +173,5 @@ def remote_play(data_dir: Path) -> tuple[PlayService, ModelSeats]:
     with _HOSTS_LOCK:
         if key not in _HOSTS:
             seats = ModelSeats(lambda: ModelLibrary(model_library_root(data_dir)))
-            _HOSTS[key] = (PlayService(seats), seats)
+            _HOSTS[key] = (PlayService(seats, store=GameStore(data_dir / "games")), seats)
         return _HOSTS[key]

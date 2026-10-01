@@ -1036,3 +1036,14 @@ input.narrow {
   align-items: center;
 }
 
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 1rem 2rem;
+  margin-bottom: 1rem;
+}
+.report-grid table {
+  width: 100%;
+}
+

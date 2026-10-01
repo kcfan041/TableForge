@@ -128,6 +128,47 @@ def test_hints_and_the_tournament_come_from_the_model(
     assert wrong_size.status_code == 400 and "6 seats" in wrong_size.json()["detail"]
 
 
+def test_practice_with_a_real_model_survives_a_restart(
+    services: Services, client: TestClient
+) -> None:
+    from tableforge.coordinator import play as remote
+
+    headers = token(services, frozenset({Scope.PLAY_REMOTE}))
+    started = client.post(
+        "/api/command/play_start",
+        json={"seats": SEATS, "seed": 6, "practice": True, "hint_model": "tiny-pko"},
+        headers=headers,
+    ).json()
+    session_id = started["session_id"]
+    view = started
+    assert view["practice"] and view["coach"] == "tiny-pko" and "hint" not in view
+    for _ in range(3):
+        if view["complete"]:
+            break
+        view = client.post(
+            "/api/command/play_act",
+            json={"session_id": session_id, "action": "check_call"},
+            headers=headers,
+        ).json()
+        feedback = view["feedback"]
+        assert feedback["value_unit"] == "buy-in" and feedback["q_loss"] is not None
+        assert abs(sum(feedback["probabilities"].values()) - 1) < 1e-3
+    report = client.post(
+        "/api/command/play_report", json={"session_id": session_id}, headers=headers
+    ).json()
+    remote._HOSTS.clear()  # the coordinator restarted: games are restored from disk
+    restored = client.post(
+        "/api/command/play_state", json={"session_id": session_id}, headers=headers
+    ).json()
+    again = client.post(
+        "/api/command/play_report", json={"session_id": session_id}, headers=headers
+    ).json()
+
+    assert report["overall"]["decisions"] == view["reviews"] >= 1
+    assert restored == view and again == report
+    assert (services.settings.data_dir / "games" / f"{session_id}.json").is_file()
+
+
 def test_games_are_private_and_need_play_remote(services: Services, client: TestClient) -> None:
     alice = token(services, frozenset({Scope.PLAY_REMOTE}))
     bob = token(services, frozenset({Scope.PLAY_REMOTE}))

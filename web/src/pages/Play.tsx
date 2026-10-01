@@ -89,6 +89,51 @@ interface GameView {
   hand: LiveHand | null;
   turn: Turn | null;
   hint?: Explanation;
+  practice?: boolean;
+  coach?: string | null;
+  feedback?: Review | null;
+  reviews?: number;
+}
+
+/** The coach model's view of one of the person's decisions (practice mode). */
+interface Review {
+  hand: number;
+  street: string;
+  position: string;
+  situation: string;
+  stack_bb: number;
+  hole_cards: string[];
+  board: string[];
+  to_call: number;
+  chosen: string;
+  chosen_key: string;
+  amount: number | null;
+  recommended: string;
+  probabilities: Record<string, number>;
+  chosen_probability: number;
+  values: Record<string, number>;
+  value_unit: string;
+  best_value_key: string | null;
+  q_loss: number | null;
+  mistake: boolean;
+}
+
+interface GroupSummary {
+  decisions: number;
+  agree: number | null;
+  chosen_probability: number | null;
+  q_loss_total: number;
+  q_loss_mean: number | null;
+  mistakes: number;
+}
+
+interface PracticeReport {
+  coach: string;
+  unit: string;
+  overall: GroupSummary;
+  by: Record<string, Record<string, GroupSummary>>;
+  worst: Review[];
+  thresholds: { q_loss: number; probability: number };
 }
 
 interface SessionSummary {
@@ -96,6 +141,7 @@ interface SessionSummary {
   labels: string[];
   hands_played: number;
   complete: boolean;
+  practice?: boolean;
 }
 
 type Where = "remote" | "local";
@@ -156,6 +202,7 @@ export function PlayPage({ session }: { session: Session | null }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<SessionSummary[]>([]);
+  const [report, setReport] = useState<PracticeReport | null>(null);
   const call = useMemo(() => playApi(where), [where]);
 
   useEffect(() => {
@@ -176,6 +223,11 @@ export function PlayPage({ session }: { session: Session | null }) {
       call<GameView>("play_state", { session_id: linked })
         .then((value) => !cancelled && setGame(value))
         .catch((reason: unknown) => !cancelled && setError(message(reason)));
+      if (urlParam("report") === "1") {
+        call<PracticeReport>("play_report", { session_id: linked })
+          .then((value) => !cancelled && setReport(value))
+          .catch(() => undefined);
+      }
     }
     return () => {
       cancelled = true;
@@ -215,7 +267,17 @@ export function PlayPage({ session }: { session: Session | null }) {
   const resume = (sessionId: string) =>
     run(async () => {
       setReplay(null);
+      setReport(null);
       setGame(await call<GameView>("play_state", { session_id: sessionId }));
+    });
+
+  const showReport = () =>
+    run(async () => setReport(await call<PracticeReport>("play_report", { session_id: game!.session_id })));
+
+  const saveReport = () =>
+    run(async () => {
+      const document = await call<PracticeReport>("play_report", { session_id: game!.session_id });
+      download(`tableforge-practice-${game!.session_id}.json`, JSON.stringify(document, null, 1), "application/json");
     });
 
   const choices: [Where, boolean][] = [
@@ -252,6 +314,7 @@ export function PlayPage({ session }: { session: Session | null }) {
               <li key={item.session_id}>
                 <button type="button" className="link" onClick={() => void resume(item.session_id)}>
                   {item.labels.map((name) => (name === "You" ? t("play.you") : name)).join(" · ")} — {t("play.handsPlayed", { hands: item.hands_played })}
+                  {item.practice ? ` · ${t("practice.label")}` : ""}
                   {item.complete ? ` (${t("play.over")})` : ""}
                 </button>
               </li>
@@ -262,11 +325,22 @@ export function PlayPage({ session }: { session: Session | null }) {
       {error ? <p className="error">{error}</p> : null}
       {game ? (
         <>
+          {game.practice && game.feedback ? <Feedback review={game.feedback} /> : null}
           <Table game={game} busy={busy} onAct={(action, amount) => void act(action, amount)} />
           <div className="row">
-            <button type="button" onClick={() => { setGame(null); setReplay(null); }}>
+            <button type="button" onClick={() => { setGame(null); setReplay(null); setReport(null); }}>
               {t("play.newGame")}
             </button>
+            {game.practice ? (
+              <>
+                <button type="button" className="primary" disabled={busy || !game.reviews} onClick={() => void showReport()}>
+                  {t("practice.showReport")}
+                </button>
+                <button type="button" disabled={busy || !game.reviews} onClick={() => void saveReport()}>
+                  {t("practice.saveReport")}
+                </button>
+              </>
+            ) : null}
             <button type="button" disabled={busy || !game.complete} onClick={() => void showReplay()}>
               {t("play.toReplay")}
             </button>
@@ -280,8 +354,194 @@ export function PlayPage({ session }: { session: Session | null }) {
           {!game.complete ? <p className="muted small">{t("play.replayAfter")}</p> : null}
         </>
       ) : null}
+      {report ? <Report report={report} /> : null}
       {replay && game ? <ReplayViewer replay={replay} focus={[game.human]} readUrl={false} /> : null}
     </Page>
+  );
+}
+
+function actionName(t: ReturnType<typeof useI18n>["t"], name: string): string {
+  if (name.startsWith("raise_")) return `${t("replay.action.raise")} (${t(`practice.size.${name.slice(6)}` as MessageKey)})`;
+  return t(`replay.action.${name}` as MessageKey);
+}
+
+/** Practice mode: what the coach thought of the person's last decision. */
+function Feedback({ review }: { review: Review }) {
+  const { t, formatNumber } = useI18n();
+  const agrees = review.chosen === review.recommended;
+  const tone = review.mistake ? "error" : agrees ? "positive-text" : "warning";
+  return (
+    <Card title={t("practice.feedbackTitle", { hand: review.hand })}>
+      <p className={tone}>
+        <strong>
+          {review.mistake ? t("practice.mistake") : agrees ? t("practice.agree") : t("practice.differs")}
+        </strong>{" "}
+        {t("practice.youChose", {
+          chosen: actionName(t, review.chosen) + (review.amount && review.chosen !== "check_call" && review.chosen !== "fold" ? ` ${formatNumber(review.amount)}` : ""),
+          recommended: actionName(t, review.recommended),
+          probability: formatNumber(review.chosen_probability * 100, 1),
+        })}
+        {review.q_loss !== null ? ` ${t("practice.qLoss", { loss: formatNumber(review.q_loss, 3), unit: review.value_unit })}` : ""}
+      </p>
+      <p className="small muted">
+        {t("practice.spot", {
+          position: review.position,
+          stack: formatNumber(review.stack_bb, 1),
+          situation: t(`practice.situation.${review.situation}` as MessageKey),
+          street: t(`replay.street.${review.street}` as MessageKey),
+        })}{" "}
+        {review.hole_cards.map((card) => (
+          <CardFace key={card} card={card} />
+        ))}
+        {review.board.length > 0 ? " · " : ""}
+        {review.board.map((card) => (
+          <CardFace key={card} card={card} />
+        ))}
+      </p>
+      <table className="metrics">
+        <thead>
+          <tr>
+            <th />
+            {ACTIONS.map((name) => (
+              <th key={name} className={name === review.chosen ? "chosen" : ""}>
+                {t(`replay.action.${name}` as MessageKey)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>{t("replay.probability")}</th>
+            {ACTIONS.map((name) => (
+              <td key={name} className={name === review.chosen ? "chosen" : ""}>
+                <span className="prob-bar" style={{ width: `${Math.round((review.probabilities[name] ?? 0) * 60)}px` }} />
+                {formatNumber((review.probabilities[name] ?? 0) * 100, 1)}%
+              </td>
+            ))}
+          </tr>
+          <tr>
+            <th>
+              Q <span className="muted small">({review.value_unit})</span>
+            </th>
+            {ACTIONS.map((name) => {
+              const entries = Object.entries(review.values).filter(([key]) => key === name || key.startsWith(`${name}_`));
+              return (
+                <td key={name} className="small">
+                  {entries.length === 0
+                    ? "–"
+                    : entries.map(([key, value]) => (
+                        <div key={key} className={key === review.best_value_key ? "positive-text" : key === review.chosen_key ? "chosen" : ""}>
+                          {key !== name ? <span className="muted">{t(`practice.size.${key.slice(6)}` as MessageKey)}: </span> : null}
+                          {formatNumber(value, 3)}
+                        </div>
+                      ))}
+                </td>
+              );
+            })}
+          </tr>
+        </tbody>
+      </table>
+      <p className="muted small">{t("practice.feedbackNote")}</p>
+    </Card>
+  );
+}
+
+const DIMENSIONS = ["position", "stack", "situation", "street"];
+
+function Report({ report }: { report: PracticeReport }) {
+  const { t, formatNumber } = useI18n();
+  const percent = (value: number | null) => (value === null ? "–" : `${formatNumber(value * 100, 0)}%`);
+  const loss = (value: number | null) => (value === null ? "–" : formatNumber(value, 3));
+  const label = (dimension: string, name: string) =>
+    dimension === "situation"
+      ? t(`practice.situation.${name}` as MessageKey)
+      : dimension === "street"
+        ? t(`replay.street.${name}` as MessageKey)
+        : dimension === "stack"
+          ? `${name} BB`
+          : name;
+  return (
+    <Card title={t("practice.reportTitle")}>
+      <p className="muted small">{t("practice.reportHelp", { coach: report.coach, unit: report.unit })}</p>
+      <dl className="facts">
+        <dt>{t("practice.decisions")}</dt>
+        <dd>{report.overall.decisions}</dd>
+        <dt>{t("practice.agreeRate")}</dt>
+        <dd>{percent(report.overall.agree)}</dd>
+        <dt>{t("practice.lossTotal", { unit: report.unit })}</dt>
+        <dd>
+          {loss(report.overall.q_loss_total)} <span className="muted small">({t("practice.perDecision", { value: loss(report.overall.q_loss_mean) })})</span>
+        </dd>
+        <dt>{t("practice.mistakes")}</dt>
+        <dd>{report.overall.mistakes}</dd>
+      </dl>
+      <div className="report-grid">
+        {DIMENSIONS.map((dimension) => {
+          const rows = Object.entries(report.by[dimension] ?? {}).sort(([, a], [, b]) => b.q_loss_total - a.q_loss_total);
+          return (
+            <div key={dimension}>
+              <h3>{t(`practice.by.${dimension}` as MessageKey)}</h3>
+              <table className="metrics">
+                <thead>
+                  <tr>
+                    <th />
+                    <th>{t("practice.decisions")}</th>
+                    <th>{t("practice.agreeRate")}</th>
+                    <th>{t("practice.lossShort")}</th>
+                    <th>{t("practice.mistakes")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(([name, item]) => (
+                    <tr key={name}>
+                      <th>{label(dimension, name)}</th>
+                      <td>{item.decisions}</td>
+                      <td>{percent(item.agree)}</td>
+                      <td className={item.q_loss_total > report.thresholds.q_loss * 3 ? "negative-text" : ""}>{loss(item.q_loss_total)}</td>
+                      <td>{item.mistakes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+      </div>
+      <h3>{t("practice.worst")}</h3>
+      <table className="metrics">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>{t("practice.spotShort")}</th>
+            <th>{t("practice.cards")}</th>
+            <th>{t("practice.chosen")}</th>
+            <th>{t("practice.recommended")}</th>
+            <th>{t("practice.lossShort")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {report.worst.map((item, index) => (
+            <tr key={index} className={item.mistake ? "selected" : ""}>
+              <td>{item.hand}</td>
+              <td className="small">
+                {item.position} · {formatNumber(item.stack_bb, 1)} BB · {t(`practice.situation.${item.situation}` as MessageKey)}
+              </td>
+              <td>
+                {item.hole_cards.map((card) => (
+                  <CardFace key={card} card={card} />
+                ))}
+              </td>
+              <td>
+                {actionName(t, item.chosen)} <span className="muted small">({formatNumber(item.chosen_probability * 100, 0)}%)</span>
+              </td>
+              <td>{actionName(t, item.recommended)}</td>
+              <td className="negative-text">{loss(item.q_loss)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted small">{t("practice.reportNote", { loss: report.thresholds.q_loss, probability: formatNumber(report.thresholds.probability * 100, 0) })}</p>
+    </Card>
   );
 }
 
@@ -405,6 +665,8 @@ function NewGame({
   const [stack, setStack] = useState("");
   const [seed, setSeed] = useState("");
   const [hints, setHints] = useState(false);
+  const [practice, setPractice] = useState(urlParam("practice") === "1");
+  const [coach, setCoach] = useState("");
   const [seats, setSeats] = useState<SeatChoice[]>([]);
 
   const gameOf = (modelId: string) => models.find((item) => item.model_id === modelId)?.game ?? "";
@@ -443,6 +705,8 @@ function NewGame({
     onStart({
       seats,
       hints,
+      practice,
+      ...((hints || practice) && (coach || first) ? { hint_model: coach || firstModel?.name || first } : {}),
       ...(seed ? { seed: Number(seed) } : {}),
       ...(sameAsModel ? {} : { tournament }),
     });
@@ -470,11 +734,28 @@ function NewGame({
           <input className="narrow" placeholder={t("play.seedRandom")} value={seed} onChange={(event) => setSeed(event.target.value.replace(/\D/g, ""))} />
         </label>
         <label className="checkbox">
-          <input type="checkbox" checked={hints} disabled={!firstModel} onChange={(event) => setHints(event.target.checked)} />
+          <input type="checkbox" checked={hints} disabled={models.length === 0} onChange={(event) => setHints(event.target.checked)} />
           {t("play.hints")}
         </label>
+        <label className="checkbox">
+          <input type="checkbox" checked={practice} disabled={models.length === 0} onChange={(event) => setPractice(event.target.checked)} />
+          {t("practice.toggle")}
+        </label>
+        {hints || practice ? (
+          <label>
+            {t("practice.coach")}
+            <select value={coach || firstModel?.name || first} onChange={(event) => setCoach(event.target.value)}>
+              {models.map((item) => (
+                <option key={item.model_id} value={item.model_id}>
+                  {item.model_id}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
       <p className="muted small">{t("play.tournamentHelp")}</p>
+      {practice ? <p className="muted small">{t("practice.help")}</p> : null}
       <table>
         <tbody>
           {seats.map((seat, index) => {
