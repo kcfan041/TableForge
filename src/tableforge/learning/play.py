@@ -530,8 +530,29 @@ def review(
     """The coach's view of one of the person's decisions."""
     info = started.infos[seat]
     players = len(started.seat_players)
-    relative = (seat - started.hand.button) % players
-    stack_bb = started.stacks_before[seat] / info.big_blind
+    return review_decision(
+        players,
+        (seat - started.hand.button) % players,
+        started.stacks_before[seat] / info.big_blind,
+        hand_number,
+        observation,
+        legal,
+        action,
+        explanation,
+    )
+
+
+def review_decision(
+    players: int,
+    relative: int,
+    stack_bb: float,
+    hand_number: int,
+    observation: TableObservation,
+    legal: LegalActions,
+    action: Action,
+    explanation: DecisionExplanation,
+) -> dict[str, object]:
+    """A decision reviewed by a coach; `relative` is the seat's distance from the button."""
     me = observation.players[observation.observer]
     chosen = canonical_action(action, legal)
     probabilities = {key: round(value, 4) for key, value in explanation.probabilities.items()}

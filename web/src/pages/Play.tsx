@@ -96,7 +96,7 @@ interface GameView {
 }
 
 /** The coach model's view of one of the person's decisions (practice mode). */
-interface Review {
+export interface Review {
   hand: number;
   street: string;
   position: string;
@@ -127,7 +127,7 @@ interface GroupSummary {
   mistakes: number;
 }
 
-interface PracticeReport {
+export interface PracticeReport {
   coach: string;
   unit: string;
   overall: GroupSummary;
@@ -167,6 +167,8 @@ async function localCall<T>(method: string, path: string, body?: object): Promis
   }
   return data as T;
 }
+
+export { localCall };
 
 export const localModels = {
   list: () => localCall<ModelView[]>("GET", "/api/local/models"),
@@ -448,7 +450,7 @@ function Feedback({ review }: { review: Review }) {
 
 const DIMENSIONS = ["position", "stack", "situation", "street"];
 
-function Report({ report }: { report: PracticeReport }) {
+export function Report({ report }: { report: PracticeReport }) {
   const { t, formatNumber } = useI18n();
   const percent = (value: number | null) => (value === null ? "–" : `${formatNumber(value * 100, 0)}%`);
   const loss = (value: number | null) => (value === null ? "–" : formatNumber(value, 3));

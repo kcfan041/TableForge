@@ -6,6 +6,7 @@ import { useI18n, type Locale, type MessageKey } from "./i18n";
 import { LiveProvider, useLive } from "./live";
 import { Checkpoints } from "./pages/Checkpoints";
 import { ComparePage } from "./pages/Compare";
+import { HandsPage } from "./pages/Hands";
 import { Models } from "./pages/Models";
 import { PlayPage } from "./pages/Play";
 import { ReplayPage } from "./pages/Replay";
@@ -62,6 +63,8 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
   // Playing needs play:remote on the cluster, or (inside tableforge ui) downloaded models.
   const playable = machinePage !== undefined || (session !== null && can(session, "play:remote"));
   if (playable) links.splice(session ? links.findIndex(([to]) => to === "/strategy") + 1 : links.length, 0, ["/play", "nav.play"]);
+  // Hand histories are private: only read inside tableforge ui, on this computer.
+  if (machinePage !== undefined) links.splice(links.findIndex(([to]) => to === "/play") + 1, 0, ["/hands", "nav.hands"]);
 
   const content = (
     <div className="shell">
@@ -105,6 +108,7 @@ export function Shell({ session, sessionPending = false, onSignOut, machinePage 
         <Routes>
           {machinePage ? <Route path="/" element={machinePage} /> : null}
           {playable ? <Route path="/play" element={<PlayPage session={session} />} /> : null}
+          {machinePage !== undefined ? <Route path="/hands" element={<HandsPage />} /> : null}
           {session ? (
             <>
               <Route path={machinePage ? "/overview" : "/"} element={<Overview />} />

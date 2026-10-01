@@ -71,6 +71,38 @@ def test_play_against_a_downloaded_model_without_a_cluster(
     assert client.post("/api/local/play/fly", json={}, headers=headers).status_code == 404
 
 
+def test_hand_histories_are_imported_and_reviewed_on_this_computer(
+    panel: tuple[TestClient, dict[str, str], Path],
+) -> None:
+    client, headers, _ = panel
+    text = (Path(__file__).parents[1] / "fixtures" / "gg_hands.txt").read_text(encoding="utf-8")
+
+    plain = client.post("/api/local/hands/import", json={"text": text}, headers=headers)
+    reviewed = client.post(
+        "/api/local/hands/import", json={"text": text, "coach": "tiny-pko"}, headers=headers
+    )
+    bad = client.post("/api/local/hands/import", json={"text": "nothing here"}, headers=headers)
+    unknown = client.post(
+        "/api/local/hands/import", json={"text": text, "coach": "missing"}, headers=headers
+    )
+
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["hands"] == 4 and plain.json()["report"] is None
+    assert reviewed.status_code == 200, reviewed.text
+    report = reviewed.json()["report"]
+    assert report["coach"] == "tiny-pko" and report["overall"]["decisions"] == 5
+    assert report["unit"] == "buy-in"
+    hero_moves = [
+        action
+        for hand in reviewed.json()["replay"]["hands"]
+        for action in hand["actions"]
+        if action["explanation"]
+    ]
+    assert len(hero_moves) == 5
+    assert bad.status_code == 400 and "no GG hands" in bad.json()["detail"]
+    assert unknown.status_code == 400 and "no such model" in unknown.json()["detail"]
+
+
 def test_local_models_can_be_removed_and_download_needs_access(
     panel: tuple[TestClient, dict[str, str], Path],
 ) -> None:

@@ -43,13 +43,16 @@ export interface ReplayHand {
   knockouts: { eliminated: number; collector: number; cash: number; added_to_bounty: number }[];
   showdown: boolean;
   winners: number[];
+  /** Imported hands: the site's hand id. */
+  hand_id?: string;
 }
 
 export interface Replay {
   seed: number;
   labels: string[];
   hands: ReplayHand[];
-  result: { places: number[]; prizes: number[]; bounties: number[]; results: number[] };
+  /** Null for imported hand histories (only some hands of a tournament). */
+  result: { places: number[]; prizes: number[]; bounties: number[]; results: number[] } | null;
   config: { players: number; payout: number[] };
 }
 
@@ -238,6 +241,7 @@ export function ReplayViewer({ replay, focus, readUrl = true }: { replay: Replay
     <>
       {hand ? (
         <>
+          {replay.result ? (
           <Card title={t("replay.summary")}>
             <table className="metrics">
               <thead>
@@ -255,11 +259,11 @@ export function ReplayViewer({ replay, focus, readUrl = true }: { replay: Replay
                     <th>
                       {player + 1}. {label}
                     </th>
-                    <td>{replay.result.places[player]}</td>
-                    <td>{formatNumber(replay.result.prizes[player]!, 3)}</td>
-                    <td>{formatNumber(replay.result.bounties[player]!, 3)}</td>
-                    <td className={replay.result.results[player]! > 0 ? "positive-text" : replay.result.results[player]! < 0 ? "negative-text" : ""}>
-                      {formatNumber(replay.result.results[player]!, 3)}
+                    <td>{replay.result!.places[player]}</td>
+                    <td>{formatNumber(replay.result!.prizes[player]!, 3)}</td>
+                    <td>{formatNumber(replay.result!.bounties[player]!, 3)}</td>
+                    <td className={replay.result!.results[player]! > 0 ? "positive-text" : replay.result!.results[player]! < 0 ? "negative-text" : ""}>
+                      {formatNumber(replay.result!.results[player]!, 3)}
                     </td>
                   </tr>
                 ))}
@@ -267,6 +271,7 @@ export function ReplayViewer({ replay, focus, readUrl = true }: { replay: Replay
             </table>
             <p className="muted small">{t("replay.summaryHelp", { hands: replay.hands.length })}</p>
           </Card>
+          ) : null}
           <div className="replay-layout">
             <Card title={t("replay.hands")}>
               <label className="small">
@@ -284,6 +289,7 @@ export function ReplayViewer({ replay, focus, readUrl = true }: { replay: Replay
                   <li key={index}>
                     <button type="button" className={`link${index === handIndex ? " active" : ""}`} onClick={() => go(index)}>
                       #{item.hand} · {formatNumber(item.small_blind)}/{formatNumber(item.big_blind)}
+                      {item.hand_id ? <span className="muted small"> {item.hand_id}</span> : null}
                       {item.knockouts.some((knockout) => modelSeats.includes(knockout.collector)) ? " 🎯" : ""}
                       {item.busted.some((player) => modelSeats.includes(player)) ? " ✖" : ""}
                     </button>
@@ -338,9 +344,11 @@ export function ReplayViewer({ replay, focus, readUrl = true }: { replay: Replay
                           {player + 1}. {replay.labels[player]}
                         </div>
                         <div className="seat-cards">
-                          {hand.hole_cards[index]!.map((card) => (
-                            <CardFace key={card} card={card} hidden={!showCards && !isModel} />
-                          ))}
+                          {hand.hole_cards[index]!.length === 0
+                            ? [0, 1].map((item) => <CardFace key={item} card="" hidden />)
+                            : hand.hole_cards[index]!.map((card) => (
+                                <CardFace key={card} card={card} hidden={!showCards && !isModel} />
+                              ))}
                         </div>
                         <div className="small">
                           {formatNumber(stack)} ({formatNumber(stack / hand.big_blind, 1)} BB)

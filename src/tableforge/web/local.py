@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from tableforge.capability.cpu_topology import child_processes, set_affinity, spread_masks
 from tableforge.coordinator.play import ModelSeats
-from tableforge.learning.play import GameStore, PlayService
+from tableforge.learning.play import GameStore, PlayError, PlayService, SeatChoice
 from tableforge.models import ModelLibrary
 from tableforge.processes import STOP_FILE_ENV, background_process_flags
 from tableforge.transport.control_client import ControlError, RemoteControl
@@ -545,6 +545,53 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
                 raise HTTPException(400, str(error)) from error
 
         return await asyncio.to_thread(run)
+
+    @app.post("/api/local/hands/import")
+    async def import_hand_histories(request: Request) -> Any:
+        """Read pasted GG/Natural8 hand histories on this computer (they never leave it);
+        with ``coach`` (a downloaded model id), review the hero's decisions."""
+        from tableforge.learning.hand_import import MAX_TEXT, Coach, import_hands
+        from tableforge.poker.hand_history import HandHistoryError
+
+        raw = await request.body()
+        if len(raw) > MAX_TEXT + 4096:
+            raise HTTPException(413, "the hand history is larger than 5 MB")
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "arguments must be JSON") from error
+        if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+            raise HTTPException(400, "give the hand history text")
+        coach_id = str(body.get("coach") or "").strip()
+
+        def run() -> Any:
+            coach = None
+            if coach_id:
+                from tableforge.coordinator.analysis import tournament_json
+                from tableforge.poker.tournament import TournamentConfig
+
+                info = local_seats.info(coach_id)
+                mode = str(body.get("mode") or "average")
+                choice = SeatChoice("model", coach_id, mode)
+
+                def explainer_for() -> Any:
+                    return local_seats(choice, 0)
+
+                config = TournamentConfig.from_json(tournament_json(info))
+                coach = Coach(explainer_for, mode, coach_id, config, config.players)
+            try:
+                return import_hands(str(body["text"]), coach)
+            except HandHistoryError as error:
+                raise HTTPException(400, str(error)) from error
+            except ImportError as error:
+                raise HTTPException(
+                    409, "reviewing with a model needs PyTorch: install with --extra learning"
+                ) from error
+
+        try:
+            return await asyncio.to_thread(run)
+        except PlayError as error:
+            raise HTTPException(400, str(error)) from error
 
     @app.get("/api/status")
     def get_status() -> dict[str, object]:

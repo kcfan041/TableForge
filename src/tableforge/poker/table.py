@@ -90,10 +90,11 @@ class TableBetting:
         small_blind: int,
         big_blind: int,
         big_blind_ante: int = 0,
+        extra_dead_money: int = 0,
     ) -> None:
         if small_blind <= 0 or big_blind <= small_blind:
             raise ValueError("blinds must satisfy 0 < small_blind < big_blind")
-        if big_blind_ante < 0:
+        if big_blind_ante < 0 or extra_dead_money < 0:
             raise ValueError("ante cannot be negative")
         if any(stack <= 0 for stack in stacks):
             raise ValueError("starting stacks must be positive")
@@ -121,6 +122,9 @@ class TableBetting:
         big_blind_seat = self.seats[self.positions.big_blind]
         self.dead_money = min(big_blind_ante, big_blind_seat.stack)
         big_blind_seat.stack -= self.dead_money
+        # Chips already in the pot from outside these stacks (antes every player posted,
+        # when replaying a hand history): dead money like the big blind ante.
+        self.dead_money += extra_dead_money
         self.current_bet = max(seat.street_contribution for seat in self.seats)
         self._open_round(self.positions.first_preflop)
         self._assert_invariants()
@@ -333,14 +337,30 @@ class TableHand:
         big_blind: int,
         seed: int | str | bytes,
         big_blind_ante: int = 0,
+        extra_dead_money: int = 0,
+        cards: tuple[tuple[tuple[Card, Card], ...], tuple[Card, ...]] | None = None,
     ) -> None:
+        """`extra_dead_money` and `cards` (hole cards per seat and five board cards) are for
+        replaying recorded hands; normal play leaves them at their defaults."""
         self.initial_stacks = tuple(stacks)
+        self.extra_dead_money = extra_dead_money
         self.button = button
-        self.betting = TableBetting(stacks, button, small_blind, big_blind, big_blind_ante)
+        self.betting = TableBetting(
+            stacks, button, small_blind, big_blind, big_blind_ante, extra_dead_money
+        )
         self.players = len(stacks)
         self._deck = Deck.shuffled(seed)
-        self.hole_cards = self._deal_hole_cards()
-        self._flop, self._turn, self._river = self._deal_board_runout()
+        if cards is None:
+            self.hole_cards = self._deal_hole_cards()
+            self._flop, self._turn, self._river = self._deal_board_runout()
+        else:
+            holes, board = cards
+            dealt = [card for pair in holes for card in pair] + list(board)
+            if len(holes) != self.players or len(board) != 5 or len(set(dealt)) != len(dealt):
+                raise ValueError("give two different cards per seat and five board cards")
+            self.hole_cards = tuple(holes)
+            self._flop = (board[0], board[1], board[2])
+            self._turn, self._river = board[3], board[4]
         self.action_history: list[TablePublicAction] = []
         self.result: TableResult | None = None
         self._settle_if_complete()
@@ -355,6 +375,11 @@ class TableHand:
             return self._flop
         if self.betting.street is Street.TURN:
             return (*self._flop, self._turn)
+        return (*self._flop, self._turn, self._river)
+
+    @property
+    def runout(self) -> tuple[Card, ...]:
+        """All five board cards, including those not dealt yet (for replaying a hand)."""
         return (*self._flop, self._turn, self._river)
 
     @property
@@ -497,7 +522,7 @@ class TableHand:
             winners = tuple(sorted(showdown_winners))
             ended_by_fold = False
         final_stacks = tuple(state.stack + payouts[index] for index, state in enumerate(seats))
-        if sum(final_stacks) != sum(self.initial_stacks):
+        if sum(final_stacks) != sum(self.initial_stacks) + self.extra_dead_money:
             raise AssertionError("chip conservation violated")
         if sum(payouts) != sum(contributions) + dead_money:
             raise AssertionError("payouts do not match the pot")
