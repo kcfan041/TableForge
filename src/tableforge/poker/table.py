@@ -1,4 +1,4 @@
-"""No-limit hold'em for 2 to 6 players.
+"""No-limit hold'em for 2 to 9 players.
 
 This engine is independent of ``HeadsUpHand`` and does not change it. With two players
 it follows the heads-up conventions (the button posts the small blind, acts first
@@ -37,7 +37,7 @@ from tableforge.poker.environment import HandCompleteError
 from tableforge.poker.evaluator import HandRank, evaluate
 
 MIN_PLAYERS = 2
-MAX_PLAYERS = 6
+MAX_PLAYERS = 9
 OBSERVATION_SCHEMA = "poker-nlhe-table-observation-v1"
 
 

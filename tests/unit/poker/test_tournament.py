@@ -148,7 +148,7 @@ def lineup(players: int, seed: int) -> list[object]:
 
 
 @given(
-    players=st.integers(2, 6),
+    players=st.integers(2, 9),
     stack_bb=st.sampled_from([3, 10, 25]),
     payout=st.sampled_from(sorted(PAYOUTS)),
     ante=st.booleans(),

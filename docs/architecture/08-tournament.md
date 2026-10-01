@@ -253,6 +253,31 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 - 平台：preset `6max-pko-10bb-exploit`，建立時必須指定 `exploit_target`；目標是模型時，錦標賽規格自動改成那個模型訓練時的規格。每輪的 match Job 另外量「對目標」的 ROI（`pool_eval_seeds` 個 seed × 座位數），訓練曲線多兩條線；每輪一律採用最新的學習者（它專門針對目標，對 Rule Bot 的表現不作為退回的理由）。模型頁有「量可剝削程度」按鈕，實驗頁顯示可剝削程度。
 - 研究腳本：`scripts/tournament_probe.py --exploit-target <模型 ID 或 rule:bot>`。
 
-## 10. 尚未決定
+## 10. 新格式：9 人桌、下注尺度、多結構訓練（T4、S2、S3）
+
+三件事一起做，只需要重新訓練一次；舊格式全部保留，現有模型照常使用。
+
+**T4 9 人桌**
+- 引擎、錦標賽、規格、模擬、實驗都支援 2–9 人（`poker.table.MAX_PLAYERS = 9`）；6 人以下的行為不變（性質測試擴到 9 人）。
+- 位置名稱集中在 `poker/positions.py`：2–6 人和以前完全相同（6 人：UTG、HJ、CO、BTN、SB、BB），7–9 人加入 LJ、UTG1、UTG2。策略表、練習報告共用。
+- 模型只能坐它的 encoder 有位置的牌桌：v2 最多 6 人、v3 最多 9 人；超過時明確報錯（以前 v2 會靜默忽略多出來的對手）。
+
+**S2 下注尺度**（`learning/actions.py`）
+- `nlhe-discrete-v1`（不變）：蓋牌、過牌／跟注、半池、一池、全下。
+- `nlhe-discrete-v2`（10 個動作）：蓋牌、過牌／跟注、全下；翻牌前 2x、2.5x、3x（沒人加注時是大盲的倍數，面對加注時是目前下注的倍數）；翻牌後 33%、66%、100%、150%（跟注後底池的比例）。翻牌前的尺寸只在翻牌前合法、翻牌後的只在翻牌後合法；都會限制在合法範圍內。
+- checkpoint、經驗資料與 Job payload 都記錄動作格式；只有不是 v1 時才寫出，所以舊的 payload 與 checkpoint sha256 不變。學習器會拒絕動作格式不同的經驗資料。
+- 說明器把每個尺寸放在 `raise_sizes` 與 Q 值表（`raise_2x`、`raise_pot_66`…），練習與牌譜檢討會把真人的加注對應到教練最接近的尺寸。
+
+**encoder v3**（`learning/encoding_v3.py`，`poker-nlhe-vector-v3`）
+- 8 個對手位置；位置同時以「按鈕後第幾位」與「按鈕前第幾位」表示（6 人與 9 人的後位意思相同）；每個對手多一個「我蓋得過他」（PKO 能不能拿他的 bounty）。
+- 結構特徵：起始籌碼（BB）、每級手數、盲注成長、ante／大盲、付錢名次數、冠軍與泡沫名次的獎金、剩餘人數佔開賽人數、bounty 佔 buy-in 比例、現金比例、自己的 bounty 相對桌上平均；獎金向量 9 名；行動紀錄 24 個。
+- `TournamentHandInfo` 新增 `field_size`、`bounty_share`、`blind_growth`。
+
+**S3 多結構訓練**（`poker/tournament_sampler.py`）
+- `TournamentSampler` 描述範圍：人數、起始籌碼（對數均勻）、每級手數、盲注成長、ante 比例、獎金分配、PKO 機率與 bounty 規則；每個訓練 seed 固定抽出同一個錦標賽。
+- 實驗設定 `sampler_json`（建立時用 `settings.sampler` 物件指定），只用在訓練；訓練曲線與升級判定仍用 `tournament_json` 的固定錦標賽。需要 v3（看得到結構），而且抽出的人數不能超過 encoder 的位置。
+- preset：`mixed-pko-v3-train`（2–9 人、8–60 BB、各種盲注與獎金；曲線用 6 人 25 BB PKO）與 `mixed-pko-v3-smoke`。
+
+## 11. 尚未決定
 
 - 多桌、併桌、late registration 的規則與時程。

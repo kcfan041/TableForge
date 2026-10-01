@@ -492,6 +492,7 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "pool_eval_seeds": int,
     "exploit_target": str,
     "observation_schema": str,
+    "action_schema": str,
     "benchmark_deals": int,
     "evaluation_deals": int,
     "max_evaluation_deals": int,
@@ -561,13 +562,26 @@ def apply_overrides(config: ExperimentConfig, overrides: Mapping[str, object]) -
     overrides = dict(overrides)
     tournament = overrides.pop("tournament", None)
     opponents = overrides.pop("opponents", None)
+    sampler = overrides.pop("sampler", None)
     config = apply_tournament(
         config,
         tournament,  # type: ignore[arg-type]
         None if opponents is None else str(opponents),
     )
+    if sampler is not None:
+        from tableforge.poker.tournament_sampler import TournamentSampler
+
+        if config.kind is not ExperimentKind.NFSP_ITERATIVE or not config.tournament_json:
+            raise ValueError("a tournament sampler needs a tournament training preset")
+        if sampler == {} or sampler is False:
+            config = replace(config, sampler_json="")
+        else:
+            if not isinstance(sampler, Mapping):
+                raise ValueError("sampler must be an object")
+            parsed = TournamentSampler.from_dict(dict(sampler))
+            config = replace(config, sampler_json=parsed.to_json())
     if not overrides:
-        return config
+        return replace(config)
     if config.kind is not ExperimentKind.NFSP_ITERATIVE:
         raise ValueError("custom settings are only available for iterative NFSP presets")
     unknown = set(overrides) - set(TRAINING_OVERRIDES)

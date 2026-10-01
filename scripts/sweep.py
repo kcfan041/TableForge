@@ -280,7 +280,12 @@ def status(args: argparse.Namespace) -> None:
     for tag, info in manifest.items():
         rows = _rows(folder / f"{tag}.jsonl")
         running = any(_alive(pid) for pid in info.get("pids", [info["pid"]]))
-        error = (folder / f"{tag}.err").read_text(encoding="utf-8").strip().splitlines()
+        error = (
+            (folder / f"{tag}.err")
+            .read_text(encoding="utf-8", errors="replace")
+            .strip()
+            .splitlines()
+        )
         progress = rows[-1].get("hands", rows[-1].get("tournaments")) if rows else 0
         print(
             f"{tag:<32} {'running' if running else 'done   '} checkpoints {len(rows)}"
@@ -364,6 +369,9 @@ def stop(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Error text from runs can contain characters the console encoding cannot show.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     start_parser = commands.add_parser("start")

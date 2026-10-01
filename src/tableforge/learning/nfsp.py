@@ -13,7 +13,14 @@ from safetensors.torch import load as st_load
 from safetensors.torch import save as st_save
 from torch import Tensor, nn
 
-from tableforge.learning.actions import ACTION_COUNT, AbstractAction, ActionTranslator
+from tableforge.learning.actions import (
+    ACTION_COUNT,
+    ACTION_SCHEMAS,
+    AbstractAction,
+    Actions,
+    ActionTranslator,
+    Spot,
+)
 from tableforge.learning.actions import SCHEMA as ACTION_SCHEMA
 from tableforge.learning.buffers import PolicySample
 from tableforge.learning.bundle import (
@@ -25,6 +32,8 @@ from tableforge.learning.bundle import (
 )
 from tableforge.learning.encoders import DEFAULT_SCHEMA, Encoder, encoder
 from tableforge.learning.encoding_v2 import TournamentContext
+from tableforge.learning.encoding_v3 import SCHEMA as STRUCTURE_SCHEMA
+from tableforge.learning.encoding_v3 import StructureContext
 from tableforge.learning.memory import PolicyReservoir, TransitionMemory
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.observation import Observation
@@ -44,6 +53,25 @@ def tournament_context(info: TournamentHandInfo) -> TournamentContext:
         ante=info.ante,
         payout=info.payout,
         bounties=tuple(value / scale for value in info.bounties),
+    )
+
+
+def structure_context(info: TournamentHandInfo) -> StructureContext:
+    """What the v3 encoder's structure fields need."""
+    scale = info.starting_bounty if info.starting_bounty > 0 else 1.0
+    return StructureContext(
+        starting_stack=info.starting_stack,
+        level=info.level,
+        hands_to_next_level=info.hands_to_next_level,
+        hands_per_level=info.hands_per_level,
+        players_left=info.players_left,
+        field_size=info.field_size or info.players_left,
+        ante=info.ante,
+        payout=info.payout,
+        bounties=tuple(value / scale for value in info.bounties),
+        bounty_share=info.bounty_share,
+        cash_share=info.bounty_cash_share if info.bounties else 0.0,
+        blind_growth=info.blind_growth or 1.25,
     )
 
 
@@ -75,16 +103,27 @@ class NfspConfig:
     the stack depth (e.g. 100) keeps errors in the quadratic range. Actions are unchanged
     because every Q value is scaled the same way.
     """
+    action_schema: str = ACTION_SCHEMA
+    """Which abstract actions the networks output (`learning.actions`)."""
 
 
-def _network(inputs: int, hidden: int) -> nn.Sequential:
+def _config_dict(config: NfspConfig) -> dict[str, Any]:
+    """The config as stored in checkpoints; the default action schema is left out so
+    checkpoints written before it existed (and their sha256) are unchanged."""
+    data = asdict(config)
+    if data["action_schema"] == ACTION_SCHEMA:
+        del data["action_schema"]
+    return data
+
+
+def _network(inputs: int, hidden: int, outputs: int = ACTION_COUNT) -> nn.Sequential:
     return nn.Sequential(
         nn.Linear(inputs, hidden),
         nn.LayerNorm(hidden),
         nn.ReLU(),
         nn.Linear(hidden, hidden),
         nn.ReLU(),
-        nn.Linear(hidden, ACTION_COUNT),
+        nn.Linear(hidden, outputs),
     )
 
 
@@ -114,23 +153,25 @@ class NfspAgent:
         self.device = torch.device(device)
         self.rng = random.Random(config.seed)
         self.encoder: Encoder = encoder(config.observation_schema)
+        self.actions = Actions(config.action_schema)
         inputs = self.encoder.feature_size
-        self.q_network = _network(inputs, config.hidden_size).to(self.device)
-        self.target_network = _network(inputs, config.hidden_size).to(self.device)
+        outputs = self.actions.count
+        self.q_network = _network(inputs, config.hidden_size, outputs).to(self.device)
+        self.target_network = _network(inputs, config.hidden_size, outputs).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
-        self.policy_network = _network(inputs, config.hidden_size).to(self.device)
+        self.policy_network = _network(inputs, config.hidden_size, outputs).to(self.device)
         self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), config.learning_rate)
         self.policy_optimizer = torch.optim.Adam(
             self.policy_network.parameters(), config.learning_rate
         )
-        self.rl_buffer = TransitionMemory(config.rl_capacity, inputs, ACTION_COUNT)
-        self.sl_buffer = PolicyReservoir(config.sl_capacity, inputs, ACTION_COUNT)
+        self.rl_buffer = TransitionMemory(config.rl_capacity, inputs, outputs)
+        self.sl_buffer = PolicyReservoir(config.sl_capacity, inputs, outputs)
         self.translator = ActionTranslator()
         self.training = True
         self.best_response_mode = False
         self.train_steps = 0
         self.batch_size = config.batch_size
-        self.last_choice: AbstractAction | None = None
+        self.last_choice: int | None = None
         self.policy_sink: Callable[[PolicySample], None] | None = None
         self.hand_info: TournamentHandInfo | None = None
         self.last_state: tuple[tuple[float, ...], tuple[bool, ...]] | None = None
@@ -143,19 +184,47 @@ class NfspAgent:
         """Tournament hook (`TournamentAware`): blinds and tournament state of this hand."""
         if not self.encoder.supports_tables:
             raise ValueError(f"{self.encoder.schema} cannot play tournaments")
+        if len(info.seat_players) > self.encoder.max_players:
+            raise ValueError(
+                f"this model ({self.encoder.schema}) has seats for "
+                f"{self.encoder.max_players} players, not {len(info.seat_players)}"
+            )
         self.hand_info = info
 
     def encode(self, observation: Observation | TableObservation) -> list[float]:
         info = self.hand_info
         if info is None:
             return self.encoder.encode(observation, self.config.big_blind)
-        return self.encoder.encode(
-            observation, info.big_blind, info.small_blind, tournament_context(info)
+        context: TournamentContext | StructureContext = (
+            structure_context(info)
+            if self.encoder.schema == STRUCTURE_SCHEMA
+            else tournament_context(info)
+        )
+        return self.encoder.encode(observation, info.big_blind, info.small_blind, context)
+
+    def legal_mask(
+        self, observation: Observation | TableObservation, legal: LegalActions
+    ) -> tuple[bool, ...]:
+        if self.actions.schema == ACTION_SCHEMA:
+            return self.translator.legal_mask(legal)
+        return self.actions.legal_mask(legal, observation.street)
+
+    def spot(self, observation: Observation | TableObservation) -> Spot:
+        me = observation.players[int(observation.observer)]
+        big_blind = (
+            self.hand_info.big_blind if self.hand_info is not None else self.config.big_blind
+        )
+        return Spot(
+            observation.street,
+            observation.pot,
+            observation.current_bet,
+            me.street_contribution,
+            big_blind,
         )
 
     def act(self, observation: Observation | TableObservation, legal: LegalActions) -> Action:
         state = self.encode(observation)
-        mask = self.translator.legal_mask(legal)
+        mask = self.legal_mask(observation, legal)
         choice = self.choose(state, mask)
         self.last_choice = choice
         self.last_state = (tuple(state), mask)
@@ -165,30 +234,34 @@ class NfspAgent:
                 self.policy_sink(sample)
             else:
                 self.sl_buffer.add(sample, self.rng)
+        if self.actions.schema != ACTION_SCHEMA:
+            return self.actions.to_action(int(choice), legal, self.spot(observation))
         me = observation.players[int(observation.observer)]
         return self.translator.to_action(
-            choice,
+            AbstractAction(choice),
             legal,
             observation.pot,
             observation.current_bet,
             me.street_contribution,
         )
 
-    def choose(self, state: Sequence[float], mask: tuple[bool, ...]) -> AbstractAction:
+    def choose(self, state: Sequence[float], mask: tuple[bool, ...]) -> int:
+        """Index of the chosen abstract action (an `AbstractAction` for the v1 set)."""
         legal = [index for index, allowed in enumerate(mask) if allowed]
         if not legal:
             raise ValueError("no legal abstract actions")
         state_tensor = torch.tensor([state], dtype=torch.float32, device=self.device)
         mask_tensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
+        wrap = AbstractAction if self.actions.schema == ACTION_SCHEMA else int
         with torch.no_grad():
             if self.best_response_mode:
                 if self.training and self.rng.random() < self.config.epsilon:
-                    return AbstractAction(self.rng.choice(legal))
+                    return wrap(self.rng.choice(legal))
                 values = _masked(self.q_network(state_tensor), mask_tensor)
-                return AbstractAction(int(values.argmax(dim=1).item()))
+                return wrap(int(values.argmax(dim=1).item()))
             logits = _masked(self.policy_network(state_tensor), mask_tensor)
             probabilities = torch.softmax(logits, dim=1)[0].tolist()
-        return AbstractAction(self.rng.choices(range(ACTION_COUNT), probabilities)[0])
+        return wrap(self.rng.choices(range(self.actions.count), probabilities)[0])
 
     def train_step(self) -> dict[str, float]:
         metrics: dict[str, float] = {}
@@ -245,9 +318,9 @@ class NfspAgent:
         entries = {
             MANIFEST: json_bytes(
                 {
-                    "action_schema": ACTION_SCHEMA,
+                    "action_schema": self.actions.schema,
                     "algorithm": "nfsp",
-                    "config": asdict(self.config),
+                    "config": _config_dict(self.config),
                     "metadata": metadata or {},
                     "observation_schema": self.encoder.schema,
                     "schema_version": BUNDLE_SCHEMA,
@@ -293,7 +366,7 @@ class NfspAgent:
         manifest = json.loads(entries[MANIFEST])
         if manifest.get("schema_version") != BUNDLE_SCHEMA:
             raise ValueError("unsupported checkpoint bundle schema")
-        if manifest["action_schema"] != ACTION_SCHEMA:
+        if manifest["action_schema"] not in ACTION_SCHEMAS:
             raise ValueError("unsupported action schema")
         agent = cls(_config_from_manifest(manifest), device=device)
         agent.train_steps = int(manifest["train_steps"])
@@ -369,8 +442,11 @@ def _config_from_manifest(manifest: dict[str, Any]) -> NfspConfig:
     config.setdefault("observation_schema", DEFAULT_SCHEMA)
     config.setdefault("reward_scale", 1.0)
     config.setdefault("double_q", False)
+    config.setdefault("action_schema", manifest.get("action_schema", ACTION_SCHEMA))
     if manifest.get("observation_schema", DEFAULT_SCHEMA) != config["observation_schema"]:
         raise ValueError("checkpoint observation schema does not match its config")
+    if manifest.get("action_schema", ACTION_SCHEMA) != config["action_schema"]:
+        raise ValueError("checkpoint action schema does not match its config")
     encoder(config["observation_schema"])
     return NfspConfig(**config)
 

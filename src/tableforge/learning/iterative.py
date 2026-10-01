@@ -63,6 +63,7 @@ class NfspInitExecutor:
                 double_q=payload.double_q,
                 rl_capacity=payload.rl_capacity,
                 sl_capacity=payload.sl_capacity,
+                action_schema=payload.action_schema,
             )
         )
         return agent.to_bundle({"round_index": 0})
@@ -112,6 +113,7 @@ class NfspActorExecutor:
             transitions=tuple(transitions),
             policy_samples=tuple(samples),
             observation_schema=agent.encoder.schema,
+            action_schema=agent.actions.schema,
         ).to_bytes()
 
 
@@ -158,6 +160,11 @@ class NfspLearnerExecutor:
                 raise ValueError(
                     f"experience shard uses {shard.observation_schema}, "
                     f"the model uses {agent.encoder.schema}"
+                )
+            if shard.action_schema != agent.actions.schema:
+                raise ValueError(
+                    f"experience shard uses {shard.action_schema}, "
+                    f"the model uses {agent.actions.schema}"
                 )
             transitions.extend(shard.transitions)
             samples.extend(shard.policy_samples)
@@ -276,8 +283,13 @@ def _tournament_shard(
     """Play `payload.hands` training tournaments and return their experience."""
     from tableforge.learning.tournament_training import play_training_tournament
     from tableforge.poker.tournament import TournamentConfig
+    from tableforge.poker.tournament_sampler import TournamentSampler
 
-    config = TournamentConfig.from_json(payload.tournament_json)
+    config: TournamentConfig | TournamentSampler = TournamentConfig.from_json(
+        payload.tournament_json
+    )
+    if payload.sampler_json:
+        config = TournamentSampler.from_json(payload.sampler_json)
     opponents = None
     if payload.pool_artifact_id and fetch is not None:
         opponents = load_pool(fetch, payload.pool_artifact_id, payload.pool_sha256)
@@ -306,6 +318,7 @@ def _tournament_shard(
         transitions=tuple(transitions),
         policy_samples=tuple(samples),
         observation_schema=agent.encoder.schema,
+        action_schema=agent.actions.schema,
     ).to_bytes()
 
 

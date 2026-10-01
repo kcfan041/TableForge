@@ -269,6 +269,7 @@ def test_positions_and_situations() -> None:
     from tableforge.learning.play import position_name, stack_bucket
 
     assert [position_name(6, seat) for seat in range(6)] == ["BTN", "SB", "BB", "UTG", "HJ", "CO"]
+    assert [position_name(4, seat) for seat in range(4)] == ["BTN", "SB", "BB", "CO"]
     assert [position_name(9, seat) for seat in range(9)] == [
         "BTN",
         "SB",

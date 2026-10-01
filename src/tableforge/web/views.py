@@ -23,7 +23,7 @@ from tableforge.domain.auth import (
     Scope,
     parse_scopes,
 )
-from tableforge.domain.experiments import BUILTIN_PRESETS, Experiment
+from tableforge.domain.experiments import BUILTIN_PRESETS, OBSERVATION_SCHEMAS, Experiment
 from tableforge.domain.ids import AgentId, ExperimentId, InviteId, NodeId, OperatorId
 from tableforge.infrastructure.sql.events import DomainEvent
 from tableforge.infrastructure.sql.migrations import schema_version
@@ -593,7 +593,8 @@ class ClusterViews:
                 }
                 for name, kind in TRAINING_OVERRIDES.items()
             },
-            "observation_schemas": ["poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2"],
+            "observation_schemas": list(OBSERVATION_SCHEMAS),
+            "action_schemas": ["nlhe-discrete-v1", "nlhe-discrete-v2"],
             "presets": presets,
         }
 

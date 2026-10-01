@@ -4,22 +4,12 @@ from __future__ import annotations
 
 import torch
 
-from tableforge.learning.actions import AbstractAction
 from tableforge.learning.algorithms import NFSP_AVERAGE, NFSP_BEST_RESPONSE
 from tableforge.learning.explain import ACTIONS, DecisionExplanation, Detail, PlayMode
 from tableforge.learning.nfsp import MASKED, NfspAgent
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.table import TableObservation
 from tableforge.poker.tournament import TournamentHandInfo
-
-_CANONICAL = {
-    AbstractAction.FOLD: "fold",
-    AbstractAction.CHECK_CALL: "check_call",
-    AbstractAction.RAISE_HALF_POT: "raise",
-    AbstractAction.RAISE_POT: "raise",
-    AbstractAction.ALL_IN: "all_in",
-}
-_SIZES = {AbstractAction.RAISE_HALF_POT: "half_pot", AbstractAction.RAISE_POT: "pot"}
 
 AVERAGE, BEST_RESPONSE = NFSP_AVERAGE, NFSP_BEST_RESPONSE
 
@@ -44,7 +34,7 @@ class NfspExplainer:
         self, observation: TableObservation, legal: LegalActions
     ) -> tuple[list[bool], list[float], list[float]]:
         state = self.agent.encode(observation)
-        mask = list(self.agent.translator.legal_mask(legal))
+        mask = list(self.agent.legal_mask(observation, legal))
         device = self.agent.device
         state_tensor = torch.tensor([state], dtype=torch.float32, device=device)
         mask_tensor = torch.tensor([mask], dtype=torch.bool, device=device)
@@ -58,7 +48,8 @@ class NfspExplainer:
         self, observation: TableObservation, legal: LegalActions, mode: str
     ) -> DecisionExplanation:
         mask, policy, q_values = self._values(observation, legal)
-        legal_actions = [AbstractAction(index) for index, allowed in enumerate(mask) if allowed]
+        actions = self.agent.actions
+        legal_actions = [index for index, allowed in enumerate(mask) if allowed]
         if mode == BEST_RESPONSE.key:
             best = max(legal_actions, key=lambda action: q_values[action])
             weights = {action: 1.0 if action == best else 0.0 for action in legal_actions}
@@ -69,16 +60,17 @@ class NfspExplainer:
         probabilities = dict.fromkeys(ACTIONS, 0.0)
         raise_sizes: dict[str, float] = {}
         for action, weight in weights.items():
-            probabilities[_CANONICAL[action]] += weight
-            if action in _SIZES:
-                raise_sizes[_SIZES[action]] = weight
+            probabilities[actions.canonical[action]] += weight
+            if actions.size_label[action]:
+                raise_sizes[actions.size_label[action]] = weight
         total = sum(probabilities.values())
         probabilities = {name: value / total for name, value in probabilities.items()}
         scale = self.agent.config.reward_scale
         unit = "buy-in" if self.info is not None else "big blind"
         q_detail: dict[str, float] = {}
         for action in legal_actions:
-            name = _CANONICAL[action] if action not in _SIZES else f"raise_{_SIZES[action]}"
+            size = actions.size_label[action]
+            name = f"raise_{size}" if size else actions.canonical[action]
             q_detail[name] = q_values[action] * scale
         return DecisionExplanation(
             probabilities,

@@ -29,7 +29,14 @@ from dataclasses import asdict, dataclass, field
 from functools import cache, lru_cache
 from typing import Protocol, runtime_checkable
 
-from tableforge.poker.table import PotAward, TableAgent, TableHand, TableResult, TableRunner
+from tableforge.poker.table import (
+    MAX_PLAYERS,
+    PotAward,
+    TableAgent,
+    TableHand,
+    TableResult,
+    TableRunner,
+)
 
 CONFIG_SCHEMA = "tableforge.tournament-config.v1"
 MAX_HANDS = 5_000
@@ -85,8 +92,8 @@ class TournamentConfig:
     bounty: BountyConfig | None = None
 
     def __post_init__(self) -> None:
-        if not 2 <= self.players <= 6:
-            raise ValueError("players must be between 2 and 6")
+        if not 2 <= self.players <= MAX_PLAYERS:
+            raise ValueError(f"players must be between 2 and {MAX_PLAYERS}")
         if self.starting_stack_bb <= 0:
             raise ValueError("starting_stack_bb must be positive")
         if not self.blind_levels:
@@ -257,6 +264,12 @@ class TournamentHandInfo:
     bounty_cash_share: float = 0.5
     """PKO: part of an eliminated player's bounty paid in cash (the rest is added)."""
     winner_keeps_own: bool = True
+    field_size: int = 0
+    """Players who started the tournament (0: unknown, use `players_left`)."""
+    bounty_share: float = 0.0
+    """PKO: part of the buy-in that is bounty (0 without bounties)."""
+    blind_growth: float = 0.0
+    """Big blind of the next level over this level's (0: unknown)."""
 
 
 class HandRunner(Protocol):
@@ -480,6 +493,11 @@ class Tournament:
                 winner_keeps_own=config.bounty.winner_keeps_own
                 if config.bounty is not None
                 else True,
+                field_size=config.players,
+                bounty_share=config.bounty.bounty_share if config.bounty is not None else 0.0,
+                blind_growth=config.level_at(self.hand_number + left)[1].big_blind / level.big_blind
+                if left
+                else 1.0,
             )
             for seat in range(count)
         )

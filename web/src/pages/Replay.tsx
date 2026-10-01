@@ -440,7 +440,7 @@ export function DecisionPanel({ action, label, actionLabel }: { action: ReplayAc
                     <td key={name} className="small">
                       {values.length === 0 ? "–" : values.map(([key, value]) => (
                         <div key={key}>
-                          {key !== name ? <span className="muted">{key.replace(`${name}_`, "")}: </span> : null}
+                          {key !== name ? <span className="muted">{t(`practice.size.${key.replace(`${name}_`, "")}` as MessageKey)}: </span> : null}
                           {formatNumber(value, 3)}
                         </div>
                       ))}

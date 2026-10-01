@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：669 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：686 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -502,6 +502,32 @@
   - 對 baseline bot：c1 +8.8%、s12 +13.4%（兩者 95% 信賴區間下限 > 0），其他模型 −1.9% ~ +3.0%（不顯著）；baseline bot 對 c1 +2.0%、對 platform +4.9%（不顯著）。
   - 和 C 階段的結論一致：c1 與 s12 是目前最強的兩個 10 BB 模型；s12 對 s11、s13 顯著為正，platform 對 c1 顯著為負（−11.9%）。
   - 結果檔在研究結果資料夾（`research-results/p2/comparison.json`）。
+
+### 新格式：9 人桌、下注尺度、多結構訓練（T4、S2、S3；程式完成，正式訓練待定）
+- 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 10 節。使用者決定：先完成程式並用小型實驗驗證，正式訓練（與算力預算）之後再談。
+- **T4**：引擎與錦標賽支援 2–9 人，6 人以下不變；位置名稱集中一處（2–6 人與以前相同，7–9 人加入 LJ、UTG1、UTG2）；策略表、對打、練習、重播、模型比較、Push/Fold Nash baseline 都可以 9 人。模型坐到超過 encoder 位置數的牌桌時明確報錯（v2 以前會靜默忽略多出來的對手）。
+- **S2**：動作格式 `nlhe-discrete-v2`（翻牌前 2x／2.5x／3x，翻牌後 33／66／100／150% 底池，加上蓋牌、過牌／跟注、全下）；說明器、策略表、練習與牌譜檢討都顯示各尺寸。
+- **encoder v3**（`poker-nlhe-vector-v3`）：9 個位置、雙向位置、「蓋得過對手」、錦標賽結構特徵（起始 BB、盲注速度、ante、付錢名次、bounty 規則…）。
+- **S3**：`TournamentSampler` 每個訓練 seed 抽一個結構；實驗 `settings.sampler`；preset `mixed-pko-v3-train`、`mixed-pko-v3-smoke`；研究腳本 `tournament_probe.py --v3 --sampler`。
+- **相容**：v1／v2 的 checkpoint、經驗資料、Job payload 位元一致（NFSP 指紋測試通過）；新欄位只在不是預設值時寫出。
+- 驗收（程式）：
+  - 單元測試：v2 動作的各尺寸金額（開局 40/50/60、面對加注到 50 時被限制到合法最小再加注）、翻牌後的比例、v1 動作不變；v3 對 2／6／9 人、有無錦標賽資訊的編碼長度與範圍、不同結構產生不同輸入；sampler 可重現、涵蓋範圍、盲注遞增、獎金名次不超過人數、錯誤設定被拒絕；9 人位置與 4 人相容名稱。
+  - 引擎性質測試擴到 9 人（隨機牌局與錦標賽的籌碼守恆、名次與獎金）。
+  - 整合測試：v3 學習者在 sampler 下打過 2–9 人每一種牌桌並用到各種加注尺寸；v3 checkpoint 讀寫、v1 checkpoint 照常讀取；`mixed-pko-v3-smoke` 在平台上完整跑完（actor payload 帶 sampler、經驗資料與 checkpoint 是 v3／v2 動作）；錯誤設定被拒絕（v2 encoder 配 sampler、v2 encoder 9 人、未知 sampler 欄位）。
+  - 實機：v3 模型在 9 人桌的策略表（160 張表、9 個位置）、重播（說明含 7 種尺寸）、練習、Push/Fold Nash baseline（9 人收斂誤差 0.0005）、模型比較都正常。
+- **小型實驗**（每組 2 個 seed、各 20,000 場，6 人 25 BB PKO 對混合 Rule Bot benchmark，每點 1,200 場；6 個程序約 15 分鐘，其中 A 組一個 seed 因 OpenMP 在啟動時設定親和性失敗而沒有跑，非程式問題）：
+
+  | 組 | 20,000 場後平均策略 ROI | 最佳回應 ROI |
+  |---|---|---|
+  | A：v2 encoder + v1 動作（現行） | −2.4%（1 個 seed） | +19.7% |
+  | B：v3 + v2 動作，只訓練 25 BB 6 人 | −0.4% / −0.0% | +40.0% / +57.1% |
+  | C：v3 + v2 動作，2–9 人、8–60 BB 各種結構混合 | −1.7% / −2.4% | +37.6% / +44.2% |
+
+  - 新格式可以學習，沒有比現行格式差；20,000 場時平均策略都還在 0 附近（T3 的經驗是需要 10 倍以上的訓練量）。
+  - 最佳回應（Q 網路）在新格式明顯較強（+38% ~ +57% 對 +20%），更細的下注尺度給了它更多可利用的選項。
+  - 混合結構（C）只有約 1/8 的訓練量落在 6 人 25 BB，在這個 benchmark 上仍和專門訓練的 B 差不多，這是 S3 想要的方向；是否真的「一個模型通吃」要等正式訓練後，在多種規格上和各自的專用模型比較。
+  - 結果檔：研究結果資料夾 `research-results/v3-smoke`。
+- **正式訓練待定**：驗收條件（25／50 BB 顯著變強、10 BB 不退化、多結構模型在各規格不輸專用模型）需要正式訓練量，等使用者決定算力預算。
 
 ### A0 演算法介面（完成）
 - 規格見 [architecture/01-system.md](architecture/01-system.md) 6.2。`learning/algorithms.py` 的 `AlgorithmSpec`（打法、說明器、牌桌玩家、Worker executor、checkpoint schema）與 Coordinator 端的 `ORCHESTRATORS`（每個演算法的輪次流程）；NFSP 是第一個實作。
@@ -998,7 +1024,7 @@ uv run tableforge doctor
 3. **H2 練習模式**：完成（見上）。
 4. **H1 匯入 GG／Natural8 牌譜**：完成，尚未用真實牌譜驗證（見上；有樣本後補驗收）。
 5. **A0 演算法介面**：完成（見上）。
-6. **encoder v3 與新動作格式（一次包含 S2 下注尺度、T4 9 人桌、S3 多結構訓練）**，只重訓一次。
+6. **encoder v3 與新動作格式（一次包含 S2 下注尺度、T4 9 人桌、S3 多結構訓練）**：程式完成並以小型實驗驗證（見上）；正式訓練待使用者決定算力預算。
 7. **新訓練演算法**：PPO → MMD 正則化 → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
 8. **T5 MTT 階段模擬**。
 9. **S6 對手建模**。

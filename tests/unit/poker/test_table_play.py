@@ -16,7 +16,7 @@ from tableforge.poker.table_play import (
 from tableforge.worker.simulation import SimulationExecutor
 
 
-@pytest.mark.parametrize("players", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("players", [2, 3, 4, 5, 6, 7, 8, 9])
 def test_simulation_conserves_chips_for_every_table_size(players: int) -> None:
     summary = simulate_table(players, 400, seed_start=17)
 
@@ -50,7 +50,7 @@ def test_payload_keeps_heads_up_encoding_and_adds_players_only_when_needed() -> 
     assert "players" not in json.loads(heads_up.to_bytes())
     assert SimulationJobPayload.from_bytes(six.to_bytes()).players == 6
     with pytest.raises(ValueError):
-        SimulationJobPayload("1.0", hands=10, seed_start=0, players=7)
+        SimulationJobPayload("1.0", hands=10, seed_start=0, players=10)
 
 
 def test_executor_runs_six_max_payload() -> None:

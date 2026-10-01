@@ -79,6 +79,15 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--tag", default="")
+    parser.add_argument(
+        "--v3", action="store_true", help="v3 encoder (2-9 players) and v2 bet sizes"
+    )
+    parser.add_argument(
+        "--sampler",
+        default="",
+        help="train on tournaments drawn from this TournamentSampler JSON (needs --v3); "
+        "the benchmark stays --tournament/--stack-bb",
+    )
     args = parser.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -101,9 +110,15 @@ def main() -> None:
             rl_capacity=args.rl_capacity,
             sl_capacity=args.sl_capacity,
             seed=args.seed,
-            observation_schema="poker-hunlhe-vector-v2",
+            observation_schema="poker-nlhe-vector-v3" if args.v3 else "poker-hunlhe-vector-v2",
+            action_schema="nlhe-discrete-v2" if args.v3 else "nlhe-discrete-v1",
         )
     )
+    training_config: object = config
+    if args.sampler:
+        from tableforge.poker.tournament_sampler import TournamentSampler
+
+        training_config = TournamentSampler.from_json(args.sampler)
     if args.init_model:
         from pathlib import Path as _InitPath
 
@@ -177,7 +192,7 @@ def main() -> None:
         if stage:
             report = tournament_self_play_train(
                 agent,
-                config,
+                training_config,  # type: ignore[arg-type]
                 per_stage,
                 seed_start=args.seed * 10_000_000 + args.seed_offset + trained,
                 train_every_hands=args.train_every,

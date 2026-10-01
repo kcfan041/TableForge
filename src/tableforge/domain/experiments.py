@@ -23,6 +23,10 @@ class ExperimentKind(StrEnum):
     TOURNAMENT_BENCHMARK = "tournament_benchmark"
 
 
+V3_OBSERVATION_SCHEMA = "poker-nlhe-vector-v3"
+OBSERVATION_SCHEMAS = ("poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2", V3_OBSERVATION_SCHEMA)
+
+
 @dataclass(frozen=True, slots=True)
 class ExperimentConfig:
     schema_version: str
@@ -71,6 +75,11 @@ class ExperimentConfig:
     how much the target can be exploited."""
     algorithm: str = "nfsp"
     """The training algorithm (`learning.algorithms`) of an iterative training experiment."""
+    action_schema: str = "nlhe-discrete-v1"
+    """Abstract actions of the trained model (`learning.actions`)."""
+    sampler_json: str = ""
+    """S3: train on tournaments drawn from this `TournamentSampler`; `tournament_json` stays
+    the benchmark tournament."""
 
     def __post_init__(self) -> None:
         if not self.algorithm or len(self.algorithm) > 32:
@@ -88,10 +97,12 @@ class ExperimentConfig:
             raise ValueError("learner_runtime must be cpu or cuda")
         if self.hidden_size < 1 or self.batch_size < 1:
             raise ValueError("hidden_size and batch_size must be positive")
-        if self.observation_schema not in ("poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2"):
+        if self.observation_schema not in OBSERVATION_SCHEMAS:
             raise ValueError(f"unknown observation schema: {self.observation_schema}")
-        if not 2 <= self.players <= 6:
-            raise ValueError("players must be between 2 and 6")
+        if self.action_schema not in ("nlhe-discrete-v1", "nlhe-discrete-v2"):
+            raise ValueError(f"unknown action schema: {self.action_schema}")
+        if not 2 <= self.players <= 9:
+            raise ValueError("players must be between 2 and 9")
         tournament_training = self.kind is ExperimentKind.NFSP_ITERATIVE and bool(
             self.tournament_json
         )
@@ -112,7 +123,23 @@ class ExperimentConfig:
             if tournament.players != self.players:
                 raise ValueError("players must match the tournament")
             if self.observation_schema == "poker-hunlhe-vector-v1":
-                raise ValueError("tournament training needs the v2 observation schema")
+                raise ValueError("tournament training needs the v2 or v3 observation schema")
+            seats = 9 if self.observation_schema == V3_OBSERVATION_SCHEMA else 6
+            if self.sampler_json:
+                from tableforge.poker.tournament_sampler import TournamentSampler
+
+                sampler = TournamentSampler.from_json(self.sampler_json)
+                if self.observation_schema != V3_OBSERVATION_SCHEMA:
+                    raise ValueError(
+                        "training on many structures needs the v3 observation schema, "
+                        "which sees the structure"
+                    )
+                if sampler.max_players > seats:
+                    raise ValueError("the sampler has more players than the encoder has seats")
+            if tournament.players > seats:
+                raise ValueError(f"{self.observation_schema} has seats for at most {seats}")
+        elif self.sampler_json:
+            raise ValueError("a tournament sampler needs tournament training")
         if not 0 <= self.self_play_share <= 1:
             raise ValueError("self_play_share must be between 0 and 1")
         if self.rl_capacity < 1 or self.sl_capacity < 1:
@@ -217,6 +244,8 @@ class ExperimentPreset:
     pool_eval_seeds: int = 0
     exploit_target: str = ""
     algorithm: str = "nfsp"
+    action_schema: str = "nlhe-discrete-v1"
+    sampler_json: str = ""
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -262,6 +291,8 @@ class ExperimentPreset:
             pool_eval_seeds=self.pool_eval_seeds,
             exploit_target=self.exploit_target,
             algorithm=self.algorithm,
+            action_schema=self.action_schema,
+            sampler_json=self.sampler_json,
         )
 
 
@@ -433,6 +464,13 @@ def _tournament_preset(
     )
 
 
+def _default_sampler() -> str:
+    """Structures for multi-structure training: 2-9 players, 8-60 BB, varied blinds."""
+    from tableforge.poker.tournament_sampler import TournamentSampler
+
+    return TournamentSampler(players=(2, 3, 4, 5, 6, 7, 8, 9)).to_json()
+
+
 BUILTIN_PRESETS = (
     BUILTIN_PRESETS
     + (
@@ -462,6 +500,33 @@ BUILTIN_PRESETS = (
             self_play_share=0.0,
             pool_eval_seeds=200,
             benchmark_deals=0,
+        ),
+        # v3 (S2/S3/T4): finer bet sizes, 2-9 players, and tournaments drawn from a range
+        # of structures. The benchmark tournament (the curve) is 6-max PKO at 25 BB.
+        _tournament_training_preset(
+            "mixed-pko-v3-train",
+            25,
+            observation_schema=V3_OBSERVATION_SCHEMA,
+            action_schema="nlhe-discrete-v2",
+            sampler_json=_default_sampler(),
+        ),
+        _tournament_training_preset(
+            "mixed-pko-v3-smoke",
+            25,
+            hands=20,
+            hands_per_job=20,
+            rounds=2,
+            actors_per_round=2,
+            train_steps_per_round=100,
+            evaluation_deals=10,
+            max_evaluation_deals=10,
+            hidden_size=32,
+            batch_size=32,
+            rl_capacity=20_000,
+            sl_capacity=20_000,
+            observation_schema=V3_OBSERVATION_SCHEMA,
+            action_schema="nlhe-discrete-v2",
+            sampler_json=_default_sampler(),
         ),
     )
     + tuple(

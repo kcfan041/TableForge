@@ -23,8 +23,8 @@ class SimulationJobPayload:
             raise ValueError("starting_stack must cover the big blind")
         if not 0 < self.small_blind < self.big_blind:
             raise ValueError("invalid blinds")
-        if not 2 <= self.players <= 6:
-            raise ValueError("players must be between 2 and 6")
+        if not 2 <= self.players <= 9:
+            raise ValueError("players must be between 2 and 9")
 
     def to_bytes(self) -> bytes:
         data: dict[str, int | str] = {

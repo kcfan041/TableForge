@@ -238,6 +238,7 @@ class IterativeNfspOrchestrator:
                     double_q=experiment.config.double_q,
                     rl_capacity=experiment.config.rl_capacity,
                     sl_capacity=experiment.config.sl_capacity,
+                    action_schema=experiment.config.action_schema,
                 ).to_bytes(),
             )
             return False
@@ -359,6 +360,7 @@ class IterativeNfspOrchestrator:
                         hand_horizon=config.hand_horizon,
                         pool_artifact_id=str(pool.descriptor.artifact_id) if pool else "",
                         pool_sha256=pool.sha256 if pool else "",
+                        sampler_json=config.sampler_json,
                     ).to_bytes(),
                     inputs=tuple(item for item in (population, pool) if item is not None),
                 )

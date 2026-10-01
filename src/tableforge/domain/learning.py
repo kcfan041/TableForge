@@ -96,6 +96,7 @@ _INIT_DEFAULTS: dict[str, object] = {
     "double_q": False,
     "rl_capacity": 50_000,
     "sl_capacity": 100_000,
+    "action_schema": "nlhe-discrete-v1",
 }
 
 
@@ -122,10 +123,13 @@ class NfspInitPayload:
     double_q: bool = False
     rl_capacity: int = 50_000
     sl_capacity: int = 100_000
+    action_schema: str = "nlhe-discrete-v1"
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported init payload schema")
+        if self.action_schema not in ("nlhe-discrete-v1", "nlhe-discrete-v2"):
+            raise ValueError(f"unsupported action schema: {self.action_schema}")
         if self.rl_capacity < 1 or self.sl_capacity < 1:
             raise ValueError("buffer capacities must be positive")
         if self.reward_scale <= 0:
@@ -162,10 +166,19 @@ class NfspActorPayload:
     pool_artifact_id: str = ""
     """Opponent pool (`OpponentPoolSpec`) for the seats not played by the learner."""
     pool_sha256: str = ""
+    sampler_json: str = ""
+    """S3: train on tournaments drawn from this `TournamentSampler` (one per seed) instead
+    of `tournament_json`, which then only names the benchmark tournament."""
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported actor payload schema")
+        if self.sampler_json:
+            from tableforge.poker.tournament_sampler import TournamentSampler
+
+            TournamentSampler.from_json(self.sampler_json)
+            if not self.tournament_json:
+                raise ValueError("a sampler needs tournament training")
         if self.pool_artifact_id or self.pool_sha256:
             _require_sha(self.pool_sha256)
         if self.hands < 1:
@@ -284,6 +297,7 @@ _TOURNAMENT_ACTOR_DEFAULTS: dict[str, object] = {
     "hand_horizon": False,
     "pool_artifact_id": "",
     "pool_sha256": "",
+    "sampler_json": "",
 }
 _TOURNAMENT_MATCH_DEFAULTS: dict[str, object] = {
     "tournament_json": "",

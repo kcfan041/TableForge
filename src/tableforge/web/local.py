@@ -550,7 +550,7 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
     async def import_hand_histories(request: Request) -> Any:
         """Read pasted GG/Natural8 hand histories on this computer (they never leave it);
         with ``coach`` (a downloaded model id), review the hero's decisions."""
-        from tableforge.learning.hand_import import MAX_TEXT, Coach, import_hands
+        from tableforge.learning.hand_import import MAX_TEXT, Coach, coach_seats, import_hands
         from tableforge.poker.hand_history import HandHistoryError
 
         raw = await request.body()
@@ -578,7 +578,7 @@ def create_local_app(context: LocalUiContext) -> FastAPI:
                     return local_seats(choice, 0)
 
                 config = TournamentConfig.from_json(tournament_json(info))
-                coach = Coach(explainer_for, mode, coach_id, config, config.players)
+                coach = Coach(explainer_for, mode, coach_id, config, coach_seats(info))
             try:
                 return import_hands(str(body["text"]), coach)
             except HandHistoryError as error:

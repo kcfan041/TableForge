@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from tableforge.learning import encoding as v1
 from tableforge.learning import encoding_v2 as v2
+from tableforge.learning import encoding_v3 as v3
 from tableforge.poker.observation import Observation
 from tableforge.poker.table import TableObservation
 
@@ -24,6 +25,8 @@ class Encoder:
     encode: Callable[..., list[float]]
     """``encode(observation, big_blind, small_blind=None, tournament=None)``."""
     supports_tables: bool = False
+    max_players: int = 6
+    """Largest table the encoder has seats for (v1 is heads-up only)."""
 
 
 def _v1(
@@ -49,9 +52,19 @@ def _v2(
     return v2.encode(observation, big_blind, small_blind, tournament)
 
 
+def _v3(
+    observation: AnyObservation,
+    big_blind: int,
+    small_blind: int | None = None,
+    tournament: v3.StructureContext | None = None,
+) -> list[float]:
+    return v3.encode(observation, big_blind, small_blind, tournament)
+
+
 ENCODERS: dict[str, Encoder] = {
     v1.SCHEMA: Encoder(v1.SCHEMA, v1.FEATURE_SIZE, _v1),
     v2.SCHEMA: Encoder(v2.SCHEMA, v2.FEATURE_SIZE, _v2, supports_tables=True),
+    v3.SCHEMA: Encoder(v3.SCHEMA, v3.FEATURE_SIZE, _v3, supports_tables=True, max_players=9),
 }
 DEFAULT_SCHEMA = v1.SCHEMA
 LATEST_SCHEMA = v2.SCHEMA

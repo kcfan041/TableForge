@@ -46,6 +46,13 @@ class Coach:
     max_players: int = 6
 
 
+def coach_seats(info: object) -> int:
+    """Largest table a model can sit at: its encoder's seats (6 for v2, 9 for v3)."""
+    training = getattr(info, "training", {}) or {}
+    schema = str(training.get("observation_schema", "poker-hunlhe-vector-v2"))
+    return 9 if schema == "poker-nlhe-vector-v3" else 6
+
+
 def _bounty_value(text: str) -> float | None:
     digits = "".join(char for char in text if char.isdigit() or char == ".")
     try:
@@ -136,6 +143,7 @@ def _replay_with_review(
                         legal,
                         action,
                         explanation,
+                        parsed.big_blind,
                     ),
                     "hand_id": parsed.hand_id,
                 }

@@ -7,7 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from tableforge.domain.nfsp_pipeline import SNAPSHOT_SCHEMA, snapshot_bytes
-from tableforge.learning.actions import ACTION_COUNT
+from tableforge.learning.actions import SCHEMA as ACTION_SCHEMA
+from tableforge.learning.actions import action_count
 from tableforge.learning.buffers import PolicySample, Transition
 from tableforge.learning.bundle import (
     array_bytes,
@@ -44,13 +45,15 @@ class ExperienceShard:
     transitions: tuple[Transition, ...]
     policy_samples: tuple[PolicySample, ...]
     observation_schema: str = DEFAULT_SCHEMA
+    action_schema: str = ACTION_SCHEMA
 
     def to_bytes(self) -> bytes:
         rl = self.transitions
         sl = self.policy_samples
         size = encoder(self.observation_schema).feature_size
         zero_state = (0.0,) * size
-        zero_mask = (False,) * ACTION_COUNT
+        actions = action_count(self.action_schema)
+        zero_mask = (False,) * actions
         return pack_entries(
             {
                 "manifest.json": json_bytes(
@@ -58,6 +61,11 @@ class ExperienceShard:
                         "checkpoint_sha256": self.checkpoint_sha256,
                         "hands": self.hands,
                         "observation_schema": self.observation_schema,
+                        **(
+                            {}
+                            if self.action_schema == ACTION_SCHEMA
+                            else {"action_schema": self.action_schema}
+                        ),
                         "policy_samples": len(sl),
                         "schema_version": SHARD_SCHEMA,
                         "seed_start": self.seed_start,
@@ -65,22 +73,20 @@ class ExperienceShard:
                     }
                 ),
                 "rl_states.npy": _states([item.state for item in rl], size),
-                "rl_masks.npy": _masks([item.mask for item in rl]),
+                "rl_masks.npy": _masks([item.mask for item in rl], actions),
                 "rl_actions.npy": array_bytes(
                     np.asarray([item.action for item in rl], dtype=np.int8)
                 ),
                 "rl_rewards.npy": array_bytes(
                     np.asarray([item.reward for item in rl], dtype=np.float32)
                 ),
-                "rl_next_states.npy": _states(
-                    [item.next_state or zero_state for item in rl], size
-                ),
-                "rl_next_masks.npy": _masks([item.next_mask or zero_mask for item in rl]),
+                "rl_next_states.npy": _states([item.next_state or zero_state for item in rl], size),
+                "rl_next_masks.npy": _masks([item.next_mask or zero_mask for item in rl], actions),
                 "rl_done.npy": array_bytes(
                     np.asarray([item.next_state is None for item in rl], dtype=np.bool_)
                 ),
                 "sl_states.npy": _states([item.state for item in sl], size),
-                "sl_masks.npy": _masks([item.mask for item in sl]),
+                "sl_masks.npy": _masks([item.mask for item in sl], actions),
                 "sl_actions.npy": array_bytes(
                     np.asarray([item.action for item in sl], dtype=np.int8)
                 ),
@@ -96,14 +102,24 @@ class ExperienceShard:
         if manifest.get("schema_version") != SHARD_SCHEMA:
             raise ValueError("unsupported experience shard schema")
         schema = str(manifest.get("observation_schema", DEFAULT_SCHEMA))
+        action_schema = str(manifest.get("action_schema", ACTION_SCHEMA))
         size = encoder(schema).feature_size
         arrays = {
             name: array_from_bytes(entries[name]) for name in _SHARD_ENTRIES - {"manifest.json"}
         }
         count = int(manifest["transitions"])
-        if any(len(arrays[f"rl_{name}.npy"]) != count for name in (
-            "states", "masks", "actions", "rewards", "next_states", "next_masks", "done"
-        )):
+        if any(
+            len(arrays[f"rl_{name}.npy"]) != count
+            for name in (
+                "states",
+                "masks",
+                "actions",
+                "rewards",
+                "next_states",
+                "next_masks",
+                "done",
+            )
+        ):
             raise ValueError("experience shard arrays have inconsistent lengths")
         for name in ("rl_states.npy", "rl_next_states.npy", "sl_states.npy"):
             if arrays[name].ndim != 2 or arrays[name].shape[1] != size:
@@ -143,6 +159,7 @@ class ExperienceShard:
             transitions=transitions,
             policy_samples=policy_samples,
             observation_schema=schema,
+            action_schema=action_schema,
         )
 
 
@@ -197,8 +214,8 @@ def _states(rows: list[tuple[float, ...]], size: int) -> bytes:
     return array_bytes(np.asarray(rows, dtype=np.float32).reshape(len(rows), size))
 
 
-def _masks(rows: list[tuple[bool, ...]]) -> bytes:
-    return array_bytes(np.asarray(rows, dtype=np.bool_).reshape(len(rows), ACTION_COUNT))
+def _masks(rows: list[tuple[bool, ...]], actions: int) -> bytes:
+    return array_bytes(np.asarray(rows, dtype=np.bool_).reshape(len(rows), actions))
 
 
 def _row_floats(row: np.ndarray) -> tuple[float, ...]:

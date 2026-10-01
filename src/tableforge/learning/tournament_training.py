@@ -27,6 +27,7 @@ from tableforge.learning.opponents import OpponentPool, PoolMember
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.table import TableAgent, TableObservation, TableRunner
 from tableforge.poker.tournament import Tournament, TournamentConfig, TournamentHandInfo
+from tableforge.poker.tournament_sampler import TournamentSampler
 from tableforge.worker.tournament import rule_bot
 
 OPPONENT_POOL = ("random", "call", "tight", "aggro", "pushfold", "hunter")
@@ -115,7 +116,7 @@ class TournamentEpisode:
 
 def play_training_tournament(
     agent: NfspAgent,
-    config: TournamentConfig,
+    config: TournamentConfig | TournamentSampler,
     seed: int,
     sink: Callable[[Transition], None],
     self_play_share: float = 0.5,
@@ -124,7 +125,14 @@ def play_training_tournament(
     hand_horizon: bool = False,
     opponents: OpponentPool | None = None,
 ) -> TournamentEpisode:
-    """Play one tournament with the learning agent in one or more seats."""
+    """Play one tournament with the learning agent in one or more seats.
+
+    With a `TournamentSampler` the tournament of this seed is drawn from it (S3).
+    """
+    if isinstance(config, TournamentSampler):
+        config = config.config(seed)
+    if config.players > agent.encoder.max_players:
+        raise ValueError(f"{agent.encoder.schema} has no seats for {config.players} players")
     if not 0 <= self_play_share <= 1:
         raise ValueError("self_play_share must be between 0 and 1")
     if not agent.encoder.supports_tables:
@@ -198,7 +206,7 @@ class TournamentTrainingReport:
 
 def tournament_self_play_train(
     agent: NfspAgent,
-    config: TournamentConfig,
+    config: TournamentConfig | TournamentSampler,
     tournaments: int,
     seed_start: int,
     train_every_hands: int = 1,

@@ -64,6 +64,14 @@ uv run python scripts/tournament_probe.py --exploit-target pko-10bb-nfsp-c1 --in
 
 每個檢查點印出 `exploit.best_response.roi`：學習者最佳回應對「其他座位全部是目標」的 ROI。`--init-model` 讓學習者從目標開始（建議，平台的 exploit preset 也這樣做）；`--exploit-target rule:<bot>` 則以 Rule Bot 為目標。
 
+新格式（v3 輸入、v2 下注尺度、多結構）的研究腳本：
+
+```
+uv run python scripts/tournament_probe.py --v3 --sampler "{\"players\":[2,3,4,5,6,7,8,9]}" --stack-bb 25 --tournaments 20000 --checkpoints 2 --greedy --reward-scale 0.3 --double-q --hand-horizon --rl-capacity 200000 --sl-capacity 1000000 --self-play 0.75
+```
+
+`--sampler` 是 `TournamentSampler` 的 JSON（`players`、`starting_stack_bb`、`hands_per_level`、`blind_growth`、`ante_share`、`payouts`、`pko_share`、`bounty_share`、`cash_share`），只用在訓練；benchmark 仍是 `--stack-bb`／`--tournament` 指定的錦標賽。平台上建立實驗時用 `settings.sampler` 傳同樣的物件。
+
 從叢集下載、用於本機對打的模型另外放在 `downloaded-models\`，格式相同。下載透過控制面的 `download_model` 指令（需要 `model:download`），每塊 2 MB，完成後檢查大小與 sha256。對打的指令（`play_start`、`play_act` 等，需要 `play:remote`）也可以用 `/api/command/<指令>` 或 gRPC `Command` 呼叫；格式見 `src/tableforge/coordinator/play.py`。
 
 ## 研究用：參數掃描

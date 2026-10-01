@@ -38,6 +38,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tableforge.learning.actions import Spot, raise_size_amounts
 from tableforge.learning.explain import DecisionExplainer, DecisionExplanation, canonical_action
 from tableforge.learning.replay import (
     action_entry,
@@ -52,6 +53,7 @@ from tableforge.poker.betting import (
     LegalActions,
     Street,
 )
+from tableforge.poker.positions import position_name
 from tableforge.poker.table import TableHand, TableObservation
 from tableforge.poker.tournament import (
     StartedHand,
@@ -453,30 +455,6 @@ def _seat_dict(seat: SeatChoice) -> dict[str, str]:
 
 # --- practice ----------------------------------------------------------------------------
 
-_EARLY = {
-    1: ("UTG",),
-    2: ("UTG", "CO"),
-    3: ("UTG", "HJ", "CO"),
-    4: ("UTG", "LJ", "HJ", "CO"),
-    5: ("UTG", "UTG1", "LJ", "HJ", "CO"),
-    6: ("UTG", "UTG1", "UTG2", "LJ", "HJ", "CO"),
-}
-"""Names of the seats between the big blind and the button, by how many there are
-(6-max: UTG, HJ, CO, as in strategy tables)."""
-
-
-def position_name(players: int, relative: int) -> str:
-    """Position of the seat `relative` places after the button (0 = button)."""
-    if players == 2:
-        return "SB" if relative == 0 else "BB"
-    if relative == 0:
-        return "BTN"
-    if relative == 1:
-        return "SB"
-    if relative == 2:
-        return "BB"
-    return _EARLY[players - 3][relative - 3]
-
 
 def situation(observation: TableObservation) -> str:
     """What the decision faces: ``unopened``, ``limped``, ``facing_raise``,
@@ -500,20 +478,33 @@ def stack_bucket(stack_bb: float) -> str:
     return "40+"
 
 
-def _value_key(action: Action, legal: LegalActions, observation: TableObservation) -> str:
-    """The coach's value entry for a concrete action (a raise: the nearest raise size)."""
+def _value_key(
+    action: Action,
+    legal: LegalActions,
+    observation: TableObservation,
+    values: dict[str, float],
+    big_blind: int,
+) -> str:
+    """The coach's value entry for a concrete action (a raise: the coach's nearest size)."""
     name = canonical_action(action, legal)
     if name != "raise" or action.amount is None:
         return name
     me = observation.players[observation.observer]
-    to_call = max(0, observation.current_bet - me.street_contribution)
-    pot_after_call = observation.pot + to_call
-    low = legal.min_raise_to or 0
-    high = legal.max_raise_to or 0
+    spot = Spot(
+        observation.street,
+        observation.pot,
+        observation.current_bet,
+        me.street_contribution,
+        big_blind,
+    )
+    amounts = raise_size_amounts(legal, spot)
     sizes = {
-        "raise_half_pot": min(max(observation.current_bet + pot_after_call // 2, low), high),
-        "raise_pot": min(max(observation.current_bet + pot_after_call, low), high),
+        key: amounts[key.removeprefix("raise_")]
+        for key in values
+        if key.startswith("raise_") and key.removeprefix("raise_") in amounts
     }
+    if not sizes:
+        return name
     amount = int(action.amount)
     return min(sizes, key=lambda key: abs(sizes[key] - amount))
 
@@ -551,6 +542,7 @@ def review_decision(
     legal: LegalActions,
     action: Action,
     explanation: DecisionExplanation,
+    big_blind: int = 0,
 ) -> dict[str, object]:
     """A decision reviewed by a coach; `relative` is the seat's distance from the button."""
     me = observation.players[observation.observer]
@@ -559,7 +551,10 @@ def review_decision(
     recommended = max(probabilities, key=lambda key: probabilities[key])
     values = dict(explanation.details[0].per_action) if explanation.details else {}
     unit = explanation.details[0].unit if explanation.details else ""
-    key = _value_key(action, legal, observation)
+    big_blind = big_blind or max(
+        1, observation.players[observation.big_blind_seat].total_contribution
+    )
+    key = _value_key(action, legal, observation, values, big_blind)
     q_chosen = values.get(key)
     best_key = max(values, key=lambda item: values[item]) if values else None
     q_loss = round(max(values.values()) - q_chosen, 4) if values and q_chosen is not None else None

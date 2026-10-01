@@ -58,6 +58,8 @@ def play(hand: TableHand, script: list[tuple[int, Action]]) -> None:
         (3, 0, 1, 2, 0, 1),
         (6, 0, 1, 2, 3, 1),
         (6, 4, 5, 0, 1, 5),
+        (9, 0, 1, 2, 3, 1),
+        (9, 7, 8, 0, 1, 8),
     ],
 )
 def test_positions(
@@ -69,7 +71,7 @@ def test_positions(
     assert (positions.first_preflop, positions.first_postflop) == (first_pre, first_post)
 
 
-@pytest.mark.parametrize("players", [1, 7])
+@pytest.mark.parametrize("players", [1, 10])
 def test_table_size_is_limited(players: int) -> None:
     with pytest.raises(ValueError):
         TableHand([100] * players, 0, 1, 2, seed=1)
@@ -346,7 +348,7 @@ class TableCase:
 
 @st.composite
 def tables(draw: st.DrawFn) -> TableCase:
-    players = draw(st.integers(min_value=2, max_value=6))
+    players = draw(st.integers(min_value=2, max_value=9))
     return TableCase(
         stacks=draw(st.lists(st.integers(1, 400), min_size=players, max_size=players)),
         button=draw(st.integers(0, players - 1)),

@@ -78,7 +78,7 @@ def test_payout_formats() -> None:
 @pytest.mark.parametrize(
     "bad",
     [
-        {"players": 7},
+        {"players": 10},
         {"players": 1},
         {"starting_stack_bb": 0},
         {"payout": "40/30/20/10/0/0/0"},

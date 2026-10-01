@@ -104,7 +104,7 @@ export function TournamentForm({
           <div className="settings-grid">
             <label>
               {t("tournamentForm.players")}
-              <input type="number" min={2} max={6} value={players} onChange={(event) => setPlayers(event.target.value)} />
+              <input type="number" min={2} max={9} value={players} onChange={(event) => setPlayers(event.target.value)} />
             </label>
             <label>
               {t("tournamentForm.stack")}

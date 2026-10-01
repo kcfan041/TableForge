@@ -24,12 +24,13 @@ from tableforge.domain.artifacts import ArtifactKind
 from tableforge.learning.explain import ACTIONS, DecisionExplainer
 from tableforge.poker.betting import Action
 from tableforge.poker.cards import Card, Rank, Suit
+from tableforge.poker.positions import preflop_order, relative_seat
 from tableforge.poker.table import TableHand
 from tableforge.poker.tournament import TournamentConfig, TournamentHandInfo
 
 STRATEGY_PAYLOAD_TYPE = "tableforge.v1.StrategyTableJobPayload"
 STRATEGY_SCHEMA = "tableforge.strategy-table.v1"
-POSITIONS = ("UTG", "HJ", "CO", "BTN", "SB", "BB")
+POSITIONS = preflop_order(6)
 """Preflop acting order at a 6-max table."""
 STACK_FACTORS = (0.3, 0.5, 0.8, 1.0, 1.5, 2.0)
 """Default stack depths, as multiples of the tournament's starting stack."""
@@ -40,20 +41,12 @@ SCENARIOS = ("open", "raise", "call")
 
 def positions(players: int) -> tuple[str, ...]:
     """Preflop acting order for a table of `players` (heads-up: SB is the button)."""
-    if players == 2:
-        return ("SB", "BB")
-    return POSITIONS[6 - players :]
+    return preflop_order(players)
 
 
 def seat_of(position: str, players: int) -> int:
     """Seat with the button at seat 0: SB 1, BB 2, then the early positions in order."""
-    if players == 2:
-        return {"SB": 0, "BB": 1}[position]
-    order = positions(players)
-    fixed = {"BTN": 0, "SB": 1, "BB": 2}
-    if position in fixed:
-        return fixed[position]
-    return 3 + order.index(position)
+    return relative_seat(position, players)
 
 
 def default_stacks(starting_stack_bb: float) -> tuple[float, ...]:

@@ -720,7 +720,7 @@ function NewGame({
         <label>
           {t("tournamentForm.players")}
           <select value={players} onChange={(event) => setPlayers(Number(event.target.value))}>
-            {[2, 3, 4, 5, 6].map((item) => (
+            {[2, 3, 4, 5, 6, 7, 8, 9].map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
