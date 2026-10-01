@@ -1,10 +1,10 @@
 """NFSP experiments stay byte-identical across refactors (A0 and later).
 
 `tests/fixtures/nfsp_fingerprint.json` was recorded with `scripts/algorithm_baseline.py`
-before the algorithm interface was introduced. Job payloads (and so idempotency keys of
-running clusters) must match everywhere; job outputs and checkpoints are compared on
-Windows, where the fixture was recorded (other platforms may round floating point
-differently inside PyTorch).
+before the algorithm interface was introduced, on Windows. There every job payload, output,
+checkpoint and training curve must match. Elsewhere PyTorch rounds floating point
+differently, so trained checkpoints (and the payloads that name them by sha256) differ;
+only the job plan (keys, types, statuses) and the round 0 payloads are compared.
 """
 
 from __future__ import annotations
@@ -41,8 +41,12 @@ def test_nfsp_experiments_are_unchanged(name: str) -> None:
     jobs = [row for row in rows if "key" in row]
     expected_jobs = [row for row in expected if "key" in row]
 
-    assert [(row["key"], row["type"], row["payload"], row["status"]) for row in jobs] == [
-        (row["key"], row["type"], row["payload"], row["status"]) for row in expected_jobs
+    assert [(row["key"], row["type"], row["status"]) for row in jobs] == [
+        (row["key"], row["type"], row["status"]) for row in expected_jobs
+    ]
+    untrained = [row["payload"] for row in jobs if row["key"].startswith("round:0:")]
+    assert untrained == [
+        row["payload"] for row in expected_jobs if row["key"].startswith("round:0:")
     ]
     if sys.platform == "win32":
         assert rows == expected

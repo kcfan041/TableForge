@@ -229,7 +229,7 @@ class DecisionExplainer(Protocol):
 - 註冊：`ALGORITHMS`（Worker 端）與 `coordinator/experiments.ORCHESTRATORS`（Coordinator 端，每個演算法的輪次流程：actor → learner → 評估 → 採用）。實驗設定新增 `algorithm`（預設 `nfsp`），學習者的 agent id 是 `<algorithm>:<實驗 id>`。
 - 模型庫的模型、對手池成員（`PoolModel.algorithm`）、模型比較的參賽者（`Competitor.algorithm`）都帶演算法；只有不是 NFSP 時才寫進 payload，所以現有的 Job payload 與冪等鍵完全不變。
 - 匯入很輕：只有真的載入模型時才 import PyTorch，Coordinator 與 Rule Bot Worker 可以使用 registry。
-- 位元一致驗證：`scripts/algorithm_baseline.py` 端對端跑三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population），記錄每個 Job 的 payload 與輸出的 sha256（artifact id 以佔位符取代）；`tests/fixtures/nfsp_fingerprint.json` 是導入介面前錄下的結果，`tests/integration/test_nfsp_fingerprint.py` 每次都比對（payload 在所有平台比對，輸出與 checkpoint 在錄製的 Windows 上比對）。
+- 位元一致驗證：`scripts/algorithm_baseline.py` 端對端跑三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population），記錄每個 Job 的 payload 與輸出的 sha256（artifact id 以佔位符取代）；`tests/fixtures/nfsp_fingerprint.json` 是導入介面前錄下的結果，`tests/integration/test_nfsp_fingerprint.py` 每次都比對（錄製的 Windows 上全部比對；其他平台的 PyTorch 浮點結果不同，只比對 Job 流程與未訓練的 round 0 payload）。
 - 新增演算法時：實作一個 `AlgorithmSpec` 與它的 executor，加入 `ALGORITHMS`；實作 coordinator 端的 `Orchestrator`（`reconcile`、`matrix`），加入 `ORCHESTRATORS`；新增 workload profile。其餘功能（模型頁、重播、策略表、對打、練習、牌譜檢討、模型比較、對手池、可剝削程度）自動支援。
 
 ## 7. 擴展邊界

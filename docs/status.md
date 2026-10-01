@@ -506,7 +506,7 @@
 ### A0 演算法介面（完成）
 - 規格見 [architecture/01-system.md](architecture/01-system.md) 6.2。`learning/algorithms.py` 的 `AlgorithmSpec`（打法、說明器、牌桌玩家、Worker executor、checkpoint schema）與 Coordinator 端的 `ORCHESTRATORS`（每個演算法的輪次流程）；NFSP 是第一個實作。
 - 原本寫死 NFSP 的地方都改走介面：模型頁打法、上傳 checkpoint、遠端與本機對打、練習、牌譜檢討、重播與策略表 Job、對手池、模型比較、benchmark 的模型成員、Worker executor 註冊、實驗的學習者 agent id 與存成模型。實驗設定新增 `algorithm`（預設 `nfsp`）。
-- **位元一致**：導入介面前用 `scripts/algorithm_baseline.py` 端對端錄下三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population，共 20 個 Job）每個 Job 的 payload 與輸出 sha256，以及 checkpoint 與訓練曲線；改完後完全相同。這份紀錄存在 `tests/fixtures/nfsp_fingerprint.json`，由 `tests/integration/test_nfsp_fingerprint.py` 每次比對（CI 的 Linux 上只比對 payload）。
+- **位元一致**：導入介面前用 `scripts/algorithm_baseline.py` 端對端錄下三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population，共 20 個 Job）每個 Job 的 payload 與輸出 sha256，以及 checkpoint 與訓練曲線；改完後完全相同。這份紀錄存在 `tests/fixtures/nfsp_fingerprint.json`，由 `tests/integration/test_nfsp_fingerprint.py` 每次比對：Windows（錄製的平台）上全部比對；Linux 的 PyTorch 浮點運算結果不同，訓練出的 checkpoint 與引用它的 payload 不會相同，只比對 Job 流程（鍵、類型、狀態）與未訓練的 round 0 payload。
 - 驗收：單元測試加入一個假的演算法（checkpoint 就是一個 Rule Bot 名稱），不改核心程式就能在模型頁顯示打法、上桌對打、當對手池成員、註冊 Worker executor；兩個演算法不能宣告同一種 Job；不是 NFSP 時對手池與比較 payload 才寫出演算法欄位。
 
 ### H1 匯入 GG／Natural8 牌譜（完成，**尚未用真實匯出檔驗證**）
