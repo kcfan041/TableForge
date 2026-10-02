@@ -14,7 +14,14 @@ export interface TournamentPresetView {
   buy_in: number;
   opponents: string;
   name: string;
+  /** T5: the MTT stage our table is in (absent for a single-table tournament). */
+  stage?: string;
+  field_size?: number;
+  field_left?: number;
+  paid?: number;
 }
+
+const STAGES = ["", "bubble", "itm", "final_tables"];
 
 export interface TournamentChoice {
   tournament: Record<string, unknown>;
@@ -47,6 +54,7 @@ export function TournamentForm({
   const [cashShare, setCashShare] = useState(String((preset.cash_share || 0.5) * 100));
   const [levels, setLevels] = useState("");
   const [opponents, setOpponents] = useState(preset.opponents);
+  const [stage, setStage] = useState(preset.stage && STAGES.includes(preset.stage) ? preset.stage : "");
 
   useEffect(() => {
     setEnabled(false);
@@ -60,6 +68,7 @@ export function TournamentForm({
     setCashShare(String((preset.cash_share || 0.5) * 100));
     setLevels("");
     setOpponents(preset.opponents);
+    setStage(preset.stage && STAGES.includes(preset.stage) ? preset.stage : "");
   }, [preset]);
 
   useEffect(() => {
@@ -77,6 +86,7 @@ export function TournamentForm({
       bounty_share: Number(bountyShare) / 100,
       cash_share: Number(cashShare) / 100,
     };
+    if (stage) tournament.stage = stage;
     const rows = levels
       .split("\n")
       .map((line) => line.trim())
@@ -91,7 +101,7 @@ export function TournamentForm({
       }));
     }
     onChange({ tournament, opponents });
-  }, [enabled, players, stack, handsPerLevel, ante, payout, pko, bountyShare, cashShare, levels, opponents]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, players, stack, handsPerLevel, ante, payout, pko, bountyShare, cashShare, levels, opponents, stage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -120,9 +130,21 @@ export function TournamentForm({
               />
             </label>
             <label>
-              {t("tournamentForm.payout")}
-              <input value={payout} onChange={(event) => setPayout(event.target.value)} placeholder="65/35" />
+              {t("tournamentForm.stage")}
+              <select value={stage} onChange={(event) => setStage(event.target.value)}>
+                {STAGES.map((item) => (
+                  <option key={item} value={item}>
+                    {t(`stage.${item || "none"}` as MessageKey)}
+                  </option>
+                ))}
+              </select>
             </label>
+            {stage ? null : (
+              <label>
+                {t("tournamentForm.payout")}
+                <input value={payout} onChange={(event) => setPayout(event.target.value)} placeholder="65/35" />
+              </label>
+            )}
             <label className="checkbox">
               <input type="checkbox" checked={ante} onChange={(event) => setAnte(event.target.checked)} />
               {t("tournamentForm.ante")}

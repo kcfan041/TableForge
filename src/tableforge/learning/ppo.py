@@ -35,9 +35,6 @@ from tableforge.learning.actions import SCHEMA as V1_ACTIONS
 from tableforge.learning.buffers import Transition
 from tableforge.learning.bundle import json_bytes, pack_entries, unpack_entries
 from tableforge.learning.encoders import Encoder, encoder
-from tableforge.learning.encoding_v2 import TournamentContext
-from tableforge.learning.encoding_v3 import SCHEMA as STRUCTURE_SCHEMA
-from tableforge.learning.encoding_v3 import StructureContext
 from tableforge.learning.nfsp import (
     MASKED,
     _load_optimizer,
@@ -47,8 +44,7 @@ from tableforge.learning.nfsp import (
     _restore_rng_state,
     _rng_state,
     _unprefixed,
-    structure_context,
-    tournament_context,
+    hand_context,
 )
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.table import TableObservation
@@ -272,11 +268,7 @@ class PpoAgent:
         info = self.hand_info
         if info is None:
             raise ValueError("PPO models play tournaments; begin_hand was not called")
-        context: TournamentContext | StructureContext = (
-            structure_context(info)
-            if self.encoder.schema == STRUCTURE_SCHEMA
-            else tournament_context(info)
-        )
+        context = hand_context(self.encoder.schema, info)
         return self.encoder.encode(observation, info.big_blind, info.small_blind, context)
 
     def legal_mask(self, observation: TableObservation, legal: LegalActions) -> tuple[bool, ...]:

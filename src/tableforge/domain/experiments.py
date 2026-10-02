@@ -24,7 +24,15 @@ class ExperimentKind(StrEnum):
 
 
 V3_OBSERVATION_SCHEMA = "poker-nlhe-vector-v3"
-OBSERVATION_SCHEMAS = ("poker-hunlhe-vector-v1", "poker-hunlhe-vector-v2", V3_OBSERVATION_SCHEMA)
+V4_OBSERVATION_SCHEMA = "poker-nlhe-vector-v4"
+"""v3 plus the field around our table (T5 MTT stages)."""
+OBSERVATION_SCHEMAS = (
+    "poker-hunlhe-vector-v1",
+    "poker-hunlhe-vector-v2",
+    V3_OBSERVATION_SCHEMA,
+    V4_OBSERVATION_SCHEMA,
+)
+NINE_SEAT_SCHEMAS = (V3_OBSERVATION_SCHEMA, V4_OBSERVATION_SCHEMA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,17 +150,23 @@ class ExperimentConfig:
             if tournament.players != self.players:
                 raise ValueError("players must match the tournament")
             if self.observation_schema == "poker-hunlhe-vector-v1":
-                raise ValueError("tournament training needs the v2 or v3 observation schema")
-            seats = 9 if self.observation_schema == V3_OBSERVATION_SCHEMA else 6
+                raise ValueError("tournament training needs the v2, v3 or v4 observation schema")
+            seats = 9 if self.observation_schema in NINE_SEAT_SCHEMAS else 6
+            if tournament.stage is not None and self.observation_schema != V4_OBSERVATION_SCHEMA:
+                raise ValueError(
+                    "MTT stage training needs the v4 observation schema, which sees the field"
+                )
             if self.sampler_json:
                 from tableforge.poker.tournament_sampler import TournamentSampler
 
                 sampler = TournamentSampler.from_json(self.sampler_json)
-                if self.observation_schema != V3_OBSERVATION_SCHEMA:
+                if self.observation_schema not in NINE_SEAT_SCHEMAS:
                     raise ValueError(
-                        "training on many structures needs the v3 observation schema, "
+                        "training on many structures needs the v3 or v4 observation schema, "
                         "which sees the structure"
                     )
+                if sampler.stages and self.observation_schema != V4_OBSERVATION_SCHEMA:
+                    raise ValueError("a sampler with MTT stages needs the v4 observation schema")
                 if sampler.max_players > seats:
                     raise ValueError("the sampler has more players than the encoder has seats")
             if tournament.players > seats:
@@ -500,6 +514,43 @@ def _default_sampler() -> str:
     return TournamentSampler(players=(2, 3, 4, 5, 6, 7, 8, 9)).to_json()
 
 
+def _stage_sampler() -> str:
+    """v4 training: the v3 mix, and half of the tournaments are MTT stages (T5)."""
+    from tableforge.poker.tournament_sampler import TournamentSampler
+
+    return TournamentSampler(
+        players=(2, 3, 4, 5, 6, 7, 8, 9),
+        stages=("bubble", "itm", "final_tables"),
+        stage_share=0.5,
+    ).to_json()
+
+
+def _stage_tournament(stage: str, stack_bb: float = 25, pko: bool = True) -> str:
+    """A 9-handed table of a 1,000-player MTT at a named stage (`mtt_stage.STAGES`)."""
+    from tableforge.poker.tournament_spec import TournamentSpec, parse_stage
+
+    return (
+        TournamentSpec(players=9, starting_stack_bb=stack_bb, pko=pko, stage=parse_stage(stage))
+        .to_config()
+        .to_json()
+    )
+
+
+def _stage_preset(stage: str, candidate: str) -> ExperimentPreset:
+    """A rule bot at our table of an MTT stage, against the mixed field: 500 seeds x 9."""
+    return ExperimentPreset(
+        f"mtt-pko-{stage.replace('_', '-')}-{candidate}",
+        "1",
+        hands=500,
+        hands_per_job=50,
+        kind=ExperimentKind.TOURNAMENT_BENCHMARK,
+        players=9,
+        tournament_json=_stage_tournament(stage),
+        candidate=candidate,
+        opponents="mixed",
+    )
+
+
 BUILTIN_PRESETS = (
     BUILTIN_PRESETS
     + (
@@ -644,5 +695,45 @@ BUILTIN_PRESETS = (
     + (
         _tournament_preset(10, "65-35", "", candidate="pushfold_nash"),
         _tournament_preset(10, "65-35", "", pko=True, candidate="pushfold_nash"),
+    )
+    # T5: our table inside a 1,000-player PKO at three stages (bubble, just in the money,
+    # three tables left); 9-handed, 25 BB average.
+    + tuple(
+        _stage_preset(stage, candidate)
+        for stage in ("bubble", "itm", "final_tables")
+        for candidate in ("pushfold", "pushfold_nash")
+    )
+    + (
+        # v4: the v3 mix plus MTT stages; the benchmark tournament is the bubble stage.
+        _tournament_training_preset(
+            "mtt-pko-v4-train",
+            25,
+            players=9,
+            tournament_json=_stage_tournament("bubble"),
+            observation_schema=V4_OBSERVATION_SCHEMA,
+            action_schema="nlhe-discrete-v2",
+            sampler_json=_stage_sampler(),
+            sl_capacity=400_000,
+        ),
+        _tournament_training_preset(
+            "mtt-pko-v4-smoke",
+            25,
+            players=9,
+            tournament_json=_stage_tournament("bubble"),
+            hands=20,
+            hands_per_job=20,
+            rounds=2,
+            actors_per_round=2,
+            train_steps_per_round=100,
+            evaluation_deals=4,
+            max_evaluation_deals=4,
+            hidden_size=32,
+            batch_size=32,
+            rl_capacity=20_000,
+            sl_capacity=20_000,
+            observation_schema=V4_OBSERVATION_SCHEMA,
+            action_schema="nlhe-discrete-v2",
+            sampler_json=_stage_sampler(),
+        ),
     )
 )

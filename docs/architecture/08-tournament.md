@@ -278,6 +278,46 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 - 實驗設定 `sampler_json`（建立時用 `settings.sampler` 物件指定），只用在訓練；訓練曲線與升級判定仍用 `tournament_json` 的固定錦標賽。需要 v3（看得到結構），而且抽出的人數不能超過 encoder 的位置。
 - preset：`mixed-pko-v3-train`（2–9 人、8–60 BB、各種盲注與獎金；曲線用 6 人 25 BB PKO）與 `mixed-pko-v3-smoke`。
 
-## 11. 尚未決定
+## 11. MTT 階段模擬（T5）
 
-- 多桌、併桌、late registration 的規則與時程。
+以單桌模擬大型 MTT 的某個階段。使用者決定：權益用數值積分的精確 ICM、賽場上限 1,000 人；階段打到指定人數或本桌只剩 1 人就結束；第一版不補位；新增 v4 輸入格式。
+
+**階段規格**（`poker/mtt_stage.py` 的 `StageSpec`，放在 `TournamentConfig.stage`）
+- 賽場起始人數（≤ 1,000）、階段開始時剩幾人、各名次獎金（buy-in）、結束人數、籌碼分散程度、其他桌每手淘汰機率、PKO 時頭上 bounty 的平均與分散。
+- 內建階段：`bubble`（1,000 人、付 150 名、剩 160 人，打到剩 130 人）、`itm`（剩 140 人，打到 100 人）、`final_tables`（剩 27 人，打到決賽桌 9 人）。獎金表 `mtt_prizes`：最低獎金 1.5 buy-in，其餘依名次遞減。
+- `TournamentConfig.players` 是本桌人數，`starting_stack_bb` 是全場平均籌碼，`payout` 不使用。沒有 `stage` 的錦標賽完全不變（JSON、結果、冪等鍵相同）。
+
+**賽場**（`FieldState`）
+- 本桌照常打；其他桌不實際打，每打一手，其他每桌以 `bust_rate` 的機率淘汰一人（短籌碼較容易），籌碼轉給賽場另一人，所以全場籌碼守恆、泡沫逐漸逼近。淘汰速度是情境的一部分，固定不隨本桌改變，對每個受測玩家都相同。
+- 不補位：本桌人數只會減少。本桌的人被淘汰時拿到當時全場的名次獎金；同一手多人淘汰照原本的規則分名次。
+
+**權益**（`poker/field_icm.py` 的 `FieldIcm`）
+- Malmuth-Harville ICM 等價於指數賽跑：玩家 i 的「出局時間」T_i ~ Exp(籌碼_i)，名次依 T 由大到小。固定 T_i = t 時，其他人先出局的事件彼此獨立（機率 1 − e^(−s_j t)），名次分布是 Poisson-binomial，對 t 用 Gauss-Legendre 積分（96 點）。其他桌的部分依籌碼級距快取，直到賽場變動。
+- 實測（使用者核准前的研究）：與精確遞迴的誤差 < 0.0002 buy-in；1,000 人泡沫期每手約 2–20 ms。蒙地卡羅（2,000 次）誤差 3–11%、同一手的變化標準差 0.1–0.23 buy-in；依籌碼占比的誤差數倍以上，都不採用。
+- `table_ladder`：全場獎金「從本桌看」的樣子，也就是平均籌碼的人在本桌拿第 k 名時的預期獎金。這個階梯放在 `TournamentHandInfo.prizes`，供 ICM Push/Fold Nash baseline、規則 bot 與 v3 欄位使用，泡沫會顯示成階梯中的落差。
+
+**結果與獎勵**
+- 階段結束時（全場剩 `end_players` 人，或本桌只剩 1 人），還在的人拿當下的全場 ICM 權益當獎金；名次是籌碼在全場的排名（只用於 ITM 統計）。
+- 結果 = 獎金 + bounty 現金 − 階段開始時的權益，所以「贏或輸了多少權益」，平均約為 0。訓練的每手獎勵（權益變化）加總後剛好等於這個結果，沒有偏差。
+- `TournamentHandInfo.stage`（`StageInfo`）：全場剩幾人、付幾名、全場平均籌碼、最低獎金、下一個名次的獎金。
+
+**v4 輸入**（`learning/encoding_v4.py`，`poker-nlhe-vector-v4`）
+- v3 的 549 個數字照原順序，後面加 8 個：是否為 MTT 階段、全場剩幾人（對數）、付錢比例、距離進錢圈幾人、是否已進錢圈、自己籌碼對全場平均、全場平均（BB）、下一名次的獎金（以最低獎金為單位）。單桌錦標賽這 8 個都是 0，所以 v4 打單桌和 v3 一樣。
+- 階段中 v3 的獎金欄位是本桌階梯的比例。NFSP 與 PPO 都支援 v4（`nfsp.hand_context` 依 encoder 準備資訊）。
+- MTT 階段的訓練必須用 v4（設定檢查）；v3 模型仍可坐上階段牌桌（看不到全場資訊）。
+
+**多結構訓練與 preset**
+- `TournamentSampler.stages`、`stage_share`：抽到階段時是滿桌（9 人），獎金用階段的；沒有階段的 sampler 抽出的錦標賽與以前完全相同。
+- preset：`mtt-pko-v4-train`（v3 的混合加 50% 階段；曲線用泡沫期，SL 容量 400,000）、`mtt-pko-v4-smoke`；benchmark `mtt-pko-{bubble,itm,final-tables}-{pushfold,pushfold_nash}`（9 人桌、平均 25 BB、對混合 Rule Bot，500 seed × 9 座位）。
+- 自訂錦標賽可指定 `stage`（名稱，或 `{"base": "bubble", "players_left": 200, ...}`）。
+
+**驗收**
+- 全場 ICM 與精確 ICM 一致（10–13 人、多種獎金）；全場所有人的權益加總等於剩下的獎金。
+- 階段錦標賽：本桌籌碼與 bounty 守恆、按時結束、淘汰者拿到全場名次獎金；只蓋牌的玩家結果為正（賽場在縮小）；每手權益加總等於最終結果。
+- ICM Push/Fold Nash baseline 在泡沫期面對全下的跟注明顯比 chip EV 時緊（9 人桌 10 BB：50% 底池範圍以下）。
+- v4 模型在 sampler 下同時打單桌與階段牌桌；`mtt-pko-v4-smoke` 與階段 benchmark 在平台上完整跑完；v3 encoder 用於階段訓練會被拒絕。
+
+## 12. 尚未決定
+
+- 補位（併桌、移桌）、多桌同時實際對打、late registration 的規則與時程。
+- 賽場淘汰速度目前固定，之後可依盲注與籌碼深度推估。

@@ -34,6 +34,8 @@ from tableforge.learning.encoders import DEFAULT_SCHEMA, Encoder, encoder
 from tableforge.learning.encoding_v2 import TournamentContext
 from tableforge.learning.encoding_v3 import SCHEMA as STRUCTURE_SCHEMA
 from tableforge.learning.encoding_v3 import StructureContext
+from tableforge.learning.encoding_v4 import SCHEMA as STAGE_SCHEMA
+from tableforge.learning.encoding_v4 import FieldContext, StageContext
 from tableforge.learning.memory import PolicyReservoir, TransitionMemory
 from tableforge.poker.betting import Action, LegalActions
 from tableforge.poker.observation import Observation
@@ -57,8 +59,16 @@ def tournament_context(info: TournamentHandInfo) -> TournamentContext:
 
 
 def structure_context(info: TournamentHandInfo) -> StructureContext:
-    """What the v3 encoder's structure fields need."""
+    """What the v3 encoder's structure fields need.
+
+    In an MTT stage (T5) the payout is the field's payout seen from our table (the table
+    ladder in `info.prizes`, as shares of its total) and the field size is our table's.
+    """
     scale = info.starting_bounty if info.starting_bounty > 0 else 1.0
+    payout = info.payout
+    if info.stage is not None and info.prizes:
+        total = sum(info.prizes)
+        payout = tuple(prize / total for prize in info.prizes) if total > 0 else ()
     return StructureContext(
         starting_stack=info.starting_stack,
         level=info.level,
@@ -67,12 +77,39 @@ def structure_context(info: TournamentHandInfo) -> StructureContext:
         players_left=info.players_left,
         field_size=info.field_size or info.players_left,
         ante=info.ante,
-        payout=info.payout,
+        payout=payout,
         bounties=tuple(value / scale for value in info.bounties),
         bounty_share=info.bounty_share,
         cash_share=info.bounty_cash_share if info.bounties else 0.0,
         blind_growth=info.blind_growth or 1.25,
     )
+
+
+def stage_context(info: TournamentHandInfo) -> StageContext:
+    """What the v4 encoder needs: v3's structure plus the field around our table."""
+    stage = info.stage
+    field = (
+        None
+        if stage is None
+        else FieldContext(
+            field_size=stage.field_size,
+            field_left=stage.field_left,
+            paid=stage.paid,
+            field_average_stack=stage.field_average_stack,
+            min_cash=stage.min_cash,
+            next_prize=stage.next_prize,
+        )
+    )
+    return StageContext(structure_context(info), field)
+
+
+def hand_context(schema: str, info: TournamentHandInfo) -> object:
+    """The tournament context an encoder of this schema takes."""
+    if schema == STAGE_SCHEMA:
+        return stage_context(info)
+    if schema == STRUCTURE_SCHEMA:
+        return structure_context(info)
+    return tournament_context(info)
 
 
 MASKED = -1e9
@@ -195,11 +232,7 @@ class NfspAgent:
         info = self.hand_info
         if info is None:
             return self.encoder.encode(observation, self.config.big_blind)
-        context: TournamentContext | StructureContext = (
-            structure_context(info)
-            if self.encoder.schema == STRUCTURE_SCHEMA
-            else tournament_context(info)
-        )
+        context = hand_context(self.encoder.schema, info)
         return self.encoder.encode(observation, info.big_blind, info.small_blind, context)
 
     def legal_mask(

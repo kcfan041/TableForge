@@ -47,10 +47,10 @@ class Coach:
 
 
 def coach_seats(info: object) -> int:
-    """Largest table a model can sit at: its encoder's seats (6 for v2, 9 for v3)."""
+    """Largest table a model can sit at: its encoder's seats (6 for v2, 9 for v3 and v4)."""
     training = getattr(info, "training", {}) or {}
     schema = str(training.get("observation_schema", "poker-hunlhe-vector-v2"))
-    return 9 if schema == "poker-nlhe-vector-v3" else 6
+    return 9 if schema in ("poker-nlhe-vector-v3", "poker-nlhe-vector-v4") else 6
 
 
 def _bounty_value(text: str) -> float | None:

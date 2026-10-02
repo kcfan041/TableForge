@@ -18,6 +18,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from tableforge.poker.mtt_stage import STAGES, StageSpec
 from tableforge.poker.tournament import (
     PAYOUTS,
     BlindLevel,
@@ -45,6 +46,10 @@ class TournamentSpec:
     blind_levels: tuple[BlindLevel, ...] = field(default=())
     """Custom blind structure (e.g. copied from a tournament lobby); empty = standard."""
     name: str = ""
+    stage: StageSpec | None = None
+    """T5: our table is one table of a large MTT at this stage; `players` is our table,
+    `starting_stack_bb` the field's average stack and `payout` is replaced by the stage's
+    prizes. From input: a stage name (`bubble`, `itm`, `final_tables`) or a full object."""
 
     def __post_init__(self) -> None:
         if len(self.blind_levels) > MAX_LEVELS:
@@ -64,6 +69,9 @@ class TournamentSpec:
         if self.name:
             return self.name
         kind = "pko" if self.pko else "sng"
+        if self.stage is not None:
+            stage = self.stage.name or f"{self.stage.players_left}of{self.stage.field_size}"
+            return f"mtt-{kind}-{stage}-{self.players}max-{self.starting_stack_bb:g}bb"
         payout = "-".join(f"{share * 100:g}" for share in self.payout)
         return f"{self.players}max-{kind}-{self.starting_stack_bb:g}bb-{payout}"
 
@@ -77,14 +85,19 @@ class TournamentSpec:
             players=self.players,
             starting_stack_bb=self.starting_stack_bb,
             blind_levels=self.levels(),
-            payout=self.payout,
+            payout=(1.0,) if self.stage is not None else self.payout,
             buy_in=self.buy_in,
             name=self.label(),
             bounty=bounty,
+            stage=self.stage,
         )
 
     def to_json(self) -> str:
         data = asdict(self)
+        if self.stage is None:
+            del data["stage"]
+        else:
+            data["stage"] = self.stage.to_dict()
         data["schema_version"] = SPEC_SCHEMA
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
@@ -127,6 +140,8 @@ class TournamentSpec:
                 )
             if "name" in data:
                 values["name"] = str(data["name"])[:80]
+            if data.get("stage"):
+                values["stage"] = parse_stage(data["stage"])
         except (KeyError, TypeError) as error:
             raise ValueError(f"invalid tournament settings: {error}") from error
         return cls(**values)
@@ -172,8 +187,43 @@ def parse_payout(value: object) -> tuple[float, ...]:
     return tuple(round(share, 10) for share in shares)
 
 
+def parse_stage(value: object) -> StageSpec:
+    """A stage: the name of a built-in stage, or an object (a name plus overrides, or every
+    `StageSpec` field)."""
+    if isinstance(value, str):
+        if value not in STAGES:
+            raise ValueError(f"unknown stage {value}; choose one of {', '.join(STAGES)}")
+        return STAGES[value]
+    if not isinstance(value, dict):
+        raise ValueError("stage must be a name or an object")
+    data = dict(value)
+    base = data.pop("base", None)
+    if base is not None:
+        if base not in STAGES:
+            raise ValueError(f"unknown stage {base}")
+        merged = STAGES[str(base)].to_dict()
+        merged.update(data)
+        data = merged
+    return StageSpec.from_dict(data)
+
+
 def spec_from_config(config: TournamentConfig) -> dict[str, object]:
     """A readable summary of an engine config (for UIs and model descriptions)."""
+    if config.stage is not None:
+        stage = config.stage
+        return {
+            **_single_table(config),
+            "stage": stage.name or "custom",
+            "field_size": stage.field_size,
+            "field_left": stage.players_left,
+            "paid": stage.paid,
+            "end_players": stage.end_players,
+            "prizes": list(stage.prizes[:20]),
+        }
+    return _single_table(config)
+
+
+def _single_table(config: TournamentConfig) -> dict[str, object]:
     return {
         "players": config.players,
         "starting_stack_bb": config.starting_stack_bb,

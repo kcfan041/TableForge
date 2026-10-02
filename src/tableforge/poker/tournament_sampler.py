@@ -6,6 +6,9 @@ rules. `config(seed)` draws one concrete `TournamentConfig` from those ranges, a
 same one for the same seed, so training with a sampler stays reproducible and every actor
 job sees a different mix of structures.
 
+With `stages` some draws are MTT stages (T5: our table inside a large field, see
+`mtt_stage`); those need the v4 encoder, which sees the field.
+
 Training with a sampler needs an encoder that sees the structure (`poker-nlhe-vector-v3`);
 benchmarks still use one fixed tournament each, so a multi-structure model is compared
 with a single-structure model on that model's own tournament.
@@ -43,6 +46,10 @@ class TournamentSampler:
     bounty_share: tuple[float, ...] = (0.5,)
     cash_share: tuple[float, ...] = (0.5,)
     name: str = "mixed"
+    stages: tuple[str, ...] = ()
+    """T5: named MTT stages (`mtt_stage.STAGES`) to draw from; needs the v4 encoder."""
+    stage_share: float = 0.0
+    """Chance that a drawn tournament is one of `stages` (our table in a large MTT)."""
     extra: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -71,6 +78,13 @@ class TournamentSampler:
             raise ValueError("cash_share must be between 0 and 1")
         if self.extra:
             raise ValueError(f"unknown sampler settings: {', '.join(sorted(self.extra))}")
+        from tableforge.poker.mtt_stage import STAGES
+
+        unknown = set(self.stages) - set(STAGES)
+        if unknown:
+            raise ValueError(f"unknown stages: {', '.join(sorted(unknown))}")
+        if not 0 <= self.stage_share <= 1 or (self.stage_share > 0 and not self.stages):
+            raise ValueError("stage_share must be between 0 and 1 and needs stages")
 
     def config(self, seed: int) -> TournamentConfig:
         """The tournament of training seed `seed` (the same for the same seed)."""
@@ -98,18 +112,33 @@ class TournamentSampler:
                 BlindLevel(big_blind // 2, big_blind, int(round(big_blind * ante_share)), hands)
             )
             big *= growth
+        stage = None
+        # Drawn last, with its own generator, so samplers without stages give exactly the
+        # tournaments they gave before.
+        stage_rng = random.Random(f"{seed}:stage")
+        if self.stages and stage_rng.random() < self.stage_share:
+            from tableforge.poker.mtt_stage import STAGES
+
+            stage = STAGES[stage_rng.choice(self.stages)]
+            # A table in a large field is full; the stage's own payout replaces this one.
+            players = min(stage.table_size, MAX_PLAYERS, self.max_players)
+            payout = (1.0,)
         return TournamentConfig(
             players=players,
             starting_stack_bb=stack_bb,
             blind_levels=tuple(levels),
             payout=tuple(payout),
-            name=f"{self.name}:{seed}",
+            name=f"{self.name}:{seed}" + (f":{stage.name}" if stage is not None else ""),
             bounty=bounty,
+            stage=stage,
         )
 
     def to_json(self) -> str:
         data = asdict(self)
         del data["extra"]
+        if not self.stages:
+            del data["stages"]
+            del data["stage_share"]
         data["schema_version"] = SAMPLER_SCHEMA
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
@@ -145,6 +174,10 @@ class TournamentSampler:
                 )
             if "pko_share" in data:
                 values["pko_share"] = float(data["pko_share"])
+            if "stages" in data:
+                values["stages"] = tuple(str(item) for item in data["stages"])
+            if "stage_share" in data:
+                values["stage_share"] = float(data["stage_share"])
             if "name" in data:
                 values["name"] = str(data["name"])[:40]
         except (TypeError, ValueError) as error:

@@ -29,6 +29,12 @@ from dataclasses import asdict, dataclass, field
 from functools import cache, lru_cache
 from typing import Protocol, runtime_checkable
 
+from tableforge.poker.mtt_stage import (
+    FieldState,
+    StageSpec,
+    stage_bounties,
+    stage_table_stacks,
+)
 from tableforge.poker.table import (
     MAX_PLAYERS,
     PotAward,
@@ -90,8 +96,14 @@ class TournamentConfig:
     placement_resolver: str = "stack_at_hand_start"
     name: str = ""
     bounty: BountyConfig | None = None
+    stage: StageSpec | None = None
+    """T5: our table is one table of a large MTT at this stage (`poker.mtt_stage`). Then
+    `players` is our table, `starting_stack_bb` the field's average stack, `payout` is not
+    used (prizes come from the stage) and the stage ends early (see `mtt_stage`)."""
 
     def __post_init__(self) -> None:
+        if self.stage is not None and self.stage.players_left <= self.players:
+            raise ValueError("a stage needs more players left than our table has")
         if not 2 <= self.players <= MAX_PLAYERS:
             raise ValueError(f"players must be between 2 and {MAX_PLAYERS}")
         if self.starting_stack_bb <= 0:
@@ -140,6 +152,10 @@ class TournamentConfig:
         if self.bounty is None:
             # Configs without PKO keep the exact JSON (and job idempotency) they had before.
             del data["bounty"]
+        if self.stage is None:
+            del data["stage"]
+        else:
+            data["stage"] = self.stage.to_dict()
         data["schema_version"] = CONFIG_SCHEMA
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
@@ -155,6 +171,8 @@ class TournamentConfig:
             data["payout"] = tuple(float(share) for share in data["payout"])
             if data.get("bounty") is not None:
                 data["bounty"] = BountyConfig(**data["bounty"])
+            if data.get("stage") is not None:
+                data["stage"] = StageSpec.from_dict(data["stage"])
             return cls(**data)
         except (KeyError, TypeError) as error:
             raise ValueError(f"invalid tournament config: {error}") from error
@@ -270,6 +288,32 @@ class TournamentHandInfo:
     """PKO: part of the buy-in that is bounty (0 without bounties)."""
     blind_growth: float = 0.0
     """Big blind of the next level over this level's (0: unknown)."""
+    stage: StageInfo | None = None
+    """T5: where the whole MTT stands (None for a single-table tournament). Then `prizes`
+    is the field's payout as seen from our table (`FieldIcm.table_ladder`)."""
+
+
+@dataclass(frozen=True, slots=True)
+class StageInfo:
+    """The MTT around our table at the start of a hand (T5)."""
+
+    field_size: int
+    """Players who started the tournament."""
+    field_left: int
+    """Players left in the whole tournament."""
+    paid: int
+    """Places paid in the whole tournament."""
+    field_average_stack: float
+    """Average stack in the whole field, in chips."""
+    min_cash: float
+    """Prize of the last paid place, in buy-ins."""
+    next_prize: float
+    """Prize of the next place to be decided (0 when it is not paid: off the money)."""
+
+    @property
+    def to_money(self) -> int:
+        """Players who must bust before everyone left is paid (0 when in the money)."""
+        return max(0, self.field_left - self.paid)
 
 
 class HandRunner(Protocol):
@@ -364,14 +408,64 @@ class Tournament:
         self.hand_number = 0
         self.button_player = random.Random(f"{seed}:button").randrange(config.players)
         self.elimination_order: list[tuple[int, ...]] = []
+        self.field: FieldState | None = None
+        """T5: the other tables of the MTT (None for a single-table tournament)."""
+        stage = config.stage
+        if stage is not None:
+            self.stacks = stage_table_stacks(
+                stage, config.players, config.starting_stack * config.players, str(seed)
+            )
+            self.field = FieldState(stage, config.players, config.starting_stack, str(seed))
+            if config.bounty is not None:
+                self.heads = stage_bounties(
+                    stage, config.players, config.starting_bounty, str(seed)
+                )
+        self.total_chips = sum(self.stacks)
+        """Chips at our table (conserved hand to hand)."""
+        self.bounties_in = sum(self.heads)
+        self.total_field_chips = float(
+            self.total_chips + (sum(self.field.stacks) if self.field is not None else 0.0)
+        )
+        self._equity_cache: tuple[tuple[object, ...], list[float]] | None = None
+        self.starting_equity: list[float] = [config.buy_in] * config.players
+        """What each player's result is measured from: the buy-in, or for a stage the field
+        ICM equity when the stage starts (a stage result is the equity won or lost)."""
+        if self.field is not None:
+            self.starting_equity = self.stage_equities()
 
     @property
     def alive(self) -> list[int]:
         return [player for player in range(self.config.players) if self.stacks[player] > 0]
 
     @property
+    def field_left(self) -> int:
+        """Players left in the whole tournament (our table only without a stage)."""
+        return len(self.alive) + (self.field.count if self.field is not None else 0)
+
+    @property
     def complete(self) -> bool:
+        stage = self.config.stage
+        if stage is not None and self.field_left <= stage.end_players:
+            return True
         return len(self.alive) <= 1
+
+    def _prize(self, place: int) -> float:
+        stage = self.config.stage
+        return stage.prize(place) if stage is not None else self.config.payout_for_place(place)
+
+    def stage_equities(self) -> list[float]:
+        """Field ICM equity of our table's players still in (stage tournaments only)."""
+        assert self.field is not None
+        key = (tuple(self.stacks), self.field.count)
+        if self._equity_cache is None or self._equity_cache[0] != key:
+            table = [self.stacks[player] for player in self.alive]
+            self._equity_cache = (key, self.field.icm().equities(table))
+        return self._equity_cache[1]
+
+    def stage_ladder(self) -> list[float]:
+        """The field payout as seen from our table: prize per table place (`FieldIcm`)."""
+        assert self.field is not None
+        return self.field.icm().table_ladder([self.stacks[player] for player in self.alive])
 
     def run(
         self,
@@ -396,6 +490,8 @@ class Tournament:
         """Place the last player standing and return the result (after the final hand)."""
         if not self.complete:
             raise AssertionError("tournament is not over yet")
+        if self.field is not None:
+            return self._finish_stage(records)
         winner = self.alive[0]
         self.places[winner] = 1
         self.prizes[winner] = self.config.payout_for_place(1)
@@ -404,6 +500,26 @@ class Tournament:
             self.bounty_cash[winner] += self.heads[winner]
             self.heads[winner] = 0.0
         self.elimination_order.append((winner,))
+        return self.result(tuple(records))
+
+    def _finish_stage(self, records: tuple[HandRecord, ...]) -> TournamentResult:
+        """End of a stage: players still in get their field ICM equity as their prize.
+
+        Their place is where their stack ranks in the whole field (for ITM statistics);
+        bounties still on heads stay there (they are only worth something when won).
+        """
+        assert self.field is not None
+        alive = self.alive
+        equities = self.stage_equities()
+        field = self.field.stacks
+        for player, equity in zip(alive, equities, strict=True):
+            stack = self.stacks[player]
+            ahead = sum(1 for other in field if other > stack) + sum(
+                1 for other in alive if self.stacks[other] > stack
+            )
+            self.places[player] = ahead + 1
+            self.prizes[player] = equity
+        self.elimination_order.append(tuple(alive))
         return self.result(tuple(records))
 
     def equity(self, player: int) -> float:
@@ -419,6 +535,8 @@ class Tournament:
         if self.stacks[player] == 0:
             return self.prizes[player] + cash
         alive = self.alive
+        if self.field is not None:
+            return self.stage_equities()[alive.index(player)] + cash
         if len(alive) == 1:
             own = self.heads[player]
             bounty = self.config.bounty
@@ -454,8 +572,26 @@ class Tournament:
             self.button_player = self._next_alive_after(self.button_player)
         level_number, level, left = config.level_at(self.hand_number)
         stacks_before = tuple(self.stacks[player] for player in seat_players)
-        prizes = self._remaining_prizes(count)
-        icm_before = tuple(icm_equities(stacks_before, prizes)) if record else ()
+        stage_info: StageInfo | None = None
+        if self.field is not None:
+            # Players and agents see the field's payout through our table: what each table
+            # place is worth (the bubble shows as a step).
+            prizes = self.stage_ladder()
+            icm_before = tuple(self.stage_equities()) if record else ()
+            stage = config.stage
+            assert stage is not None
+            field_left = self.field_left
+            stage_info = StageInfo(
+                field_size=stage.field_size,
+                field_left=field_left,
+                paid=stage.paid,
+                field_average_stack=self.total_field_chips / field_left,
+                min_cash=stage.prize(stage.paid),
+                next_prize=stage.prize(field_left - 1) if field_left - 1 <= stage.paid else 0.0,
+            )
+        else:
+            prizes = self._remaining_prizes(count)
+            icm_before = tuple(icm_equities(stacks_before, prizes)) if record else ()
         button_seat = seat_players.index(self.button_player)
         bounties_before = (
             tuple(self.heads[player] for player in seat_players)
@@ -498,6 +634,7 @@ class Tournament:
                 blind_growth=config.level_at(self.hand_number + left)[1].big_blind / level.big_blind
                 if left
                 else 1.0,
+                stage=stage_info,
             )
             for seat in range(count)
         )
@@ -525,7 +662,7 @@ class Tournament:
         level = config.level_at(self.hand_number)[1]
         for seat, player in enumerate(seat_players):
             self.stacks[player] = result.final_stacks[seat]
-        if sum(self.stacks) != config.starting_stack * config.players:
+        if sum(self.stacks) != self.total_chips:
             raise AssertionError("chip conservation violated across hands")
         busted = [
             Bust(player, stacks_before[seat])
@@ -533,10 +670,20 @@ class Tournament:
             if self.stacks[player] == 0
         ]
         knockouts: list[Knockout] = []
+        field_before = self.field_left + len(busted)
         if busted:
             if config.bounty is not None:
                 knockouts = self._collect_bounties(busted, seat_players, result.pots)
-            self._place(busted, count)
+            if self.field is not None:
+                # Places in the whole field: just below everyone still in.
+                self._place(busted, field_before)
+            else:
+                self._place(busted, count)
+        if self.field is not None:
+            stage = config.stage
+            assert stage is not None
+            # The other tables play their hand too (after ours: ties go to our table).
+            self.field.step(self.field_left, self.field_left - stage.end_players)
         self.hand_number += 1
         if not started.record:
             return None
@@ -544,14 +691,22 @@ class Tournament:
         icm_before = started.icm_before
         bounties_before = started.bounties_before
         stacks_after = tuple(self.stacks[player] for player in seat_players)
-        icm_after = tuple(
-            self.prizes[player]
-            if self.stacks[player] == 0
-            else icm_equities(
-                [self.stacks[p] for p in self.alive], self._remaining_prizes(len(self.alive))
-            )[self.alive.index(player)]
-            for player in seat_players
-        )
+        if self.field is not None:
+            alive = self.alive
+            equities = dict(zip(alive, self.stage_equities(), strict=True)) if alive else {}
+            icm_after = tuple(
+                self.prizes[player] if self.stacks[player] == 0 else equities[player]
+                for player in seat_players
+            )
+        else:
+            icm_after = tuple(
+                self.prizes[player]
+                if self.stacks[player] == 0
+                else icm_equities(
+                    [self.stacks[p] for p in self.alive], self._remaining_prizes(len(self.alive))
+                )[self.alive.index(player)]
+                for player in seat_players
+            )
         return HandRecord(
             hand_number=self.hand_number - 1,
             level=level_number,
@@ -581,12 +736,14 @@ class Tournament:
         prizes = tuple(self.prizes)
         bounties = tuple(self.bounty_cash)
         results = tuple(
-            prize + bounty - self.config.buy_in
-            for prize, bounty in zip(prizes, bounties, strict=True)
+            prize + bounty - start
+            for prize, bounty, start in zip(prizes, bounties, self.starting_equity, strict=True)
         )
-        if not math.isclose(sum(prizes), self.config.prize_pool, rel_tol=1e-9):
+        if self.field is None and not math.isclose(
+            sum(prizes), self.config.prize_pool, rel_tol=1e-9
+        ):
             raise AssertionError("prizes do not add up to the prize pool")
-        paid_in = self.config.starting_bounty * self.config.players
+        paid_in = self.bounties_in
         if not math.isclose(sum(bounties) + sum(self.heads), paid_in, abs_tol=1e-9):
             raise AssertionError("bounties paid plus bounties left must equal bounties paid in")
         return TournamentResult(
@@ -664,7 +821,7 @@ class Tournament:
         next_place = players_before - len(busted) + 1
         for group in groups:
             places = range(next_place, next_place + len(group))
-            share = sum(self.config.payout_for_place(place) for place in places) / len(group)
+            share = sum(self._prize(place) for place in places) / len(group)
             for player in group:
                 self.places[player] = next_place
                 self.prizes[player] = share

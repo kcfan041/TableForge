@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from tableforge.learning import encoding as v1
 from tableforge.learning import encoding_v2 as v2
 from tableforge.learning import encoding_v3 as v3
+from tableforge.learning import encoding_v4 as v4
 from tableforge.poker.observation import Observation
 from tableforge.poker.table import TableObservation
 
@@ -65,6 +66,7 @@ ENCODERS: dict[str, Encoder] = {
     v1.SCHEMA: Encoder(v1.SCHEMA, v1.FEATURE_SIZE, _v1),
     v2.SCHEMA: Encoder(v2.SCHEMA, v2.FEATURE_SIZE, _v2, supports_tables=True),
     v3.SCHEMA: Encoder(v3.SCHEMA, v3.FEATURE_SIZE, _v3, supports_tables=True, max_players=9),
+    v4.SCHEMA: Encoder(v4.SCHEMA, v4.FEATURE_SIZE, v4.encode, supports_tables=True, max_players=9),
 }
 DEFAULT_SCHEMA = v1.SCHEMA
 LATEST_SCHEMA = v2.SCHEMA

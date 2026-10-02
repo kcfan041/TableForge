@@ -180,7 +180,11 @@ def collect_samples(
 ) -> TournamentSamples:
     players = config.players
     seats = range(players) if rotate_seats else range(1)
-    paid_places = sum(1 for share in config.payout if share > 0)
+    paid_places = (
+        config.stage.paid
+        if config.stage is not None
+        else sum(1 for share in config.payout if share > 0)
+    )
     prize: list[float] = []
     bounty: list[float] = []
     total: list[float] = []
@@ -200,7 +204,9 @@ def collect_samples(
             result = run_tournament(config, seed, agents)
             hands += result.hands
             place = result.places[player]
-            place_counts[place - 1] += 1
+            # In an MTT stage places are in the whole field: count the place at our table.
+            table_place = 1 + sum(1 for other in result.places if other < place)
+            place_counts[min(table_place, players) - 1] += 1
             sums[0] += result.prizes[player]
             sums[1] += result.bounties[player]
             sums[2] += result.results[player]

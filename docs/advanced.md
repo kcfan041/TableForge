@@ -78,7 +78,9 @@ uv run python scripts/tournament_probe.py --algorithm ppo --stack-bb 10 --tourna
 
 `--ppo-tournaments` 是每次更新前打幾場（on-policy），`--ppo-epochs` 是每批經驗訓練幾遍，`--batch` 是 minibatch 大小；`--entropy`、`--gae-lambda` 調整熵獎勵與 GAE λ。MMD 正則化用 `--magnet-coef 0.05 --magnet-every 10`（拉回參考策略的強度，參考策略每幾次更新換成目前策略；0 就是一般 PPO）。有 `--save` 時每個檢查點都另存一份（`<名稱>-<場數>.zip`）。`benchmark` 是依機率出手（預設打法），`greedy` 是永遠選最可能的動作。也可以加 `--v3 --sampler ...`。平台上用 preset `6max-pko-10bb-ppo-train`（或加 MMD 的 `6max-pko-10bb-mmd-train`），設定 `entropy_coef`、`gae_lambda`、`clip`、`magnet_coef`、`magnet_every`；`train_steps_per_round` 是每輪 epoch 數。
 
-`--sampler` 是 `TournamentSampler` 的 JSON（`players`、`starting_stack_bb`、`hands_per_level`、`blind_growth`、`ante_share`、`payouts`、`pko_share`、`bounty_share`、`cash_share`），只用在訓練；benchmark 仍是 `--stack-bb`／`--tournament` 指定的錦標賽。平台上建立實驗時用 `settings.sampler` 傳同樣的物件。
+**MTT 階段（T5）**：錦標賽規格的 `stage` 讓本桌成為 1,000 人賽事中的一桌，其他桌以模擬推進、權益用全場 ICM。可用名稱 `bubble`、`itm`、`final_tables`，或物件（例如 `{"base": "bubble", "players_left": 200, "end_players": 150}`；欄位見 `poker/mtt_stage.py` 的 `StageSpec`）。研究腳本：`--tournament "{\"players\":9,\"starting_stack_bb\":25,\"stage\":\"bubble\"}"`。階段的結果是「贏或輸了多少權益」（獎金 + bounty − 開始時的權益）。要讓模型看得到賽場資訊，請用 v4 格式（`observation_schema` = `poker-nlhe-vector-v4`，preset `mtt-pko-v4-train`）。
+
+`--sampler` 是 `TournamentSampler` 的 JSON（`players`、`starting_stack_bb`、`hands_per_level`、`blind_growth`、`ante_share`、`payouts`、`pko_share`、`bounty_share`、`cash_share`，以及 MTT 階段的 `stages`、`stage_share`），只用在訓練；benchmark 仍是 `--stack-bb`／`--tournament` 指定的錦標賽。平台上建立實驗時用 `settings.sampler` 傳同樣的物件。
 
 從叢集下載、用於本機對打的模型另外放在 `downloaded-models\`，格式相同。下載透過控制面的 `download_model` 指令（需要 `model:download`），每塊 2 MB，完成後檢查大小與 sha256。對打的指令（`play_start`、`play_act` 等，需要 `play:remote`）也可以用 `/api/command/<指令>` 或 gRPC `Command` 呼叫；格式見 `src/tableforge/coordinator/play.py`。
 
