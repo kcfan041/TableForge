@@ -15,6 +15,7 @@ from tableforge.learning.ppo import (
     checkpoint_manifest,
     clipped_loss,
     gae,
+    magnet_kl,
 )
 from tableforge.learning.ppo_training import collect, ppo_self_play_train
 from tableforge.poker.tournament import BountyConfig, preset_config
@@ -163,3 +164,119 @@ def test_config_rejects_bad_values() -> None:
         PpoConfig(action_schema="nope")
     with pytest.raises(ValueError):
         PpoConfig(entropy_coef=-1)
+
+
+# --- MMD (magnetic mirror descent) ------------------------------------------------------
+
+
+def random_batch(agent: PpoAgent, count: int = 128, seed: int = 0) -> list[Transition]:
+    rng = np.random.default_rng(seed)
+    mask = (True,) * 5
+    transitions = []
+    for _ in range(count):
+        state = tuple(float(value) for value in rng.normal(size=406))
+        action = agent.choose(state, mask)
+        transitions.append(Transition(state, mask, action, float(rng.normal()), None, None))
+    return transitions
+
+
+def test_magnet_kl_is_zero_for_the_same_policy_and_ignores_illegal_actions() -> None:
+    log_probs = torch.log(torch.tensor([[0.5, 0.5, 0.0 + 1e-12]]))
+    other = torch.log(torch.tensor([[0.25, 0.75, 1e-12]]))
+    legal = torch.tensor([[True, True, False]])
+
+    assert magnet_kl(log_probs, log_probs, legal).item() == pytest.approx(0.0)
+    expected = 0.5 * np.log(0.5 / 0.25) + 0.5 * np.log(0.5 / 0.75)
+    assert magnet_kl(log_probs, other, legal).item() == pytest.approx(expected, abs=1e-6)
+
+
+def test_magnet_zero_is_plain_ppo() -> None:
+    plain = PpoAgent(PpoConfig(seed=8, hidden_size=16, minibatch_size=64))
+    explicit = PpoAgent(PpoConfig(seed=8, hidden_size=16, minibatch_size=64, magnet_coef=0.0))
+    batch = random_batch(PpoAgent(PpoConfig(seed=8, hidden_size=16)))
+    for agent in (plain, explicit):
+        agent.learn(Rollout.of(batch, 406, 5))
+
+    assert plain.magnet_network is None and explicit.magnet_network is None
+    assert plain.to_bundle() == explicit.to_bundle()
+    assert "magnet_coef" not in checkpoint_manifest(plain.to_bundle())["config"]
+
+
+def test_magnet_pulls_the_policy_back() -> None:
+    def drift(magnet_coef: float) -> float:
+        agent = PpoAgent(
+            PpoConfig(
+                seed=9,
+                hidden_size=16,
+                minibatch_size=64,
+                learning_rate=3e-3,
+                entropy_coef=0.0,
+                magnet_coef=magnet_coef,
+                magnet_every=1_000,
+            )
+        )
+        start = PpoAgent.from_bundle(agent.to_bundle())
+        states = random_batch(agent, 64, seed=1)
+        # Strongly reward action 1 so the policy wants to move away from where it started.
+        for _ in range(15):
+            batch = [
+                Transition(item.state, item.mask, action, 1.0 if action == 1 else -1.0, None, None)
+                for item in states
+                for action in (agent.choose(item.state, item.mask),)
+            ]
+            agent.learn(Rollout.of(batch, 406, 5), epochs=4)
+        mask = (True,) * 5
+        distance = 0.0
+        for item in states:
+            now, _ = agent.evaluate_state(item.state, mask)
+            before, _ = start.evaluate_state(item.state, mask)
+            distance += sum(abs(a - b) for a, b in zip(now, before, strict=True))
+        return distance / len(states)
+
+    assert drift(5.0) < drift(0.0) * 0.7
+
+
+def test_magnet_moves_to_the_policy_every_n_updates() -> None:
+    agent = PpoAgent(
+        PpoConfig(seed=10, hidden_size=16, minibatch_size=64, magnet_coef=0.1, magnet_every=2)
+    )
+    assert agent.magnet_network is not None
+    batch = Rollout.of(random_batch(agent), 406, 5)
+
+    def same() -> bool:
+        assert agent.magnet_network is not None
+        return all(
+            torch.equal(a, b)
+            for a, b in zip(
+                agent.magnet_network.state_dict().values(),
+                agent.policy_network.state_dict().values(),
+                strict=True,
+            )
+        )
+
+    assert same()
+    metrics = agent.learn(batch)
+    assert "magnet_kl" in metrics and agent.updates == 1 and not same()
+    agent.learn(batch)
+    assert agent.updates == 2 and same()
+
+
+def test_mmd_checkpoint_round_trip_and_old_checkpoints_load_with_mmd() -> None:
+    agent = PpoAgent(
+        PpoConfig(seed=11, hidden_size=16, minibatch_size=64, magnet_coef=0.2, magnet_every=3)
+    )
+    batch = Rollout.of(random_batch(agent), 406, 5)
+    agent.learn(batch)
+    bundle = agent.to_bundle()
+    copy = PpoAgent.from_bundle(bundle)
+
+    assert copy.to_bundle() == bundle
+    assert copy.updates == 1
+    assert checkpoint_manifest(bundle)["config"]["magnet_coef"] == 0.2
+    agent.learn(batch)
+    copy.learn(batch)
+    assert agent.to_bundle() == copy.to_bundle()
+    with pytest.raises(ValueError):
+        PpoConfig(magnet_coef=-1)
+    with pytest.raises(ValueError):
+        PpoConfig(magnet_every=0)

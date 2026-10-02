@@ -76,7 +76,7 @@ PPO（A1）的研究腳本（同樣的錦標賽、對手與 benchmark）：
 uv run python scripts/tournament_probe.py --algorithm ppo --stack-bb 10 --tournaments 60000 --checkpoints 4 --hidden 128 --batch 1024 --lr 0.0003 --reward-scale 0.3 --hand-horizon --self-play 0.75 --greedy --ppo-tournaments 250 --ppo-epochs 4
 ```
 
-`--ppo-tournaments` 是每次更新前打幾場（on-policy），`--ppo-epochs` 是每批經驗訓練幾遍，`--batch` 是 minibatch 大小；`--entropy`、`--gae-lambda` 調整熵獎勵與 GAE λ。`benchmark` 是依機率出手（預設打法），`greedy` 是永遠選最可能的動作。也可以加 `--v3 --sampler ...`。平台上用 preset `6max-pko-10bb-ppo-train`，設定 `entropy_coef`、`gae_lambda`、`clip`；`train_steps_per_round` 是每輪 epoch 數。
+`--ppo-tournaments` 是每次更新前打幾場（on-policy），`--ppo-epochs` 是每批經驗訓練幾遍，`--batch` 是 minibatch 大小；`--entropy`、`--gae-lambda` 調整熵獎勵與 GAE λ。MMD 正則化用 `--magnet-coef 0.05 --magnet-every 10`（拉回參考策略的強度，參考策略每幾次更新換成目前策略；0 就是一般 PPO）。有 `--save` 時每個檢查點都另存一份（`<名稱>-<場數>.zip`）。`benchmark` 是依機率出手（預設打法），`greedy` 是永遠選最可能的動作。也可以加 `--v3 --sampler ...`。平台上用 preset `6max-pko-10bb-ppo-train`（或加 MMD 的 `6max-pko-10bb-mmd-train`），設定 `entropy_coef`、`gae_lambda`、`clip`、`magnet_coef`、`magnet_every`；`train_steps_per_round` 是每輪 epoch 數。
 
 `--sampler` 是 `TournamentSampler` 的 JSON（`players`、`starting_stack_bb`、`hands_per_level`、`blind_growth`、`ante_share`、`payouts`、`pko_share`、`bounty_share`、`cash_share`），只用在訓練；benchmark 仍是 `--stack-bb`／`--tournament` 指定的錦標賽。平台上建立實驗時用 `settings.sampler` 傳同樣的物件。
 

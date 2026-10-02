@@ -314,6 +314,9 @@ class PpoInitPayload:
     entropy_coef: float
     gae_lambda: float
     clip: float
+    magnet_coef: float = 0.0
+    """MMD: weight of the KL penalty towards the magnet policy (0 = plain PPO)."""
+    magnet_every: int = 10
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
@@ -326,9 +329,11 @@ class PpoInitPayload:
             raise ValueError("invalid learning settings")
         if self.entropy_coef < 0 or not 0 <= self.gae_lambda <= 1 or not 0 < self.clip < 1:
             raise ValueError("invalid PPO settings")
+        if self.magnet_coef < 0 or self.magnet_every < 1:
+            raise ValueError("invalid MMD settings")
 
     def to_bytes(self) -> bytes:
-        return _dump(asdict(self))
+        return _dump(_without_defaults(asdict(self), {"magnet_coef": 0.0, "magnet_every": 10}))
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> PpoInitPayload:

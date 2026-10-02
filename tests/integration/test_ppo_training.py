@@ -153,3 +153,29 @@ def test_ppo_settings_are_checked(tmp_path: Path) -> None:
     )
     assert created.config.algorithm == "ppo"
     assert (created.config.entropy_coef, created.config.gae_lambda) == (0.02, 0.9)
+
+
+def test_mmd_smoke_trains_on_the_platform_and_moves_the_magnet(tmp_path: Path) -> None:
+    services, created = run_experiment(tmp_path, "6max-pko-10bb-mmd-smoke")
+    experiments = services.experiments
+    experiment = experiments.experiments.get(created.experiment_id)
+
+    assert experiment.status is ExperimentStatus.COMPLETED
+    assert (experiment.config.magnet_coef, experiment.config.magnet_every) == (0.1, 2)
+    learners = [
+        job
+        for job in services.coordinator.jobs.list_jobs(created.experiment_id)
+        if job.spec.payload_type == PPO_LEARNER_PAYLOAD_TYPE
+    ]
+    assert len(learners) == 3
+    output = services.coordinator.job_outputs(learners[-1].spec.job_id)[0]
+    agent = PpoAgent.from_bundle(
+        services.coordinator.read_artifact(str(output.artifact.descriptor.artifact_id))
+    )
+    assert agent.config.magnet_coef == 0.1 and agent.magnet_network is not None
+    assert agent.updates == 3
+    assert [point["round"] for point in experiments.training_curve(created.experiment_id)] == [
+        1,
+        2,
+        3,
+    ]

@@ -503,6 +503,8 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "entropy_coef": float,
     "gae_lambda": float,
     "clip": float,
+    "magnet_coef": float,
+    "magnet_every": int,
 }
 """Settings a user may change when creating an iterative training experiment."""
 
@@ -516,6 +518,8 @@ ALGORITHM_ONLY_SETTINGS: dict[str, tuple[str, ...]] = {
     "entropy_coef": ("ppo",),
     "gae_lambda": ("ppo",),
     "clip": ("ppo",),
+    "magnet_coef": ("ppo",),
+    "magnet_every": ("ppo",),
 }
 """Settings that only mean something for some algorithms (the UI shows them only there)."""
 
@@ -539,6 +543,8 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "entropy_coef": (0, 1),
     "gae_lambda": (0, 1),
     "clip": (0.01, 0.9),
+    "magnet_coef": (0, 10),
+    "magnet_every": (1, 1_000),
 }
 
 

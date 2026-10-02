@@ -86,8 +86,14 @@ class ExperimentConfig:
     """PPO: GAE lambda (0 = one-step advantages, 1 = full returns)."""
     clip: float = 0.2
     """PPO: how far one update may move each action's probability ratio."""
+    magnet_coef: float = 0.0
+    """PPO with MMD: weight of the pull towards the magnet policy (0 = plain PPO)."""
+    magnet_every: int = 10
+    """PPO with MMD: the magnet becomes the current policy every this many rounds."""
 
     def __post_init__(self) -> None:
+        if self.magnet_coef < 0 or self.magnet_every < 1:
+            raise ValueError("invalid MMD settings")
         if not self.algorithm or len(self.algorithm) > 32:
             raise ValueError("algorithm must be a short name")
         if self.algorithm == "ppo":
@@ -262,6 +268,8 @@ class ExperimentPreset:
     entropy_coef: float = 0.01
     gae_lambda: float = 0.95
     clip: float = 0.2
+    magnet_coef: float = 0.0
+    magnet_every: int = 10
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -312,6 +320,8 @@ class ExperimentPreset:
             entropy_coef=self.entropy_coef,
             gae_lambda=self.gae_lambda,
             clip=self.clip,
+            magnet_coef=self.magnet_coef,
+            magnet_every=self.magnet_every,
         )
 
 
@@ -582,6 +592,42 @@ BUILTIN_PRESETS = (
             double_q=False,
             rl_capacity=50_000,
             sl_capacity=100_000,
+        ),
+        # PPO with MMD: the same, plus a KL pull towards a magnet policy that becomes the
+        # current policy every `magnet_every` rounds (keeps self-play from cycling).
+        _tournament_training_preset(
+            "6max-pko-10bb-mmd-train",
+            algorithm="ppo",
+            hands=250,
+            hands_per_job=250,
+            rounds=80,
+            train_steps_per_round=4,
+            batch_size=1_024,
+            learning_rate=3e-4,
+            double_q=False,
+            rl_capacity=50_000,
+            sl_capacity=100_000,
+            magnet_coef=0.1,
+            magnet_every=5,
+        ),
+        _tournament_training_preset(
+            "6max-pko-10bb-mmd-smoke",
+            algorithm="ppo",
+            hands=20,
+            hands_per_job=20,
+            rounds=3,
+            actors_per_round=2,
+            train_steps_per_round=2,
+            evaluation_deals=10,
+            max_evaluation_deals=10,
+            hidden_size=32,
+            batch_size=256,
+            learning_rate=3e-4,
+            double_q=False,
+            rl_capacity=50_000,
+            sl_capacity=100_000,
+            magnet_coef=0.1,
+            magnet_every=2,
         ),
     )
     + tuple(

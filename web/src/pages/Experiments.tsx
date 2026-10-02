@@ -60,6 +60,8 @@ const SETTING_ORDER = [
   "entropy_coef",
   "gae_lambda",
   "clip",
+  "magnet_coef",
+  "magnet_every",
   "benchmark_deals",
   "evaluation_deals",
   "max_evaluation_deals",

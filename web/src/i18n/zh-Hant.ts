@@ -144,6 +144,8 @@ export const zhHant = {
   "setting.entropy_coef": "PPO 熵獎勵（越大越常嘗試不同動作）",
   "setting.gae_lambda": "PPO GAE λ（0 = 只看下一步，1 = 看到結束）",
   "setting.clip": "PPO 每次更新的幅度上限（clip）",
+  "setting.magnet_coef": "MMD 拉回參考策略的強度（0 = 一般 PPO）",
+  "setting.magnet_every": "MMD 參考策略每幾輪換成目前策略",
   "playMode.average": "平均策略（預設）",
   "playMode.best_response": "最佳回應（Q 值最高）",
   "playMode.default": "預設",

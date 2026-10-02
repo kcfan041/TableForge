@@ -55,6 +55,8 @@ class PpoInitExecutor:
                 gae_lambda=payload.gae_lambda,
                 clip=payload.clip,
                 seed=payload.agent_seed,
+                magnet_coef=payload.magnet_coef,
+                magnet_every=payload.magnet_every,
             )
         )
         return agent.to_bundle({"round_index": 0})

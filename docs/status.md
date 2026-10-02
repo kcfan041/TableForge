@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：700 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：706 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -559,6 +559,12 @@
   - 結果檔：研究結果資料夾 `research-results/ppo-a1`。
 - 記憶體估計：`scripts/sweep.py` 依 `--v3` 用正確的輸入大小（v3 每筆 549 個數字）估計；同時把子程序的 OpenMP 設為單執行緒並關閉它自己的親和性設定，避免啟動時偶發的「Cannot set thread affinity mask」。
 
+### A1b MMD 正則化（程式完成，小型實驗進行中）
+- 規格見 [architecture/01-system.md](architecture/01-system.md) 6.3。PPO 設定 `magnet_coef`（α）與 `magnet_every`（N）：損失多一項 α·KL(策略‖參考策略)，參考策略每 N 次更新換成當下的策略（使用者選擇的做法）。實驗設定、preset `6max-pko-10bb-mmd-train`（α 0.1、每 5 輪）、`-mmd-smoke`、研究腳本 `--magnet-coef`、`--magnet-every`。研究腳本改為每個檢查點都存檔。
+- 相容：α = 0 不建立參考策略；一般 PPO 的 checkpoint 與訓練結果和加入 MMD 前位元一致（同一個訓練的 sha256 前後相同），NFSP 指紋不變。
+- 驗收（程式）：KL 對相同策略為 0、只算合法動作；α = 0 與一般 PPO 位元一致；同樣的訓練下 α 大時策略離起點較近；參考策略每 N 次更新才換；MMD checkpoint 讀寫一致、讀回後繼續訓練結果相同；`6max-pko-10bb-mmd-smoke` 在平台上跑完 3 輪（learner 輸出帶參考策略，更新次數 3）。
+- 小型實驗（進行中）：10 BB PKO，每組 3 個 seed、各 60,000 場，每 15,000 場評估並存檔。P（PPO 對照）、L（PPO 學習率 1e-4）、M1（α 0.05、每 10 次更新＝2,500 場）、M2（α 0.2、每 40 次更新＝10,000 場）。驗收：不再先升後跌，60,000 場時 3 個 seed 的 ROI 下限都大於 0。
+
 ### H1 匯入 GG／Natural8 牌譜（完成，**尚未用真實匯出檔驗證**）
 - 依 GG 公開的文字牌譜格式（和 PokerStars 相同的版面）撰寫：`poker/hand_history.py` 讀取錦標賽手牌的標頭（賽事、等級、盲注、ante、日期）、座位與籌碼（含座位上的 bounty 金額）、ante 與盲注、發到的手牌、各街動作、公牌、攤牌、未跟注退回與彩池分配。UI 與文件都標明「尚未用真實牌譜驗證」，`verified_against_real_exports` 為 false。
 - **每一手都在引擎上重新打一次**（`TableHand` 加上指定的手牌與公牌、以及「每人都下的 ante」作為死錢）：輪到誰、金額是否合法都由引擎檢查，讀不懂或不合規則的手列在「無法讀取」並附行號，不會靜默略過；引擎算出的彩池分配和牌譜的「collected」不同時也會列出。沒攤牌的對手手牌只用來補位，不會顯示。
@@ -1049,7 +1055,7 @@ uv run tableforge doctor
 4. **H1 匯入 GG／Natural8 牌譜**：完成，尚未用真實牌譜驗證（見上；有樣本後補驗收）。
 5. **A0 演算法介面**：完成（見上）。
 6. **encoder v3 與新動作格式（一次包含 S2 下注尺度、T4 9 人桌、S3 多結構訓練）**：程式完成並以小型實驗驗證（見上）；正式訓練待使用者決定算力預算。
-7. **新訓練演算法**：PPO 程式完成，小型實驗 15,000 場時 +16–20% 但之後自我對打循環退回 0（見上）→ MMD 正則化 → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
+7. **新訓練演算法**：PPO 程式完成，小型實驗 15,000 場時 +16–20% 但之後自我對打循環退回 0（見上）→ MMD 正則化（程式完成，小型實驗進行中；之後同時寫 T5） → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
 8. **T5 MTT 階段模擬**。
 9. **S6 對手建模**。
 

@@ -141,6 +141,8 @@ def _ppo_init(config: ExperimentConfig) -> bytes:
         entropy_coef=config.entropy_coef,
         gae_lambda=config.gae_lambda,
         clip=config.clip,
+        magnet_coef=config.magnet_coef,
+        magnet_every=config.magnet_every,
     ).to_bytes()
 
 

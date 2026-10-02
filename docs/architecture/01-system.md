@@ -238,7 +238,8 @@ class DecisionExplainer(Protocol):
 - 學習：actor 用本輪 checkpoint 打錦標賽（on-policy），每個學習座位的決策依序記錄；獎勵和 NFSP 相同（每手後的錦標賽權益變化，`hand_horizon` 時一手為一個 episode）。learner 用同一個 checkpoint 重新計算行為機率與 V(s)，以 GAE 算 advantage，做幾個 epoch 的 clipped PPO 更新（加上熵獎勵與價值損失）。
 - 平台：沿用 NFSP 的輪次流程與 payload（`IterativeNfspOrchestrator` 以 `PipelineJobs` 換成 PPO 的 Job 類型：`PpoInitJobPayload`、`PpoActorJobPayload`、`PpoLearnerJobPayload`、`PpoMatchJobPayload`）；經驗資料格式相同（只有 transitions）；learner 只接受本輪 checkpoint 產生的經驗。實驗的 `train_steps_per_round` 是每輪 epoch 數，`batch_size` 是 minibatch 大小；新設定 `entropy_coef`、`gae_lambda`、`clip`。
 - 評估：和 NFSP 同一套錦標賽 benchmark 與升級規則；打法 `sample`（依機率，預設）與 `greedy`（最可能的動作），訓練曲線的系列名稱也是這兩個。說明器回傳各動作機率與狀態價值（單位 buy-in）。
-- 尚未支援：League、可剝削程度實驗（從目標模型開始）、HU cash。MMD 正則化與 PSRO 是下一步。
+- **MMD 正則化**（magnetic mirror descent）：`magnet_coef`（α）大於 0 時，損失多一項 α·KL(π‖magnet)，只算合法動作；magnet 是另一份策略網路，每 `magnet_every` 次更新（平台上是每幾輪）換成當下的策略。用來防止自我對打在幾種打法之間循環。α = 0 就是一般 PPO：不建立 magnet，checkpoint、payload 與訓練結果和加入 MMD 前位元一致（設定只在不是預設值時寫出）。MMD 的 checkpoint 另存 magnet 權重與更新次數；沒有 magnet 權重的舊 checkpoint 以目前策略當 magnet。
+- 尚未支援：League、可剝削程度實驗（從目標模型開始）、HU cash。PSRO 是下一步。
 
 ## 7. 擴展邊界
 

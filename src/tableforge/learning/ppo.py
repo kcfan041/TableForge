@@ -80,10 +80,17 @@ class PpoConfig:
     observation_schema: str = "poker-hunlhe-vector-v2"
     action_schema: str = V1_ACTIONS
     seed: int = 0
+    magnet_coef: float = 0.0
+    """MMD (magnetic mirror descent): weight of KL(policy || magnet) in the loss; 0 is
+    plain PPO. The penalty keeps self-play from cycling between strategies."""
+    magnet_every: int = 10
+    """MMD: the magnet becomes the current policy after this many updates (learn calls)."""
 
     def __post_init__(self) -> None:
         if self.hidden_size < 1 or self.minibatch_size < 1 or self.epochs < 1:
             raise ValueError("hidden_size, minibatch_size and epochs must be positive")
+        if self.magnet_coef < 0 or self.magnet_every < 1:
+            raise ValueError("magnet_coef cannot be negative and magnet_every must be positive")
         if not 0 < self.learning_rate <= 1 or self.reward_scale <= 0:
             raise ValueError("learning_rate and reward_scale must be positive")
         if not 0 < self.clip < 1 or not 0 <= self.gae_lambda <= 1 or not 0 <= self.gamma <= 1:
@@ -93,6 +100,19 @@ class PpoConfig:
         if self.action_schema not in ACTION_SCHEMAS:
             raise ValueError(f"unsupported action schema: {self.action_schema}")
         encoder(self.observation_schema)
+
+
+_MMD_DEFAULTS = {"magnet_coef": 0.0, "magnet_every": 10}
+
+
+def _config_dict(config: PpoConfig) -> dict[str, Any]:
+    """The config as stored in checkpoints; MMD settings only when they are not the
+    defaults, so plain PPO checkpoints keep their bytes."""
+    data = asdict(config)
+    for key, default in _MMD_DEFAULTS.items():
+        if data[key] == default:
+            del data[key]
+    return data
 
 
 def _network(inputs: int, hidden: int, outputs: int) -> nn.Sequential:
@@ -193,6 +213,12 @@ def clipped_loss(
     return -torch.min(ratio * advantages, clipped * advantages).mean()
 
 
+def magnet_kl(log_probs: Tensor, magnet_log_probs: Tensor, legal: Tensor) -> Tensor:
+    """Mean KL(policy || magnet) over the legal actions of each state."""
+    terms = log_probs.exp() * (log_probs - magnet_log_probs)
+    return terms.masked_fill(~legal, 0.0).sum(dim=1).mean()
+
+
 class PpoAgent:
     """Policy and value networks; plays through the same seats as `NfspAgent`."""
 
@@ -208,6 +234,14 @@ class PpoAgent:
             self.device
         )
         self.value_network = _network(inputs, config.hidden_size, 1).to(self.device)
+        self.magnet_network: nn.Sequential | None = None
+        self.updates = 0
+        """PPO updates (`learn` calls) so far; the magnet moves every `magnet_every`."""
+        if config.magnet_coef > 0:
+            self.magnet_network = _network(inputs, config.hidden_size, self.actions.count).to(
+                self.device
+            )
+            self.magnet_network.load_state_dict(self.policy_network.state_dict())
         self.optimizer = torch.optim.Adam(
             [*self.policy_network.parameters(), *self.value_network.parameters()],
             config.learning_rate,
@@ -324,6 +358,12 @@ class PpoAgent:
         advantages = torch.from_numpy(advantages_array.astype(np.float32)).to(device)
         if len(advantages) > 1:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        magnet_log_probs: Tensor | None = None
+        if self.magnet_network is not None:
+            with torch.no_grad():
+                magnet_log_probs = torch.log_softmax(
+                    self.magnet_network(states).masked_fill(~masks, MASKED), dim=1
+                )
         parameters = [*self.policy_network.parameters(), *self.value_network.parameters()]
         generator = torch.Generator().manual_seed(self.rng.randrange(2**31))
         count = len(actions)
@@ -341,6 +381,10 @@ class PpoAgent:
                 legal = masks[index]
                 entropy = -(log_probs.exp() * log_probs).masked_fill(~legal, 0.0).sum(dim=1).mean()
                 loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+                kl: Tensor | None = None
+                if magnet_log_probs is not None:
+                    kl = magnet_kl(log_probs, magnet_log_probs[index], legal)
+                    loss = loss + config.magnet_coef * kl
                 self.optimizer.zero_grad()
                 loss.backward()  # type: ignore[no-untyped-call]
                 nn.utils.clip_grad_norm_(parameters, config.max_grad_norm)
@@ -351,8 +395,13 @@ class PpoAgent:
                     "value_loss": float(value_loss.item()),
                     "entropy": float(entropy.item()),
                 }
+                if kl is not None:
+                    metrics["magnet_kl"] = float(kl.item())
             if on_progress is not None:
                 on_progress(epoch + 1)
+        self.updates += 1
+        if self.magnet_network is not None and self.updates % config.magnet_every == 0:
+            self.magnet_network.load_state_dict(self.policy_network.state_dict())
         return metrics
 
     # --- checkpoints ------------------------------------------------------------------
@@ -364,7 +413,7 @@ class PpoAgent:
                     {
                         "action_schema": self.actions.schema,
                         "algorithm": "ppo",
-                        "config": asdict(self.config),
+                        "config": _config_dict(self.config),
                         "metadata": metadata or {},
                         "observation_schema": self.encoder.schema,
                         "schema_version": BUNDLE_SCHEMA,
@@ -378,12 +427,21 @@ class PpoAgent:
                     }
                 ),
                 TRAINING_WEIGHTS: st_save(
-                    _optimizer_tensors("opt", self.optimizer) or {"empty": torch.zeros(1)}
+                    {
+                        **_optimizer_tensors("opt", self.optimizer),
+                        **(
+                            _prefixed("magnet", self.magnet_network.state_dict())
+                            if self.magnet_network is not None
+                            else {}
+                        ),
+                    }
+                    or {"empty": torch.zeros(1)}
                 ),
                 TRAINING_STATE: json_bytes(
                     {
                         "opt_groups": _optimizer_groups(self.optimizer),
                         "rng_state": _rng_state(self.rng),
+                        **({"updates": self.updates} if self.magnet_network is not None else {}),
                     }
                 ),
             }
@@ -410,6 +468,13 @@ class PpoAgent:
         }
         _load_optimizer(agent.optimizer, "opt", tensors, state["opt_groups"])
         agent.rng.setstate(_restore_rng_state(state["rng_state"]))
+        if agent.magnet_network is not None:
+            magnet = _unprefixed("magnet", tensors)
+            # Without stored magnet weights the magnet starts as the current policy.
+            agent.magnet_network.load_state_dict(
+                magnet if magnet else agent.policy_network.state_dict()
+            )
+            agent.updates = int(state.get("updates", 0))
         return agent
 
 

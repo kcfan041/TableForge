@@ -99,6 +99,10 @@ def main() -> None:
     parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument("--entropy", type=float, default=0.01)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--magnet-coef", type=float, default=0.0, help="MMD weight (0 = PPO)")
+    parser.add_argument(
+        "--magnet-every", type=int, default=10, help="MMD: updates between magnet moves"
+    )
     args = parser.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -319,6 +323,8 @@ def _ppo(args: argparse.Namespace, config: object) -> None:
             seed=args.seed,
             observation_schema="poker-nlhe-vector-v3" if args.v3 else "poker-hunlhe-vector-v2",
             action_schema="nlhe-discrete-v2" if args.v3 else "nlhe-discrete-v1",
+            magnet_coef=args.magnet_coef,
+            magnet_every=args.magnet_every,
         )
     )
     training_config: object = config
@@ -361,6 +367,11 @@ def _ppo(args: argparse.Namespace, config: object) -> None:
                 for key in ("roi", "prize_ev", "bounty_ev", "itm", "average_place")
             }
         agent.training = True
+        if args.save and stage:
+            # Every checkpoint, not only the last: PPO's best version may be an early one.
+            staged = Path(args.save).with_name(f"{Path(args.save).stem}-{trained}.zip")
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(agent.to_bundle())
         print(
             json.dumps(
                 {

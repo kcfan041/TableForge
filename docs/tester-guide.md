@@ -118,6 +118,7 @@ uv run tableforge ui
 | `hu-nfsp-v2-train` | NFSP 訓練 10 輪，每輪對 4 種 Rule Bot 測一次並畫出訓練曲線 | 數十分鐘（依 Worker 數量） |
 | `6max-pko-10bb-ppo-smoke` | PPO（另一種訓練演算法）2 輪，確認流程 | 約 1 分鐘 |
 | `6max-pko-10bb-ppo-train` | PPO 訓練 10 BB PKO，和 NFSP 的 `6max-pko-10bb-train` 用同一套評估 | 數小時 |
+| `6max-pko-10bb-mmd-train` | 同上，加上 MMD 正則化（防止自我對打來回循環）；另有 `-mmd-smoke` | 數小時 |
 
 目前模型仍在改進中，小型 preset 只能確認流程正常，不能用來判斷模型強弱。
 
