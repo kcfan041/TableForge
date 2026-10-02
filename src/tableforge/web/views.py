@@ -563,6 +563,7 @@ class ClusterViews:
         from dataclasses import asdict
 
         from tableforge.coordinator.experiments import (
+            ALGORITHM_ONLY_SETTINGS,
             OVERRIDE_LIMITS,
             TOURNAMENT_FIELDS,
             TRAINING_OVERRIDES,
@@ -581,7 +582,12 @@ class ClusterViews:
             if preset.kind is not ExperimentKind.NFSP_ITERATIVE:
                 continue
             config = asdict(preset.config())
-            presets[preset.key] = {name: config[name] for name in TRAINING_OVERRIDES}
+            presets[preset.key] = {
+                name: config[name]
+                for name in TRAINING_OVERRIDES
+                if name not in ALGORITHM_ONLY_SETTINGS
+                or preset.algorithm in ALGORITHM_ONLY_SETTINGS[name]
+            }
         return {
             "tournaments": tournaments,
             "tournament_fields": list(TOURNAMENT_FIELDS),

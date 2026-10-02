@@ -38,10 +38,15 @@ from tableforge.domain.learning import (
     INIT_PAYLOAD_TYPE,
     LEARNER_PAYLOAD_TYPE,
     MATCH_PAYLOAD_TYPE,
+    PPO_ACTOR_PAYLOAD_TYPE,
+    PPO_INIT_PAYLOAD_TYPE,
+    PPO_LEARNER_PAYLOAD_TYPE,
+    PPO_MATCH_PAYLOAD_TYPE,
     NfspActorPayload,
     NfspInitPayload,
     NfspLearnerPayload,
     NfspMatchPayload,
+    PpoInitPayload,
 )
 from tableforge.domain.nfsp_pipeline import (
     SNAPSHOT_SCHEMA,
@@ -89,12 +94,88 @@ def _content_id(content: bytes) -> ArtifactId:
 
 
 @dataclass(frozen=True, slots=True)
+class PipelineJobs:
+    """Payload types of an algorithm's round pipeline, and its first checkpoint."""
+
+    init: str
+    actor: str
+    learner: str
+    match: str
+    init_payload: Callable[[ExperimentConfig], bytes]
+
+
+def _nfsp_init(config: ExperimentConfig) -> bytes:
+    return NfspInitPayload(
+        "1.0",
+        agent_seed=config.seed_start,
+        hidden_size=config.hidden_size,
+        batch_size=config.batch_size,
+        observation_schema=config.observation_schema,
+        learning_rate=config.learning_rate,
+        anticipatory=config.anticipatory,
+        epsilon=config.epsilon,
+        target_update_steps=config.target_update_steps,
+        reward_scale=config.reward_scale,
+        double_q=config.double_q,
+        rl_capacity=config.rl_capacity,
+        sl_capacity=config.sl_capacity,
+        action_schema=config.action_schema,
+    ).to_bytes()
+
+
+NFSP_JOBS = PipelineJobs(
+    INIT_PAYLOAD_TYPE, ACTOR_PAYLOAD_TYPE, LEARNER_PAYLOAD_TYPE, MATCH_PAYLOAD_TYPE, _nfsp_init
+)
+
+
+def _ppo_init(config: ExperimentConfig) -> bytes:
+    return PpoInitPayload(
+        "1.0",
+        agent_seed=config.seed_start,
+        hidden_size=config.hidden_size,
+        minibatch_size=config.batch_size,
+        observation_schema=config.observation_schema,
+        action_schema=config.action_schema,
+        learning_rate=config.learning_rate,
+        reward_scale=config.reward_scale,
+        entropy_coef=config.entropy_coef,
+        gae_lambda=config.gae_lambda,
+        clip=config.clip,
+    ).to_bytes()
+
+
+PPO_JOBS = PipelineJobs(
+    PPO_INIT_PAYLOAD_TYPE,
+    PPO_ACTOR_PAYLOAD_TYPE,
+    PPO_LEARNER_PAYLOAD_TYPE,
+    PPO_MATCH_PAYLOAD_TYPE,
+    _ppo_init,
+)
+"""PPO (A1): the same rounds; `train_steps_per_round` is the number of PPO epochs and
+`batch_size` the minibatch size."""
+
+
+def ppo_orchestrator(
+    coordinator: CoordinatorService,
+    checkpoints: CheckpointRepository,
+    profile_for: Callable[[str, str | None, str], WorkloadProfile],
+    models_root: Path | None = None,
+) -> IterativeNfspOrchestrator:
+    return IterativeNfspOrchestrator(coordinator, checkpoints, profile_for, models_root, PPO_JOBS)
+
+
+@dataclass(frozen=True, slots=True)
 class IterativeNfspOrchestrator:
+    """The round pipeline: actors play with the active checkpoint, a learner trains on their
+    experience, a match benchmarks the candidate. NFSP's by default; PPO reuses it with its
+    own job types (`ppo_orchestrator`)."""
+
     coordinator: CoordinatorService
     checkpoints: CheckpointRepository
     profile_for: Callable[[str, str | None, str], WorkloadProfile]
     models_root: Path | None = None
     """The cluster's model library, for opponent pools of tournament training."""
+    jobs: PipelineJobs = NFSP_JOBS
 
     def reconcile(self, experiment: Experiment, now: datetime) -> bool:
         jobs = {
@@ -223,23 +304,8 @@ class IterativeNfspOrchestrator:
                 experiment,
                 key,
                 JobType.TRAINING,
-                INIT_PAYLOAD_TYPE,
-                NfspInitPayload(
-                    "1.0",
-                    agent_seed=experiment.config.seed_start,
-                    hidden_size=experiment.config.hidden_size,
-                    batch_size=experiment.config.batch_size,
-                    observation_schema=experiment.config.observation_schema,
-                    learning_rate=experiment.config.learning_rate,
-                    anticipatory=experiment.config.anticipatory,
-                    epsilon=experiment.config.epsilon,
-                    target_update_steps=experiment.config.target_update_steps,
-                    reward_scale=experiment.config.reward_scale,
-                    double_q=experiment.config.double_q,
-                    rl_capacity=experiment.config.rl_capacity,
-                    sl_capacity=experiment.config.sl_capacity,
-                    action_schema=experiment.config.action_schema,
-                ).to_bytes(),
+                self.jobs.init,
+                self.jobs.init_payload(experiment.config),
             )
             return False
         if job.status is not JobStatus.SUCCEEDED:
@@ -294,7 +360,7 @@ class IterativeNfspOrchestrator:
                 experiment,
                 key,
                 JobType.EVALUATION,
-                MATCH_PAYLOAD_TYPE,
+                self.jobs.match,
                 _match_payload(
                     config,
                     schema_version="1.0",
@@ -343,7 +409,7 @@ class IterativeNfspOrchestrator:
                     experiment,
                     key,
                     JobType.SIMULATION,
-                    ACTOR_PAYLOAD_TYPE,
+                    self.jobs.actor,
                     NfspActorPayload(
                         "1.0",
                         str(base.artifact_id),
@@ -380,7 +446,7 @@ class IterativeNfspOrchestrator:
                 experiment,
                 learn_key,
                 JobType.TRAINING,
-                LEARNER_PAYLOAD_TYPE,
+                self.jobs.learner,
                 NfspLearnerPayload(
                     "1.0",
                     base_payload.checkpoint_artifact_id,
@@ -420,7 +486,7 @@ class IterativeNfspOrchestrator:
                 experiment,
                 match_key,
                 JobType.EVALUATION,
-                MATCH_PAYLOAD_TYPE,
+                self.jobs.match,
                 _match_payload(
                     config,
                     **pool_fields,

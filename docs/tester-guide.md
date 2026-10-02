@@ -116,6 +116,8 @@ uv run tableforge ui
 | `hu-nfsp-gpu-iterative` | NFSP 3 輪，Learner 用 GPU | 約 6 分鐘 |
 | `hu-nfsp-cpu-league` | League 4 輪，最後產生對戰矩陣 | 約 1 分鐘 |
 | `hu-nfsp-v2-train` | NFSP 訓練 10 輪，每輪對 4 種 Rule Bot 測一次並畫出訓練曲線 | 數十分鐘（依 Worker 數量） |
+| `6max-pko-10bb-ppo-smoke` | PPO（另一種訓練演算法）2 輪，確認流程 | 約 1 分鐘 |
+| `6max-pko-10bb-ppo-train` | PPO 訓練 10 BB PKO，和 NFSP 的 `6max-pko-10bb-train` 用同一套評估 | 數小時 |
 
 目前模型仍在改進中，小型 preset 只能確認流程正常，不能用來判斷模型強弱。
 
@@ -125,7 +127,7 @@ uv run tableforge ui
 
 **自訂錦標賽**：錦標賽 preset（名稱含 `sng` 或 `pko`）可以勾選「自訂錦標賽規格」，改人數、起始籌碼、每級手數、獎金分配、是否 PKO、bounty 比例與對手；也可以貼上實際賽事 lobby 的盲注表（每行「小盲 大盲 ante 手數」）。
 
-**模型、重播、策略表**：訓練好的模型列在「模型」頁（NFSP 實驗完成後可在實驗明細按「存成模型」）。「重播」頁讓模型打一整場錦標賽，可以逐手、逐動作看每個人的手牌、籌碼、bounty，以及模型每個決策對各動作的機率；「策略表」頁用 13×13 表格顯示模型翻牌前每手牌的打法，可以切換位置、籌碼深度與全下者頭上的 bounty，並匯出 CSV。打法可選「平均策略」（預設，較穩健）或「最佳回應」（Q 值最高的動作，較激進）。這兩項需要至少一個執行中的 Worker。
+**模型、重播、策略表**：訓練好的模型列在「模型」頁（NFSP 實驗完成後可在實驗明細按「存成模型」）。「重播」頁讓模型打一整場錦標賽，可以逐手、逐動作看每個人的手牌、籌碼、bounty，以及模型每個決策對各動作的機率；「策略表」頁用 13×13 表格顯示模型翻牌前每手牌的打法，可以切換位置、籌碼深度與全下者頭上的 bounty，並匯出 CSV。NFSP 模型的打法可選「平均策略」（預設，較穩健）或「最佳回應」（Q 值最高的動作，較激進）；PPO 模型可選「PPO 策略」（預設，依機率出手）或「最可能動作」（不隨機）。這兩項需要至少一個執行中的 Worker。
 
 **ICM Push/Fold Nash baseline**：策略表會另外算一份「ICM Push/Fold Nash baseline」，在「顯示」切換「模型」、「baseline」或「模型 − baseline」（紅色是模型比 baseline 更常全下或跟注，藍色是更少），並列出兩者的平均差距與差最多的牌。這個 baseline 是簡化模型：每個人只能全下或蓋牌，用 ICM 計算獎金、PKO 另計 bounty；**不是完整德州撲克的 Nash 均衡**，只適合短籌碼（只算到 25 BB），籌碼越深越不準。Rule Bot 清單裡也有「ICM Push/Fold Nash baseline bot」，可以當對手、重播對手或對打對手。
 

@@ -70,6 +70,14 @@ uv run python scripts/tournament_probe.py --exploit-target pko-10bb-nfsp-c1 --in
 uv run python scripts/tournament_probe.py --v3 --sampler "{\"players\":[2,3,4,5,6,7,8,9]}" --stack-bb 25 --tournaments 20000 --checkpoints 2 --greedy --reward-scale 0.3 --double-q --hand-horizon --rl-capacity 200000 --sl-capacity 1000000 --self-play 0.75
 ```
 
+PPO（A1）的研究腳本（同樣的錦標賽、對手與 benchmark）：
+
+```
+uv run python scripts/tournament_probe.py --algorithm ppo --stack-bb 10 --tournaments 60000 --checkpoints 4 --hidden 128 --batch 1024 --lr 0.0003 --reward-scale 0.3 --hand-horizon --self-play 0.75 --greedy --ppo-tournaments 250 --ppo-epochs 4
+```
+
+`--ppo-tournaments` 是每次更新前打幾場（on-policy），`--ppo-epochs` 是每批經驗訓練幾遍，`--batch` 是 minibatch 大小；`--entropy`、`--gae-lambda` 調整熵獎勵與 GAE λ。`benchmark` 是依機率出手（預設打法），`greedy` 是永遠選最可能的動作。也可以加 `--v3 --sampler ...`。平台上用 preset `6max-pko-10bb-ppo-train`，設定 `entropy_coef`、`gae_lambda`、`clip`；`train_steps_per_round` 是每輪 epoch 數。
+
 `--sampler` 是 `TournamentSampler` 的 JSON（`players`、`starting_stack_bb`、`hands_per_level`、`blind_growth`、`ante_share`、`payouts`、`pko_share`、`bounty_share`、`cash_share`），只用在訓練；benchmark 仍是 `--stack-bb`／`--tournament` 指定的錦標賽。平台上建立實驗時用 `settings.sampler` 傳同樣的物件。
 
 從叢集下載、用於本機對打的模型另外放在 `downloaded-models\`，格式相同。下載透過控制面的 `download_model` 指令（需要 `model:download`），每塊 2 MB，完成後檢查大小與 sha256。對打的指令（`play_start`、`play_act` 等，需要 `play:remote`）也可以用 `/api/command/<指令>` 或 gRPC `Command` 呼叫；格式見 `src/tableforge/coordinator/play.py`。

@@ -12,8 +12,9 @@ function evaluationRoi(model: ModelView): Interval | null {
   const evaluation = model.evaluation as Record<string, unknown>;
   const average = evaluation.average_policy as { roi?: Interval } | undefined;
   if (average?.roi) return average.roi;
-  const curve = evaluation.curve as { tournament?: { average?: { roi?: Interval } } } | null | undefined;
-  return curve?.tournament?.average?.roi ?? null;
+  const curve = evaluation.curve as { tournament?: Record<string, { roi?: Interval }> } | null | undefined;
+  // The default play mode: NFSP's average policy, or PPO's sampled policy.
+  return curve?.tournament?.average?.roi ?? curve?.tournament?.sample?.roi ?? null;
 }
 
 export const models = {

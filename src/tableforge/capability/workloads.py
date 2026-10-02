@@ -97,6 +97,12 @@ BUILTIN_WORKLOADS = (
     _cpu_profile("hu-nfsp-actor", "NfspActorJobPayload", "nfsp_actor", (1, 2, 1), (2, 4, 2)),
     _cpu_profile("hu-nfsp-learner", "NfspLearnerJobPayload", "nfsp_learner", (2, 4, 2), (4, 8, 10)),
     _cpu_profile("hu-nfsp-match", "NfspMatchJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)),
+    # PPO (A1) runs on the same worker roles as NFSP. The learner holds one round of
+    # experience (no replay buffers), so it needs less memory than NFSP's learner.
+    _cpu_profile("ppo-init", "PpoInitJobPayload", "nfsp_learner", (1, 1, 1), (1, 2, 1)),
+    _cpu_profile("ppo-actor", "PpoActorJobPayload", "nfsp_actor", (1, 2, 1), (2, 4, 2)),
+    _cpu_profile("ppo-learner", "PpoLearnerJobPayload", "nfsp_learner", (2, 4, 2), (4, 8, 4)),
+    _cpu_profile("ppo-match", "PpoMatchJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)),
     _cpu_profile(
         "hu-league-matchup", "LeagueMatchupJobPayload", "evaluation", (1, 2, 1), (2, 4, 2)
     ),

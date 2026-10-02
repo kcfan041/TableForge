@@ -12,6 +12,7 @@ from tableforge.capability.workloads import BUILTIN_WORKLOADS
 from tableforge.coordinator.nfsp_iterative import (
     IterativeNfspOrchestrator,
     PipelineFailedError,
+    ppo_orchestrator,
 )
 from tableforge.coordinator.service import CoordinatorService
 from tableforge.domain.capabilities import WorkloadProfile
@@ -57,7 +58,10 @@ OrchestratorFactory = Callable[
     [CoordinatorService, CheckpointRepository, Callable[..., WorkloadProfile], Path | None],
     Orchestrator,
 ]
-ORCHESTRATORS: dict[str, OrchestratorFactory] = {"nfsp": IterativeNfspOrchestrator}
+ORCHESTRATORS: dict[str, OrchestratorFactory] = {
+    "nfsp": IterativeNfspOrchestrator,
+    "ppo": ppo_orchestrator,
+}
 """The round pipeline of each training algorithm (`learning.algorithms` has the workers' side)."""
 
 
@@ -496,8 +500,24 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "benchmark_deals": int,
     "evaluation_deals": int,
     "max_evaluation_deals": int,
+    "entropy_coef": float,
+    "gae_lambda": float,
+    "clip": float,
 }
-"""Settings a user may change when creating an iterative NFSP experiment."""
+"""Settings a user may change when creating an iterative training experiment."""
+
+ALGORITHM_ONLY_SETTINGS: dict[str, tuple[str, ...]] = {
+    "anticipatory": ("nfsp",),
+    "epsilon": ("nfsp",),
+    "target_update_steps": ("nfsp",),
+    "rl_capacity": ("nfsp",),
+    "sl_capacity": ("nfsp",),
+    "exploit_target": ("nfsp",),
+    "entropy_coef": ("ppo",),
+    "gae_lambda": ("ppo",),
+    "clip": ("ppo",),
+}
+"""Settings that only mean something for some algorithms (the UI shows them only there)."""
 
 OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "rounds": (1, 200),
@@ -516,6 +536,9 @@ OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "benchmark_deals": (0, 100_000),
     "evaluation_deals": (2, 100_000),
     "max_evaluation_deals": (2, 1_000_000),
+    "entropy_coef": (0, 1),
+    "gae_lambda": (0, 1),
+    "clip": (0.01, 0.9),
 }
 
 

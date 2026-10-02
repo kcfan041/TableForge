@@ -80,10 +80,23 @@ class ExperimentConfig:
     sampler_json: str = ""
     """S3: train on tournaments drawn from this `TournamentSampler`; `tournament_json` stays
     the benchmark tournament."""
+    entropy_coef: float = 0.01
+    """PPO: weight of the entropy bonus (keeps the policy exploring)."""
+    gae_lambda: float = 0.95
+    """PPO: GAE lambda (0 = one-step advantages, 1 = full returns)."""
+    clip: float = 0.2
+    """PPO: how far one update may move each action's probability ratio."""
 
     def __post_init__(self) -> None:
         if not self.algorithm or len(self.algorithm) > 32:
             raise ValueError("algorithm must be a short name")
+        if self.algorithm == "ppo":
+            if self.kind is not ExperimentKind.NFSP_ITERATIVE or not self.tournament_json:
+                raise ValueError("PPO trains on tournaments (an iterative tournament preset)")
+            if self.league or self.exploit_target:
+                raise ValueError("PPO does not support league or exploit experiments yet")
+        if self.entropy_coef < 0 or not 0 <= self.gae_lambda <= 1 or not 0 < self.clip < 1:
+            raise ValueError("invalid PPO settings")
         if self.exploit_target:
             if self.kind is not ExperimentKind.NFSP_ITERATIVE or not self.tournament_json:
                 raise ValueError("an exploit target needs tournament NFSP training")
@@ -246,6 +259,9 @@ class ExperimentPreset:
     algorithm: str = "nfsp"
     action_schema: str = "nlhe-discrete-v1"
     sampler_json: str = ""
+    entropy_coef: float = 0.01
+    gae_lambda: float = 0.95
+    clip: float = 0.2
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -293,6 +309,9 @@ class ExperimentPreset:
             algorithm=self.algorithm,
             action_schema=self.action_schema,
             sampler_json=self.sampler_json,
+            entropy_coef=self.entropy_coef,
+            gae_lambda=self.gae_lambda,
+            clip=self.clip,
         )
 
 
@@ -527,6 +546,42 @@ BUILTIN_PRESETS = (
             observation_schema=V3_OBSERVATION_SCHEMA,
             action_schema="nlhe-discrete-v2",
             sampler_json=_default_sampler(),
+        ),
+    )
+    + (
+        # PPO (A1): the NFSP 10 BB preset's tournament, field and benchmark, so both are
+        # judged on the same score card. Each round: 4 actors x 250 tournaments with the
+        # current policy, then `train_steps_per_round` PPO epochs (minibatches of
+        # `batch_size`) on that experience. Replay sizes do not apply.
+        _tournament_training_preset(
+            "6max-pko-10bb-ppo-train",
+            algorithm="ppo",
+            hands=250,
+            hands_per_job=250,
+            rounds=80,
+            train_steps_per_round=4,
+            batch_size=1_024,
+            learning_rate=3e-4,
+            double_q=False,
+            rl_capacity=50_000,
+            sl_capacity=100_000,
+        ),
+        _tournament_training_preset(
+            "6max-pko-10bb-ppo-smoke",
+            algorithm="ppo",
+            hands=20,
+            hands_per_job=20,
+            rounds=2,
+            actors_per_round=2,
+            train_steps_per_round=2,
+            evaluation_deals=10,
+            max_evaluation_deals=10,
+            hidden_size=32,
+            batch_size=256,
+            learning_rate=3e-4,
+            double_q=False,
+            rl_capacity=50_000,
+            sl_capacity=100_000,
         ),
     )
     + tuple(

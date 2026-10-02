@@ -86,8 +86,19 @@ def _alive(pid: int) -> bool:
 
 BASE_BYTES = 1_000_000_000
 """PyTorch, the networks and the Python process itself (measured: about 0.6-1 GB)."""
-BYTES_PER_ITEM = 406 * 4 + 64
-"""One stored transition or policy sample (float32 state, mask, action, reward)."""
+FEATURES = {"v2": 406, "v3": 549}
+"""Input size of each encoder (`learning.encoding_v2` / `encoding_v3`)."""
+ACTIONS = {"v2": 5, "v3": 10}
+
+
+def bytes_per_item(extra: list[str]) -> int:
+    """One stored transition or policy sample: float32 state, mask, action, reward."""
+    encoder = "v3" if "--v3" in extra else "v2"
+    return FEATURES[encoder] * 4 + ACTIONS[encoder] + 8 + 8 + 1
+
+
+BYTES_PER_ITEM = bytes_per_item([])
+"""The v2 size (kept for callers that do not pass the run's arguments)."""
 
 
 def _option(extra: list[str], name: str, default: int) -> int:
@@ -118,7 +129,8 @@ def estimate_bytes(extra: list[str], size: int = 0, probe: str = "tournament") -
         rl = min(rl, decisions)
         sl = min(sl, int(decisions * anticipatory * 1.2))
     next_states = 1 if "--hand-horizon" in extra else 2
-    return BASE_BYTES + rl * BYTES_PER_ITEM * next_states + sl * BYTES_PER_ITEM * 2
+    item = bytes_per_item(extra)
+    return BASE_BYTES + rl * item * next_states + sl * item * 2
 
 
 def available_memory() -> int:
@@ -205,6 +217,11 @@ def start(args: argparse.Namespace) -> None:
             | subprocess.CREATE_NEW_PROCESS_GROUP
             | subprocess.BELOW_NORMAL_PRIORITY_CLASS
         )
+    # Runs use one thread. OpenMP (inside PyTorch) otherwise sets its own thread affinity
+    # while starting, which fails now and then when the sweep changes the process affinity
+    # at the same moment ("OMP: Error #135: Cannot set thread affinity mask").
+    environment = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
+    environment["KMP_AFFINITY"] = "disabled"
     manifest: dict[str, dict[str, object]] = {}
     for index, (name, extra, seed) in enumerate(runs):
         tag = f"{name}-s{seed}"
@@ -234,6 +251,7 @@ def start(args: argparse.Namespace) -> None:
                 stdout=out,
                 stderr=err,
                 stdin=subprocess.DEVNULL,
+                env=environment,
                 creationflags=flags,
                 close_fds=True,
                 start_new_session=sys.platform != "win32",

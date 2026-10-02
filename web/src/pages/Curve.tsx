@@ -8,19 +8,28 @@ const COLORS: Record<string, string> = {
   aggro: "#d97706",
   average: "#059669",
   best_response: "#7c3aed",
+  sample: "#059669",
+  greedy: "#7c3aed",
   pool: "#0f172a",
   target_average: "#0d9488",
   target_best_response: "#be185d",
 };
 const ORDER = ["random", "call", "tight", "aggro"];
-const TOURNAMENT_ORDER = ["average", "best_response"];
+const NFSP_MODES = ["average", "best_response"];
+const PPO_MODES = ["sample", "greedy"];
+
+/** The play modes a tournament curve reports: NFSP's (average, best response) or PPO's. */
+export function tournamentModes(points: CurvePoint[]): string[] {
+  return points.some((point) => point.benchmark.sample) ? PPO_MODES : NFSP_MODES;
+}
 
 /** Series names in a curve: rule bots (bb/100) or tournament play modes (ROI %). */
 export function curveSeries(points: CurvePoint[]): string[] {
   const tournament = points.some((point) => point.unit === "roi_percent");
   if (!tournament) return ORDER;
-  if (points.some((point) => point.benchmark.target_best_response)) return ["target_best_response", "target_average", ...TOURNAMENT_ORDER];
-  return points.some((point) => point.benchmark.pool) ? [...TOURNAMENT_ORDER, "pool"] : TOURNAMENT_ORDER;
+  const modes = tournamentModes(points);
+  if (points.some((point) => point.benchmark.target_best_response)) return ["target_best_response", "target_average", ...modes];
+  return points.some((point) => point.benchmark.pool) ? [...modes, "pool"] : modes;
 }
 
 function isTournament(points: CurvePoint[]): boolean {
@@ -243,8 +252,9 @@ function LatestTournament({ series }: { series: Series[] }) {
       <tbody>
         {series.map((item) => {
           const last = item.points.slice().sort((a, b) => b.round - a.round)[0];
-          const average = last?.tournament?.average;
-          const best = last?.tournament?.best_response;
+          const [defaultMode = "average", otherMode = "best_response"] = tournamentModes(item.points);
+          const average = last?.tournament?.[defaultMode];
+          const best = last?.tournament?.[otherMode];
           const head = last?.head_to_head;
           return (
             <tr key={item.label}>

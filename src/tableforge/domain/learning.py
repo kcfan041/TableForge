@@ -291,6 +291,50 @@ class NfspMatchPayload:
         return cls(**data)
 
 
+PPO_INIT_PAYLOAD_TYPE = "tableforge.v1.PpoInitJobPayload"
+PPO_ACTOR_PAYLOAD_TYPE = "tableforge.v1.PpoActorJobPayload"
+PPO_LEARNER_PAYLOAD_TYPE = "tableforge.v1.PpoLearnerJobPayload"
+PPO_MATCH_PAYLOAD_TYPE = "tableforge.v1.PpoMatchJobPayload"
+PPO_CHECKPOINT_SCHEMA = "tableforge.ppo-checkpoint.v1"
+"""PPO (A1) reuses the actor, learner and match payloads above under its own payload
+types: the actor plays tournaments with the round's checkpoint, the learner's
+`train_steps` is the number of PPO epochs over the round's experience."""
+
+
+@dataclass(frozen=True, slots=True)
+class PpoInitPayload:
+    schema_version: str
+    agent_seed: int
+    hidden_size: int
+    minibatch_size: int
+    observation_schema: str
+    action_schema: str
+    learning_rate: float
+    reward_scale: float
+    entropy_coef: float
+    gae_lambda: float
+    clip: float
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "1.0":
+            raise ValueError("unsupported init payload schema")
+        if self.action_schema not in ("nlhe-discrete-v1", "nlhe-discrete-v2"):
+            raise ValueError(f"unsupported action schema: {self.action_schema}")
+        if self.hidden_size < 1 or self.minibatch_size < 1:
+            raise ValueError("init payload values must be positive")
+        if not 0 < self.learning_rate <= 1 or self.reward_scale <= 0:
+            raise ValueError("invalid learning settings")
+        if self.entropy_coef < 0 or not 0 <= self.gae_lambda <= 1 or not 0 < self.clip < 1:
+            raise ValueError("invalid PPO settings")
+
+    def to_bytes(self) -> bytes:
+        return _dump(asdict(self))
+
+    @classmethod
+    def from_bytes(cls, payload: bytes) -> PpoInitPayload:
+        return cls(**json.loads(payload))
+
+
 _TOURNAMENT_ACTOR_DEFAULTS: dict[str, object] = {
     "tournament_json": "",
     "self_play_share": 0.5,

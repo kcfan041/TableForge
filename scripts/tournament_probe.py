@@ -88,6 +88,17 @@ def main() -> None:
         help="train on tournaments drawn from this TournamentSampler JSON (needs --v3); "
         "the benchmark stays --tournament/--stack-bb",
     )
+    parser.add_argument(
+        "--algorithm",
+        default="nfsp",
+        choices=("nfsp", "ppo"),
+        help="ppo: --batch is the minibatch, --lr the PPO learning rate; "
+        "--ppo-tournaments tournaments per update, --ppo-epochs epochs per update",
+    )
+    parser.add_argument("--ppo-tournaments", type=int, default=250)
+    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--entropy", type=float, default=0.01)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
     args = parser.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -97,6 +108,9 @@ def main() -> None:
         config = TournamentSpec.from_dict(json.loads(args.tournament)).to_config()
     else:
         config = preset_config(args.stack_bb, bounty=None if args.no_pko else BountyConfig())
+    if args.algorithm == "ppo":
+        _ppo(args, config)
+        sys.exit(0)
     agent = NfspAgent(
         NfspConfig(
             hidden_size=args.hidden,
@@ -286,6 +300,87 @@ def main() -> None:
         Path(args.save).parent.mkdir(parents=True, exist_ok=True)
         Path(args.save).write_bytes(agent.to_bundle())
     sys.exit(0)
+
+
+def _ppo(args: argparse.Namespace, config: object) -> None:
+    """PPO (A1) on the same tournaments, opponents and benchmark as the NFSP probe."""
+    from tableforge.learning.ppo import PpoAgent, PpoConfig, PpoTablePlayer
+    from tableforge.learning.ppo_training import ppo_self_play_train
+
+    agent = PpoAgent(
+        PpoConfig(
+            hidden_size=args.hidden,
+            minibatch_size=args.batch,
+            learning_rate=args.lr,
+            epochs=args.ppo_epochs,
+            entropy_coef=args.entropy,
+            gae_lambda=args.gae_lambda,
+            reward_scale=args.reward_scale,
+            seed=args.seed,
+            observation_schema="poker-nlhe-vector-v3" if args.v3 else "poker-hunlhe-vector-v2",
+            action_schema="nlhe-discrete-v2" if args.v3 else "nlhe-discrete-v1",
+        )
+    )
+    training_config: object = config
+    if args.sampler:
+        from tableforge.poker.tournament_sampler import TournamentSampler
+
+        training_config = TournamentSampler.from_json(args.sampler)
+    per_stage = args.tournaments // args.checkpoints
+    trained = hands = 0
+    started = time.perf_counter()
+    for stage in range(args.checkpoints + 1):
+        losses: dict[str, float] = {}
+        if stage:
+            report = ppo_self_play_train(
+                agent,
+                training_config,  # type: ignore[arg-type]
+                per_stage,
+                seed_start=args.seed * 10_000_000 + args.seed_offset + trained,
+                tournaments_per_update=args.ppo_tournaments,
+                self_play_share=args.self_play,
+                hand_horizon=args.hand_horizon,
+            )
+            trained += per_stage
+            hands += report.hands
+            losses = report.last_metrics
+        results = {}
+        for name, greedy in (("benchmark", False), ("greedy", True)):
+            if greedy and not (args.greedy and stage):
+                results[name] = None
+                continue
+            summary = evaluate_tournament(
+                lambda greedy=greedy: PpoTablePlayer(agent, greedy),
+                field_factory("mixed"),
+                config,  # type: ignore[arg-type]
+                seeds=args.seeds,
+                seed_start=args.eval_seed_start,
+            ).summary()
+            results[name] = {
+                key: summary[key]
+                for key in ("roi", "prize_ev", "bounty_ev", "itm", "average_place")
+            }
+        agent.training = True
+        print(
+            json.dumps(
+                {
+                    "tag": args.tag,
+                    "seed": args.seed,
+                    "algorithm": "ppo",
+                    "tournaments": trained,
+                    "hands": hands,
+                    "elapsed_s": round(time.perf_counter() - started),
+                    "train_steps": agent.train_steps,
+                    "losses": {key: round(value, 5) for key, value in losses.items()},
+                    **results,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+    if args.save:
+        Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.save).write_bytes(agent.to_bundle())
 
 
 if __name__ == "__main__":

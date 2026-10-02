@@ -164,6 +164,10 @@ def test_views_create_groups_and_expose_training_options(tmp_path: Path) -> None
 
     assert "hu-nfsp-v2-train" in options["presets"]
     assert options["presets"]["hu-nfsp-v2-train"]["benchmark_deals"] == 1_000
+    ppo = options["presets"]["6max-pko-10bb-ppo-train"]
+    nfsp = options["presets"]["6max-pko-10bb-train"]
+    assert {"entropy_coef", "gae_lambda", "clip"} <= set(ppo) and "epsilon" not in ppo
+    assert "epsilon" in nfsp and "clip" not in nfsp
     assert {item["seed"] for item in created["group"]} == {1, 2}
     assert detail["config"]["learning_rate"] == 0.0003
     assert detail["curve"] == []

@@ -4,7 +4,7 @@ Everything outside an algorithm's own package asks this registry instead of nami
 algorithm: replays, strategy tables, play and practice, benchmarks, opponent pools and model
 comparison load models through `AlgorithmSpec`, and workers register its job executors.
 Adding an algorithm means writing an `AlgorithmSpec` and adding it to `ALGORITHMS`; the
-rest of the platform follows. NFSP is the first (and so far only) implementation.
+rest of the platform follows. Implemented: NFSP and PPO (A1).
 
 An algorithm provides:
 
@@ -139,7 +139,67 @@ NFSP = AlgorithmSpec(
     executors=_nfsp_executors,
 )
 
-ALGORITHMS: dict[str, AlgorithmSpec] = {NFSP.key: NFSP}
+# --- PPO (A1) ----------------------------------------------------------------------------
+
+PPO_SAMPLE = PlayMode(
+    "sample",
+    "Sample the policy",
+    "Mixes actions with the policy's probabilities (as trained).",
+)
+PPO_GREEDY = PlayMode(
+    "greedy",
+    "Most likely action",
+    "Always the action the policy rates most likely.",
+)
+
+
+def _ppo_explainer(checkpoint: bytes) -> DecisionExplainer:
+    from tableforge.learning.ppo_explain import PpoExplainer
+
+    return PpoExplainer(checkpoint)
+
+
+def _ppo_player(checkpoint: bytes, mode: str) -> Callable[[], TableAgent]:
+    from tableforge.learning.ppo import PpoAgent, PpoTablePlayer
+
+    agent = PpoAgent.from_bundle(checkpoint)
+    greedy = mode == PPO_GREEDY.key
+    return lambda: PpoTablePlayer(agent, greedy)
+
+
+def _ppo_executors(fetch: Fetch) -> Mapping[str, Any]:
+    from tableforge.domain.learning import (
+        PPO_ACTOR_PAYLOAD_TYPE,
+        PPO_INIT_PAYLOAD_TYPE,
+        PPO_LEARNER_PAYLOAD_TYPE,
+        PPO_MATCH_PAYLOAD_TYPE,
+    )
+    from tableforge.learning.ppo_iterative import (
+        PpoActorExecutor,
+        PpoInitExecutor,
+        PpoLearnerExecutor,
+        PpoMatchExecutor,
+    )
+
+    return {
+        PPO_INIT_PAYLOAD_TYPE: PpoInitExecutor(),
+        PPO_ACTOR_PAYLOAD_TYPE: PpoActorExecutor(fetch),
+        PPO_LEARNER_PAYLOAD_TYPE: PpoLearnerExecutor(fetch),
+        PPO_MATCH_PAYLOAD_TYPE: PpoMatchExecutor(fetch),
+    }
+
+
+PPO = AlgorithmSpec(
+    key="ppo",
+    label="PPO",
+    checkpoint_schema="tableforge.ppo-checkpoint.v1",
+    play_modes=(PPO_SAMPLE, PPO_GREEDY),
+    explainer=_ppo_explainer,
+    player=_ppo_player,
+    executors=_ppo_executors,
+)
+
+ALGORITHMS: dict[str, AlgorithmSpec] = {NFSP.key: NFSP, PPO.key: PPO}
 
 
 def algorithm(key: str) -> AlgorithmSpec:

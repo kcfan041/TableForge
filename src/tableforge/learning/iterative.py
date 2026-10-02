@@ -325,16 +325,46 @@ def _tournament_shard(
 def _tournament_match(
     fetch: Fetch, payload: NfspMatchPayload, on_progress: Callable[[int], None] | None
 ) -> bytes:
-    """Benchmark candidate and baseline on the same tournaments against a rule-bot field.
-
-    ``head_to_head`` is the paired ROI difference (candidate minus baseline, in ROI
-    percentage points) so the usual promotion rule applies: a candidate is rejected only
-    when it is significantly worse.
-    """
+    """NFSP's tournament match: average policy (the default) and best response."""
     from tableforge.learning.tournament_training import (
         FrozenTournamentPlayer,
         GreedyTournamentPlayer,
     )
+
+    candidate_content = verified(fetch(payload.candidate_artifact_id), payload.candidate_sha256)
+    baseline_content = verified(fetch(payload.baseline_artifact_id), payload.baseline_sha256)
+    candidate = NfspAgent.from_bundle(candidate_content, inference_only=True)
+    baseline = NfspAgent.from_bundle(baseline_content, inference_only=True)
+    greedy = NfspAgent.from_actor_bundle(candidate_content)
+    return tournament_match(
+        fetch,
+        payload,
+        (
+            ("average", lambda: FrozenTournamentPlayer(candidate)),
+            ("best_response", lambda: GreedyTournamentPlayer(greedy)),
+        ),
+        lambda: FrozenTournamentPlayer(baseline),
+        int(checkpoint_manifest(candidate_content)["train_steps"]),
+        on_progress,
+    )
+
+
+def tournament_match(
+    fetch: Fetch,
+    payload: NfspMatchPayload,
+    modes: tuple[tuple[str, Callable[[], Any]], ...],
+    baseline_player: Callable[[], Any],
+    train_steps: int,
+    on_progress: Callable[[int], None] | None,
+) -> bytes:
+    """Benchmark candidate and baseline on the same tournaments against a rule-bot field.
+
+    `modes` are the candidate's play modes (name, player factory); the first is its default
+    mode, which is compared with the baseline (the previous checkpoint in that mode).
+    ``head_to_head`` is the paired ROI difference (candidate minus baseline, in ROI
+    percentage points) so the usual promotion rule applies: a candidate is rejected only
+    when it is significantly worse.
+    """
     from tableforge.poker.tournament import TournamentConfig
     from tableforge.poker.tournament_benchmark import (
         Estimate,
@@ -344,13 +374,10 @@ def _tournament_match(
     from tableforge.worker.tournament import field_factory
 
     config = TournamentConfig.from_json(payload.tournament_json)
-    candidate_content = verified(fetch(payload.candidate_artifact_id), payload.candidate_sha256)
-    baseline_content = verified(fetch(payload.baseline_artifact_id), payload.baseline_sha256)
-    candidate = NfspAgent.from_bundle(candidate_content, inference_only=True)
-    baseline = NfspAgent.from_bundle(baseline_content, inference_only=True)
-    greedy = NfspAgent.from_actor_bundle(candidate_content)
     field = field_factory(payload.tournament_field)
     seeds = payload.min_deals
+    default = modes[0][0]
+    default_player = modes[0][1]
     samples = {
         name: collect_samples(
             factory,
@@ -359,18 +386,14 @@ def _tournament_match(
             seeds,
             payload.seed_start,
             True,
-            on_progress if name == "average" else None,
+            on_progress if name == default else None,
         )
-        for name, factory in (
-            ("average", lambda: FrozenTournamentPlayer(candidate)),
-            ("best_response", lambda: GreedyTournamentPlayer(greedy)),
-            ("baseline", lambda: FrozenTournamentPlayer(baseline)),
-        )
+        for name, factory in (*modes, ("baseline", baseline_player))
     }
     difference = Estimate.of(
         [
             (new - old) / config.buy_in * 100
-            for new, old in zip(samples["average"].total, samples["baseline"].total, strict=True)
+            for new, old in zip(samples[default].total, samples["baseline"].total, strict=True)
         ]
     )
 
@@ -387,7 +410,7 @@ def _tournament_match(
         name: TournamentBenchmark.from_samples(samples[name], config.name).summary()
         for name in samples
     }
-    references = {"average": roi("average"), "best_response": roi("best_response")}
+    references = {name: roi(name) for name, _ in modes}
     if payload.pool_artifact_id and payload.exploit_seeds:
         from tableforge.learning.pool_benchmark import rotating_field
 
@@ -396,10 +419,7 @@ def _tournament_match(
             raise ValueError("the exploit target pool is empty")
         target_field = rotating_field(pool.all_members())
         exploit: dict[str, Any] = {"target": [member.name for member in pool.all_members()]}
-        for name, factory in (
-            ("average", lambda: FrozenTournamentPlayer(candidate)),
-            ("best_response", lambda: GreedyTournamentPlayer(greedy)),
-        ):
+        for name, factory in modes:
             summary = TournamentBenchmark.from_samples(
                 collect_samples(
                     factory,
@@ -424,7 +444,7 @@ def _tournament_match(
         pool = load_pool(fetch, payload.pool_artifact_id, payload.pool_sha256, models_only=True)
         if pool is not None:
             result = pool_benchmark(
-                lambda: FrozenTournamentPlayer(candidate),
+                default_player,
                 pool.all_members(),
                 config,
                 payload.pool_seeds,
@@ -443,12 +463,12 @@ def _tournament_match(
         {
             "baseline_sha256": payload.baseline_sha256,
             "candidate_sha256": payload.candidate_sha256,
-            "candidate_train_steps": int(checkpoint_manifest(candidate_content)["train_steps"]),
+            "candidate_train_steps": train_steps,
             "head_to_head": {
                 "bb_per_100": _rounded(difference.mean),
                 "confidence_high": _rounded(difference.high),
                 "confidence_low": _rounded(difference.low),
-                "hands": samples["average"].tournaments,
+                "hands": samples[default].tournaments,
                 "standard_error": _rounded((difference.high - difference.low) / 3.92),
                 "unit": "roi_points",
             },

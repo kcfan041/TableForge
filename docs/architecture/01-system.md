@@ -232,6 +232,14 @@ class DecisionExplainer(Protocol):
 - 位元一致驗證：`scripts/algorithm_baseline.py` 端對端跑三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population），記錄每個 Job 的 payload 與輸出的 sha256（artifact id 以佔位符取代）；`tests/fixtures/nfsp_fingerprint.json` 是導入介面前錄下的結果，`tests/integration/test_nfsp_fingerprint.py` 每次都比對（錄製的 Windows 上全部比對；其他平台的 PyTorch 浮點結果不同，只比對 Job 流程與未訓練的 round 0 payload）。
 - 新增演算法時：實作一個 `AlgorithmSpec` 與它的 executor，加入 `ALGORITHMS`；實作 coordinator 端的 `Orchestrator`（`reconcile`、`matrix`），加入 `ORCHESTRATORS`；新增 workload profile。其餘功能（模型頁、重播、策略表、對打、練習、牌譜檢討、模型比較、對手池、可剝削程度）自動支援。
 
+### 6.3 PPO（A1，已實作）
+
+- 模型：`learning/ppo.py` 的 `PpoAgent`，策略網路與價值網路（和 NFSP 相同的兩層結構），任何 encoder（v2、v3）與動作格式（v1、v2）。checkpoint schema `tableforge.ppo-checkpoint.v1`（權重、Adam 狀態、亂數狀態），沒有 replay buffer。
+- 學習：actor 用本輪 checkpoint 打錦標賽（on-policy），每個學習座位的決策依序記錄；獎勵和 NFSP 相同（每手後的錦標賽權益變化，`hand_horizon` 時一手為一個 episode）。learner 用同一個 checkpoint 重新計算行為機率與 V(s)，以 GAE 算 advantage，做幾個 epoch 的 clipped PPO 更新（加上熵獎勵與價值損失）。
+- 平台：沿用 NFSP 的輪次流程與 payload（`IterativeNfspOrchestrator` 以 `PipelineJobs` 換成 PPO 的 Job 類型：`PpoInitJobPayload`、`PpoActorJobPayload`、`PpoLearnerJobPayload`、`PpoMatchJobPayload`）；經驗資料格式相同（只有 transitions）；learner 只接受本輪 checkpoint 產生的經驗。實驗的 `train_steps_per_round` 是每輪 epoch 數，`batch_size` 是 minibatch 大小；新設定 `entropy_coef`、`gae_lambda`、`clip`。
+- 評估：和 NFSP 同一套錦標賽 benchmark 與升級規則；打法 `sample`（依機率，預設）與 `greedy`（最可能的動作），訓練曲線的系列名稱也是這兩個。說明器回傳各動作機率與狀態價值（單位 buy-in）。
+- 尚未支援：League、可剝削程度實驗（從目標模型開始）、HU cash。MMD 正則化與 PSRO 是下一步。
+
 ## 7. 擴展邊界
 
 - 新演算法：見 6.2，新增 `AlgorithmSpec`、executor、orchestrator 與 workload profile，不改 Job lifecycle。

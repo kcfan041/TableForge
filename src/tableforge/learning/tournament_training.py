@@ -20,6 +20,7 @@ from __future__ import annotations
 import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from tableforge.learning.buffers import Transition
 from tableforge.learning.nfsp import NfspAgent
@@ -29,6 +30,12 @@ from tableforge.poker.table import TableAgent, TableObservation, TableRunner
 from tableforge.poker.tournament import Tournament, TournamentConfig, TournamentHandInfo
 from tableforge.poker.tournament_sampler import TournamentSampler
 from tableforge.worker.tournament import rule_bot
+
+if TYPE_CHECKING:
+    from tableforge.learning.ppo import PpoAgent
+
+    LearningAgent = NfspAgent | PpoAgent
+    """Any agent that records its last decision (`last_state`, `last_choice`)."""
 
 OPPONENT_POOL = ("random", "call", "tight", "aggro", "pushfold", "hunter")
 
@@ -44,7 +51,7 @@ class _Pending:
 class LearningSeat:
     """One seat played by the shared learning agent; records its own transitions."""
 
-    agent: NfspAgent
+    agent: LearningAgent
     player: int
     sink: Callable[[Transition], None]
     info: TournamentHandInfo | None = None
@@ -115,7 +122,7 @@ class TournamentEpisode:
 
 
 def play_training_tournament(
-    agent: NfspAgent,
+    agent: LearningAgent,
     config: TournamentConfig | TournamentSampler,
     seed: int,
     sink: Callable[[Transition], None],
@@ -124,10 +131,13 @@ def play_training_tournament(
     pool: Sequence[str] = OPPONENT_POOL,
     hand_horizon: bool = False,
     opponents: OpponentPool | None = None,
+    seat_sink: Callable[[int], Callable[[Transition], None]] | None = None,
 ) -> TournamentEpisode:
     """Play one tournament with the learning agent in one or more seats.
 
     With a `TournamentSampler` the tournament of this seed is drawn from it (S3).
+    `seat_sink(player)` gives each learning seat its own sink (PPO needs every seat's
+    decisions in order); otherwise all seats share `sink`.
     """
     if isinstance(config, TournamentSampler):
         config = config.config(seed)
@@ -145,7 +155,12 @@ def play_training_tournament(
     drawn: dict[int, PoolMember] = {}
     for player in range(config.players):
         if player == learner or rng.random() < self_play_share:
-            seat = LearningSeat(agent, player, sink, hand_horizon=hand_horizon)
+            seat = LearningSeat(
+                agent,
+                player,
+                sink if seat_sink is None else seat_sink(player),
+                hand_horizon=hand_horizon,
+            )
             seats.append(seat)
             agents.append(seat)
             lineup.append("self")

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml/badge.svg)](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml)
 
-分散式多代理德州撲克 AI 訓練與評估框架。目前支援 No-Limit Hold'em（Heads-Up 與 2–9 人桌，含錦標賽與 PKO）、Rule Bots、NFSP（CPU 與 NVIDIA GPU），以及多台電腦組成叢集一起運算；並提供模型庫、模型比較、和模型對打與練習、牌譜分析。
+分散式多代理德州撲克 AI 訓練與評估框架。目前支援 No-Limit Hold'em（Heads-Up 與 2–9 人桌，含錦標賽與 PKO）、Rule Bots、NFSP（CPU 與 NVIDIA GPU）與 PPO，以及多台電腦組成叢集一起運算；並提供模型庫、模型比較、和模型對打與練習、牌譜分析。
 
 ## 開始使用
 
@@ -66,7 +66,7 @@ uv run mypy
 
 ## 已知限制
 
-- 訓練演算法目前只有 NFSP；PPO、Deep CFR 等尚未實作。舊的 League 對戰矩陣只支援 Heads-Up 現金局，錦標賽改用對手池與模型比較。
+- 訓練演算法目前有 NFSP 與 PPO（PPO 只用於錦標賽，尚未正式訓練）；MMD、PSRO、Deep CFR 等尚未實作。舊的 League 對戰矩陣只支援 Heads-Up 現金局，錦標賽改用對手池與模型比較。
 - 新格式（9 人桌、細分下注尺寸、多結構訓練）已完成程式並做過小型實驗，尚未正式訓練；目前模型庫裡的模型都是 6 人以下的舊格式。
 - 牌譜匯入（GGPoker／Natural8）依公開格式撰寫，尚未用真實匯出檔驗證。
 - GPU 只支援 NVIDIA CUDA；Apple Silicon 的 MPS 尚未支援。

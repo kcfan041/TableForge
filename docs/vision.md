@@ -15,11 +15,11 @@
 
 不同訓練方式的 Agent 在同一張牌桌上對戰、產生訓練資料並持續演化：
 
-- NFSP（已有）、Deep CFR、PPO、Rule Bots（已有）、固定策略 baseline、歷史 checkpoint（已有），以及未來的 search + CFR + 神經網路 Agent。
+- NFSP（已有）、Deep CFR、PPO（已有，錦標賽）、Rule Bots（已有）、固定策略 baseline、歷史 checkpoint（已有），以及未來的 search + CFR + 神經網路 Agent。
 - 所有 Agent 只需遵守統一的 Observation、Action、遊戲規則、Hand History 與評估協定；各自保有自己的 buffer、網路、optimizer 與訓練頻率。
 - League 同時包含多種演算法，matchup matrix 可比較演算法之間的相對強弱。
 
-**目前狀態**：HU 的 League 已讓 NFSP 的新舊版本與 4 種 Rule Bots 互相對戰並產生 matchup matrix；錦標賽則有對手池（模型庫的模型、較早版本、PFSP）與模型比較頁。演算法介面已完成（A0，`architecture/01-system.md` 6.2），新增演算法只需實作 `AlgorithmSpec`、executor 與 orchestrator；目前只有 NFSP，PPO、Deep CFR 等尚未實作。
+**目前狀態**：HU 的 League 已讓 NFSP 的新舊版本與 4 種 Rule Bots 互相對戰並產生 matchup matrix；錦標賽則有對手池（模型庫的模型、較早版本、PFSP）與模型比較頁。演算法介面已完成（A0，`architecture/01-system.md` 6.2），新增演算法只需實作 `AlgorithmSpec`、executor 與 orchestrator；目前有 NFSP 與 PPO（A1，`architecture/01-system.md` 6.3；兩者可在模型比較與對手池中互相對戰），MMD、PSRO、Deep CFR 等尚未實作。
 
 ### 1.2 6-Max
 
