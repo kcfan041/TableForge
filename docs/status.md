@@ -535,7 +535,7 @@
 - **位元一致**：導入介面前用 `scripts/algorithm_baseline.py` 端對端錄下三個小型 NFSP 實驗（錦標賽、含對手池與歷史版本的錦標賽、HU 含 League population，共 20 個 Job）每個 Job 的 payload 與輸出 sha256，以及 checkpoint 與訓練曲線；改完後完全相同。這份紀錄存在 `tests/fixtures/nfsp_fingerprint.json`，由 `tests/integration/test_nfsp_fingerprint.py` 每次比對：Windows（錄製的平台）上全部比對；Linux 的 PyTorch 浮點運算結果不同，訓練出的 checkpoint 與引用它的 payload 不會相同，只比對 Job 流程（鍵、類型、狀態）與未訓練的 round 0 payload。
 - 驗收：單元測試加入一個假的演算法（checkpoint 就是一個 Rule Bot 名稱），不改核心程式就能在模型頁顯示打法、上桌對打、當對手池成員、註冊 Worker executor；兩個演算法不能宣告同一種 Job；不是 NFSP 時對手池與比較 payload 才寫出演算法欄位。
 
-### A1 PPO（程式完成，小型實驗進行中）
+### A1 PPO（程式完成；小型實驗顯示自我對打會循環，下一步 MMD）
 - 規格見 [architecture/01-system.md](architecture/01-system.md) 6.3。`learning/ppo.py`（策略與價值網路、GAE、clipped PPO、checkpoint）、`learning/ppo_training.py`（收集經驗與本機訓練迴圈）、`learning/ppo_iterative.py`（平台的 init／actor／learner／match Job）、`learning/ppo_explain.py`（說明器）。
 - 透過 A0 介面接上：模型頁、重播、策略表、對打、練習、牌譜檢討、模型比較、對手池都能用 PPO 模型，不用改這些功能的程式。打法：`sample`（依策略機率，預設）、`greedy`（最可能的動作）。
 - Preset：`6max-pko-10bb-ppo-train`（和 NFSP 10 BB preset 同樣的錦標賽、對手與 benchmark；每輪 4 個 actor × 250 場，4 個 epoch）、`6max-pko-10bb-ppo-smoke`。研究腳本 `tournament_probe.py --algorithm ppo`。
@@ -544,7 +544,19 @@
 - 驗收（程式）：
   - 單元測試：GAE 與手算結果相同（含 λ=1 時等於報酬減價值、episode 之間不互相 bootstrap）；clipped loss 在超過 clip 後不再推動；未結束的 episode 被拒絕；學習會把策略推向有獎勵的動作；checkpoint 讀寫位元一致，且讀回後繼續訓練的結果和原本完全相同；每個座位的決策連續記錄；v3 模型可打 9 人桌並使用 10 種動作；v2 encoder 拒絕 9 人桌；兩種打法都能完成 benchmark；錯誤設定被拒絕。
   - 整合測試：`6max-pko-10bb-ppo-smoke` 在平台上完整跑完（1 個 init、4 個 actor、2 個 learner、2 個 match Job），經驗資料只有 transitions 且最後一筆是 episode 結束，訓練曲線有 `sample`／`greedy` 兩個系列，學習者 agent id 是 `ppo:<實驗 id>`，可存成模型；說明器與兩種打法在牌桌上可用；設定範圍檢查。
-- **小型實驗**（進行中）：10 BB PKO，3 個 seed 各 60,000 場，用 T3 的混合 Rule Bot benchmark（每點 1,800 場）。15,000 場時三個 seed 的 ROI 是 +18.2%、+20.3%、+15.5%（95% 信賴區間下限都大於 0）；NFSP 在相同 benchmark 要到 100,000 場以上才到 +15–21%。完整結果出來後補上，並用模型比較和 NFSP 模型直接對打。
+- **小型實驗**（10 BB PKO，3 個 seed 各 60,000 場，75% 座位自我對打，用 T3 的混合 Rule Bot benchmark，每點 1,800 場；3 個程序約 12 分鐘）：
+
+  | 場數 | ROI（依機率出手，3 個 seed） | ROI（最可能動作） | 熵 |
+  |---|---|---|---|
+  | 0 | −20.3% / −16.9% / −11.3% | – | – |
+  | 15,000 | **+18.2% / +20.3% / +15.5%**（下限都 > 0） | +14.9% / +15.5% / +19.6% | 約 0.5 |
+  | 30,000 | −6.9% / −6.3% / −1.8% | +6.6% / −1.3% / +8.7% | 約 0.9–1.5 |
+  | 60,000 | −4.0% / −3.7% / −2.5%（都不顯著） | +13.6% / +5.1% / +11.1% | 約 1.2 |
+
+  - PPO 學得很快：15,000 場就達到 NFSP 在 100,000 場以上才有的 +15–21%（ITM 由 23% 升到約 39%）。
+  - 但之後三個 seed 都退回 0 附近，熵回升：典型的自我對打循環（策略在幾種打法之間來回追逐）。這正是下一步 MMD 正則化要解決的問題（把策略拉向一個參考策略，讓自我對打收斂），所以 PPO 暫不正式訓練，先做 MMD，再用同一套成績卡比較 PPO、PPO+MMD 與 NFSP。
+  - 15,000 場的模型沒有存下來（腳本只存最後一版）；之後的實驗會在每個檢查點存檔。
+  - 結果檔：研究結果資料夾 `research-results/ppo-a1`。
 - 記憶體估計：`scripts/sweep.py` 依 `--v3` 用正確的輸入大小（v3 每筆 549 個數字）估計；同時把子程序的 OpenMP 設為單執行緒並關閉它自己的親和性設定，避免啟動時偶發的「Cannot set thread affinity mask」。
 
 ### H1 匯入 GG／Natural8 牌譜（完成，**尚未用真實匯出檔驗證**）
@@ -1037,7 +1049,7 @@ uv run tableforge doctor
 4. **H1 匯入 GG／Natural8 牌譜**：完成，尚未用真實牌譜驗證（見上；有樣本後補驗收）。
 5. **A0 演算法介面**：完成（見上）。
 6. **encoder v3 與新動作格式（一次包含 S2 下注尺度、T4 9 人桌、S3 多結構訓練）**：程式完成並以小型實驗驗證（見上）；正式訓練待使用者決定算力預算。
-7. **新訓練演算法**：PPO 程式完成、小型實驗進行中（見上）→ MMD 正則化 → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
+7. **新訓練演算法**：PPO 程式完成，小型實驗 15,000 場時 +16–20% 但之後自我對打循環退回 0（見上）→ MMD 正則化 → PSRO 族群訓練，與 NFSP 用同一套成績卡比較（跑正式訓練前先問算力預算）。
 8. **T5 MTT 階段模擬**。
 9. **S6 對手建模**。
 
