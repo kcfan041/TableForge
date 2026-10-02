@@ -1,15 +1,18 @@
 """NFSP experiments stay byte-identical across refactors (A0 and later).
 
 `tests/fixtures/nfsp_fingerprint.json` was recorded with `scripts/algorithm_baseline.py`
-before the algorithm interface was introduced, on Windows. There every job payload, output,
-checkpoint and training curve must match. Elsewhere PyTorch rounds floating point
-differently, so trained checkpoints (and the payloads that name them by sha256) differ;
-only the job plan (keys, types, statuses) and the round 0 payloads are compared.
+before the algorithm interface was introduced, on the development machine (Windows). There
+every job payload, output, checkpoint and training curve must match. Elsewhere PyTorch's
+floating point results depend on the operating system and on the CPU (GitHub's Windows
+runners in different regions have different CPUs and give different trained weights), so
+trained checkpoints (and the payloads that name them by sha256) differ; there only the job
+plan (keys, types, statuses) and the round 0 payloads are compared. CI sets ``CI``.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -48,5 +51,5 @@ def test_nfsp_experiments_are_unchanged(name: str) -> None:
     assert untrained == [
         row["payload"] for row in expected_jobs if row["key"].startswith("round:0:")
     ]
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not os.environ.get("CI"):
         assert rows == expected
