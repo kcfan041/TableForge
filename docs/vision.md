@@ -19,7 +19,7 @@
 - 所有 Agent 只需遵守統一的 Observation、Action、遊戲規則、Hand History 與評估協定；各自保有自己的 buffer、網路、optimizer 與訓練頻率。
 - League 同時包含多種演算法，matchup matrix 可比較演算法之間的相對強弱。
 
-**目前狀態**：League 已讓 NFSP 的新舊版本與 4 種 Rule Bots 互相對戰並產生 matchup matrix。Deep CFR、PPO 尚未實作。擴充方式已在 `architecture/01-system.md` 第 7 節定義：新增 executor、AgentManifest 擴充與 artifact 類型，不修改 Job 生命週期。
+**目前狀態**：HU 的 League 已讓 NFSP 的新舊版本與 4 種 Rule Bots 互相對戰並產生 matchup matrix；錦標賽則有對手池（模型庫的模型、較早版本、PFSP）與模型比較頁。演算法介面已完成（A0，`architecture/01-system.md` 6.2），新增演算法只需實作 `AlgorithmSpec`、executor 與 orchestrator；目前只有 NFSP，PPO、Deep CFR 等尚未實作。
 
 ### 1.2 6-Max
 
@@ -29,7 +29,7 @@
 - 資金守恆、資訊隔離等既有不變量必須以同樣嚴格的 property test 與大規模 soak test 驗證。
 - 評估方式需要擴充：多人牌局的 bb/100 與信賴區間需要考慮座位輪替與多方互動。
 
-**目前狀態**：2–6 人撲克引擎（side pot、多人 showdown）、多人 Rule Bot simulation 與座位輪替評估已完成，並通過 property test 與 2–6 人各 100 萬手 soak。NFSP 與 League 仍只支援 Heads-Up。
+**目前狀態**：撲克引擎已擴到 2–9 人（side pot、多人 showdown），多人 Rule Bot simulation 與座位輪替評估已完成，並通過 property test 與 2–6 人各 100 萬手 soak。NFSP 可在 2–6 人錦標賽訓練；9 人桌的新格式（v3 輸入）已完成程式，尚未正式訓練。HU 的 League 對戰矩陣仍只支援 Heads-Up。
 
 ### 1.2.1 錦標賽與 PKO
 
@@ -40,7 +40,7 @@
 - 評估分兩層：HU bb/100 測基本牌技；tournament benchmark 測 ROI、平均名次、ITM%、Prize EV、Bounty EV 與 Total EV。
 - 演進順序：單桌 6 人錦標賽 → 名次獎金與短籌碼 → PKO bounty → 錦標賽上的學習 → 多桌、併桌、late registration 等完整 MTT 規則。
 
-**目前狀態**：設計已定案（`architecture/08-tournament.md`），尚未實作；排在 v2 輸入（P1-a）之後。
+**目前狀態**：單桌錦標賽、名次獎金、PKO bounty 與錦標賽上的 NFSP 訓練都已完成（`architecture/08-tournament.md`，T1–T3）；錦標賽規格可自訂（B1），並有 ICM Push/Fold Nash baseline、模型比較與可剝削程度量測。多桌、併桌與 late registration 尚未開始（T5 先以單桌模擬 MTT 階段）。
 
 ### 1.3 網頁介面
 
@@ -52,7 +52,7 @@
 
 原則：核心判定只在 Scheduler/Application 層，UI 只負責呈現；UI 不阻塞 CLI 版本的任何功能。
 
-**目前狀態**：單一入口 `tableforge ui` 已完成（W1、W2、U1–U3）：建立或加入叢集、提供運算，以及依權限顯示的叢集管理（節點與硬體、實驗、Job、checkpoint、matchup matrix 熱圖、事件、診斷與邀請管理）；同一套頁面也能由叢集服務提供給只用瀏覽器的人。尚未提供：workload 相容性說明（C5）、訓練曲線、使用者與專案（`architecture/07` S1–S5）。
+**目前狀態**：單一入口 `tableforge ui` 已完成（W1、W2、U1–U3）：建立或加入叢集、提供運算，以及依權限顯示的叢集管理（節點與硬體、實驗、Job、checkpoint、matchup matrix 熱圖、事件、診斷與邀請管理）；同一套頁面也能由叢集服務提供給只用瀏覽器的人。之後加入了訓練曲線、模型庫、重播、策略表、模型比較、和模型對打與練習、牌譜分析，以及逐項設定的權限（scope）。尚未提供：workload 相容性說明（C5）、使用者與專案隔離（`architecture/07` S2–S5）。
 
 ### 1.4 對手建模
 

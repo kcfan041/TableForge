@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml/badge.svg)](https://github.com/kcfan041/TableForge/actions/workflows/ci.yml)
 
-分散式多代理德州撲克 AI 訓練與評估框架。目前支援 No-Limit Hold'em（Heads-Up 與 2–6 人桌）、Rule Bots、NFSP（Heads-Up；CPU 與 NVIDIA GPU），以及多台電腦組成叢集一起運算。
+分散式多代理德州撲克 AI 訓練與評估框架。目前支援 No-Limit Hold'em（Heads-Up 與 2–9 人桌，含錦標賽與 PKO）、Rule Bots、NFSP（CPU 與 NVIDIA GPU），以及多台電腦組成叢集一起運算；並提供模型庫、模型比較、和模型對打與練習、牌譜分析。
 
 ## 開始使用
 
@@ -66,7 +66,9 @@ uv run mypy
 
 ## 已知限制
 
-- NFSP 與 League 只支援 Heads-Up；Deep CFR、PPO 尚未實作。
+- 訓練演算法目前只有 NFSP；PPO、Deep CFR 等尚未實作。舊的 League 對戰矩陣只支援 Heads-Up 現金局，錦標賽改用對手池與模型比較。
+- 新格式（9 人桌、細分下注尺寸、多結構訓練）已完成程式並做過小型實驗，尚未正式訓練；目前模型庫裡的模型都是 6 人以下的舊格式。
+- 牌譜匯入（GGPoker／Natural8）依公開格式撰寫，尚未用真實匯出檔驗證。
 - GPU 只支援 NVIDIA CUDA；Apple Silicon 的 MPS 尚未支援。
 - Windows 上 GPU 記憶體也會佔用系統記憶體配額，page file 太小時可用的 batch 會變小（`doctor` 會顯示警告）。
 - 使用本機 artifact store 時，artifact 經由叢集服務傳送，單檔上限 1 GiB；使用 S3 則沒有這個限制。

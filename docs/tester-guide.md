@@ -98,6 +98,7 @@ uv run tableforge ui
 - PowerShell 視窗要保持開著；按 `Ctrl+C` 關閉 TableForge 時，由它啟動的 Worker 也會一起停止。之後每次要提供運算，再執行同一行指令、按「啟動 Worker」即可，不需要重新加入。
 - 不想用 GPU 時，改用 `uv run tableforge ui --no-gpu`。
 - 同一台電腦可以啟動多個 Worker。目前還不會自動把 Worker 分配到不同 GPU，只有一張 GPU 時建議只開一個。
+- CPU 有多個 CCD（例如 Ryzen 9 9950X3D）時，Worker 會自動平均分到各 CCD，避免熱集中在同一邊；可在 Worker 卡片關閉。
 
 ## 5. 建立與查看實驗
 
@@ -210,7 +211,7 @@ uv sync --extra learning --extra gpu
 
 ## 已知限制
 
-- 目前所有持有操作者權限的人權限相同，可以停止彼此的實驗；使用者、專案與隔離屬於完整版（`docs/architecture/07-multi-party-and-trust.md` S1–S5）。
+- 權限可以逐項設定，但尚未有專案隔離：有 `experiment:control` 的人可以停止任何人的實驗；使用者、專案與隔離屬於完整版（`docs/architecture/07-multi-party-and-trust.md` S2–S5）。
 - 同一台電腦的多個 Worker 還不會自動分配到不同的 GPU。
-- CPU 有多個 CCD（例如 Ryzen 9 9950X3D）時，Worker 會自動平均分到各 CCD，避免熱集中在同一邊；可在 Worker 卡片關閉。
+- 牌譜分析依 GG 公開的牌譜格式撰寫，尚未用真實的 GGPoker／Natural8 匯出檔驗證。
 - 透過 Tailscale 的兩台實體電腦驗收尚未完成；目前在一台電腦上以多個 TableForge 驗證建立、加入與管理流程。
