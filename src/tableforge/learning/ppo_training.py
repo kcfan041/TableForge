@@ -67,6 +67,8 @@ class PpoTrainingReport:
     train_steps: int
     decisions: int
     last_metrics: dict[str, float]
+    diagnostics: tuple[dict[str, float], ...] = ()
+    """`PpoAgent.last_diagnostics` of every update, in order."""
 
 
 def ppo_self_play_train(
@@ -85,6 +87,7 @@ def ppo_self_play_train(
         raise ValueError("tournaments_per_update must be positive")
     played = hands = updates = decisions = 0
     metrics: dict[str, float] = {}
+    diagnostics: list[dict[str, float]] = []
     features = agent.encoder.feature_size
     while played < tournaments:
         batch = min(tournaments_per_update, tournaments - played)
@@ -102,6 +105,7 @@ def ppo_self_play_train(
         if transitions:
             decisions += len(transitions)
             metrics = agent.learn(Rollout.of(transitions, features, agent.actions.count))
+            diagnostics.append(dict(agent.last_diagnostics))
             updates += 1
         if on_progress is not None:
             on_progress(played)
@@ -112,4 +116,5 @@ def ppo_self_play_train(
         train_steps=agent.train_steps,
         decisions=decisions,
         last_metrics=metrics,
+        diagnostics=tuple(diagnostics),
     )

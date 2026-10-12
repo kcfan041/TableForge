@@ -306,6 +306,19 @@ def main() -> None:
     sys.exit(0)
 
 
+def _summarise(items: tuple[dict[str, float], ...]) -> dict[str, dict[str, float]]:
+    """Mean and maximum of each PPO diagnostic over the updates of one stage."""
+    keys = sorted({key for item in items for key in item})
+    return {
+        key: {
+            "mean": round(sum(item[key] for item in items) / len(items), 5),
+            "max": round(max(item[key] for item in items), 5),
+        }
+        for key in keys
+        if all(key in item for item in items)
+    }
+
+
 def _ppo(args: argparse.Namespace, config: object) -> None:
     """PPO (A1) on the same tournaments, opponents and benchmark as the NFSP probe."""
     from tableforge.learning.ppo import PpoAgent, PpoConfig, PpoTablePlayer
@@ -350,6 +363,18 @@ def _ppo(args: argparse.Namespace, config: object) -> None:
             trained += per_stage
             hands += report.hands
             losses = report.last_metrics
+            if args.save and report.diagnostics:
+                # Every update's diagnostics (KL, clipped share, value fit...) next to the
+                # checkpoints, one JSON line per update.
+                log = Path(args.save).with_name(f"{Path(args.save).stem}-updates.jsonl")
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as handle:
+                    first = trained - per_stage
+                    for number, item in enumerate(report.diagnostics):
+                        row = {"tournaments": first + (number + 1) * args.ppo_tournaments}
+                        row.update({key: round(value, 6) for key, value in item.items()})
+                        handle.write(json.dumps(row, sort_keys=True) + "\n")
+        diagnostics = _summarise(report.diagnostics) if stage else {}
         results = {}
         for name, greedy in (("benchmark", False), ("greedy", True)):
             if greedy and not (args.greedy and stage):
@@ -383,6 +408,7 @@ def _ppo(args: argparse.Namespace, config: object) -> None:
                     "elapsed_s": round(time.perf_counter() - started),
                     "train_steps": agent.train_steps,
                     "losses": {key: round(value, 5) for key, value in losses.items()},
+                    "diagnostics": diagnostics,
                     **results,
                 },
                 sort_keys=True,

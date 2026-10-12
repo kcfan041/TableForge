@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 import numpy as np
 import pytest
@@ -280,3 +281,39 @@ def test_mmd_checkpoint_round_trip_and_old_checkpoints_load_with_mmd() -> None:
         PpoConfig(magnet_coef=-1)
     with pytest.raises(ValueError):
         PpoConfig(magnet_every=0)
+
+
+def test_diagnostics_are_reported_without_changing_training() -> None:
+    """Diagnostics only read; the checkpoint of a fixed training run is unchanged."""
+    import sys
+
+    agent = PpoAgent(PpoConfig(seed=12, hidden_size=16, minibatch_size=64))
+    batch = Rollout.of(random_batch(agent, 96, seed=4), 406, 5)
+    agent.learn(batch)
+    diagnostics = agent.last_diagnostics
+
+    assert diagnostics["approx_kl"] >= 0
+    assert 0 <= diagnostics["clip_fraction"] <= 1
+    assert diagnostics["decisions"] == 96
+    assert {"explained_variance", "advantage_std", "policy_grad_norm", "value_grad_norm"} <= set(
+        diagnostics
+    )
+    if sys.platform == "win32":
+        # Recorded before diagnostics existed (same run, same machine).
+        config = preset_config(10, bounty=BountyConfig())
+        for magnet, expected in (
+            (0.0, "ceca261318fe6b7d083718dbf32233b9103ce243f0215dfb3fa975117b129053"),
+            (0.2, "5b38065701231e124e0c906822af425133cb25ba5a72eecb2cc4381ee4a00cfc"),
+        ):
+            torch.set_num_threads(1)
+            trained = PpoAgent(
+                PpoConfig(
+                    seed=7, hidden_size=16, minibatch_size=128, magnet_coef=magnet, magnet_every=2
+                )
+            )
+            report = ppo_self_play_train(trained, config, 6, 300, 2, 0.75, True)
+            assert len(report.diagnostics) == 3
+            digest = hashlib.sha256(trained.to_bundle()).hexdigest()
+            if os.environ.get("CI"):
+                continue
+            assert digest == expected

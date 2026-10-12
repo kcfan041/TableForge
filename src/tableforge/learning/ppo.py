@@ -209,6 +209,14 @@ def clipped_loss(
     return -torch.min(ratio * advantages, clipped * advantages).mean()
 
 
+def _grad_norm(network: nn.Module) -> float:
+    total = 0.0
+    for parameter in network.parameters():
+        if parameter.grad is not None:
+            total += float(parameter.grad.detach().pow(2).sum().item())
+    return float(total**0.5)
+
+
 def magnet_kl(log_probs: Tensor, magnet_log_probs: Tensor, legal: Tensor) -> Tensor:
     """Mean KL(policy || magnet) over the legal actions of each state."""
     terms = log_probs.exp() * (log_probs - magnet_log_probs)
@@ -233,6 +241,9 @@ class PpoAgent:
         self.magnet_network: nn.Sequential | None = None
         self.updates = 0
         """PPO updates (`learn` calls) so far; the magnet moves every `magnet_every`."""
+        self.last_diagnostics: dict[str, float] = {}
+        """Read-only numbers about the last update (`learn`): approx_kl, clip_fraction,
+        explained_variance(_after), advantage_std, return_mean, gradient norms."""
         if config.magnet_coef > 0:
             self.magnet_network = _network(inputs, config.hidden_size, self.actions.count).to(
                 self.device
@@ -335,6 +346,7 @@ class PpoAgent:
         actions = torch.from_numpy(rollout.actions).to(device)
         with torch.no_grad():
             log_probs, values = self._forward(states, masks)
+            log_probs_before = log_probs
             old_log_probs = log_probs.gather(1, actions.unsqueeze(1)).squeeze(1)
             next_values = self.value_network(torch.from_numpy(rollout.next_states).to(device))
         value_array = values.cpu().numpy().astype(np.float64)
@@ -360,6 +372,23 @@ class PpoAgent:
         generator = torch.Generator().manual_seed(self.rng.randrange(2**31))
         count = len(actions)
         metrics: dict[str, float] = {}
+        # Diagnostics only (read-only, no effect on training): how far each update moves the
+        # policy, how often the clip is active, and how well the value net explains returns.
+        returns_array = advantages_array + value_array
+        variance = float(np.var(returns_array))
+        diagnostics: dict[str, float] = {
+            "advantage_std": float(np.std(advantages_array)),
+            "return_mean": float(np.mean(returns_array)),
+            "explained_variance": (
+                float(1.0 - np.var(returns_array - value_array) / variance)
+                if variance > 1e-12
+                else 0.0
+            ),
+            "decisions": float(count),
+        }
+        clipped_sum = 0.0
+        batches = 0
+        policy_grad = value_grad = 0.0
         for epoch in range(epochs or config.epochs):
             order = torch.randperm(count, generator=generator).to(device)
             for start in range(0, count, config.minibatch_size):
@@ -379,6 +408,12 @@ class PpoAgent:
                     loss = loss + config.magnet_coef * kl
                 self.optimizer.zero_grad()
                 loss.backward()  # type: ignore[no-untyped-call]
+                with torch.no_grad():
+                    ratio = torch.exp(chosen - old_log_probs[index])
+                    clipped_sum += float(((ratio - 1).abs() > config.clip).float().mean().item())
+                    policy_grad += _grad_norm(self.policy_network)
+                    value_grad += _grad_norm(self.value_network)
+                    batches += 1
                 nn.utils.clip_grad_norm_(parameters, config.max_grad_norm)
                 self.optimizer.step()
                 self.train_steps += 1
@@ -391,6 +426,24 @@ class PpoAgent:
                     metrics["magnet_kl"] = float(kl.item())
             if on_progress is not None:
                 on_progress(epoch + 1)
+        with torch.no_grad():
+            new_log_probs, new_values = self._forward(states, masks)
+            # KL(old || new) over legal actions, averaged over states.
+            old_all = log_probs_before
+            terms = old_all.exp() * (old_all - new_log_probs)
+            diagnostics["approx_kl"] = float(
+                terms.masked_fill(~masks, 0.0).sum(dim=1).mean().item()
+            )
+            new_value_array = new_values.cpu().numpy().astype(np.float64)
+        diagnostics["explained_variance_after"] = (
+            float(1.0 - np.var(returns_array - new_value_array) / variance)
+            if variance > 1e-12
+            else 0.0
+        )
+        diagnostics["clip_fraction"] = clipped_sum / max(batches, 1)
+        diagnostics["policy_grad_norm"] = policy_grad / max(batches, 1)
+        diagnostics["value_grad_norm"] = value_grad / max(batches, 1)
+        self.last_diagnostics = diagnostics
         self.updates += 1
         if self.magnet_network is not None and self.updates % config.magnet_every == 0:
             self.magnet_network.load_state_dict(self.policy_network.state_dict())
