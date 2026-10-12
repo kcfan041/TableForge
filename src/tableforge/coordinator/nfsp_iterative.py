@@ -143,6 +143,7 @@ def _ppo_init(config: ExperimentConfig) -> bytes:
         clip=config.clip,
         magnet_coef=config.magnet_coef,
         magnet_every=config.magnet_every,
+        value_mode=config.value_mode,
     ).to_bytes()
 
 

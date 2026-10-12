@@ -505,6 +505,7 @@ TRAINING_OVERRIDES: dict[str, type] = {
     "clip": float,
     "magnet_coef": float,
     "magnet_every": int,
+    "value_mode": str,
 }
 """Settings a user may change when creating an iterative training experiment."""
 
@@ -520,6 +521,7 @@ ALGORITHM_ONLY_SETTINGS: dict[str, tuple[str, ...]] = {
     "clip": ("ppo",),
     "magnet_coef": ("ppo",),
     "magnet_every": ("ppo",),
+    "value_mode": ("ppo",),
 }
 """Settings that only mean something for some algorithms (the UI shows them only there)."""
 

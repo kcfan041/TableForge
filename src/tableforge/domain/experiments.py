@@ -98,10 +98,15 @@ class ExperimentConfig:
     """PPO with MMD: weight of the pull towards the magnet policy (0 = plain PPO)."""
     magnet_every: int = 10
     """PPO with MMD: the magnet becomes the current policy every this many rounds."""
+    value_mode: str = "shared"
+    """PPO: ``separate`` trains the value network on its own (squared error, own
+    optimizer); ``shared`` is the first implementation."""
 
     def __post_init__(self) -> None:
         if self.magnet_coef < 0 or self.magnet_every < 1:
             raise ValueError("invalid MMD settings")
+        if self.value_mode not in ("shared", "separate"):
+            raise ValueError("value_mode must be shared or separate")
         if not self.algorithm or len(self.algorithm) > 32:
             raise ValueError("algorithm must be a short name")
         if self.algorithm == "ppo":
@@ -284,6 +289,7 @@ class ExperimentPreset:
     clip: float = 0.2
     magnet_coef: float = 0.0
     magnet_every: int = 10
+    value_mode: str = "shared"
 
     def config(self) -> ExperimentConfig:
         return ExperimentConfig(
@@ -336,6 +342,7 @@ class ExperimentPreset:
             clip=self.clip,
             magnet_coef=self.magnet_coef,
             magnet_every=self.magnet_every,
+            value_mode=self.value_mode,
         )
 
 

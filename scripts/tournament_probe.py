@@ -103,6 +103,14 @@ def main() -> None:
     parser.add_argument(
         "--magnet-every", type=int, default=10, help="MMD: updates between magnet moves"
     )
+    parser.add_argument(
+        "--value-mode",
+        default="shared",
+        choices=("shared", "separate"),
+        help="separate: value net with its own optimizer and a squared-error loss",
+    )
+    parser.add_argument("--value-lr", type=float, default=1e-3)
+    parser.add_argument("--value-epochs", type=int, default=8)
     args = parser.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -338,6 +346,9 @@ def _ppo(args: argparse.Namespace, config: object) -> None:
             action_schema="nlhe-discrete-v2" if args.v3 else "nlhe-discrete-v1",
             magnet_coef=args.magnet_coef,
             magnet_every=args.magnet_every,
+            value_mode=args.value_mode,
+            value_learning_rate=args.value_lr,
+            value_epochs=args.value_epochs,
         )
     )
     training_config: object = config

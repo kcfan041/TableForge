@@ -317,10 +317,14 @@ class PpoInitPayload:
     magnet_coef: float = 0.0
     """MMD: weight of the KL penalty towards the magnet policy (0 = plain PPO)."""
     magnet_every: int = 10
+    value_mode: str = "shared"
+    """``separate``: the value network has its own optimizer and a squared-error loss."""
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0":
             raise ValueError("unsupported init payload schema")
+        if self.value_mode not in ("shared", "separate"):
+            raise ValueError("value_mode must be shared or separate")
         if self.action_schema not in ("nlhe-discrete-v1", "nlhe-discrete-v2"):
             raise ValueError(f"unsupported action schema: {self.action_schema}")
         if self.hidden_size < 1 or self.minibatch_size < 1:
@@ -333,7 +337,11 @@ class PpoInitPayload:
             raise ValueError("invalid MMD settings")
 
     def to_bytes(self) -> bytes:
-        return _dump(_without_defaults(asdict(self), {"magnet_coef": 0.0, "magnet_every": 10}))
+        return _dump(
+            _without_defaults(
+                asdict(self), {"magnet_coef": 0.0, "magnet_every": 10, "value_mode": "shared"}
+            )
+        )
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> PpoInitPayload:

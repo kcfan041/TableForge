@@ -239,6 +239,8 @@ class DecisionExplainer(Protocol):
 - 平台：沿用 NFSP 的輪次流程與 payload（`IterativeNfspOrchestrator` 以 `PipelineJobs` 換成 PPO 的 Job 類型：`PpoInitJobPayload`、`PpoActorJobPayload`、`PpoLearnerJobPayload`、`PpoMatchJobPayload`）；經驗資料格式相同（只有 transitions）；learner 只接受本輪 checkpoint 產生的經驗。實驗的 `train_steps_per_round` 是每輪 epoch 數，`batch_size` 是 minibatch 大小；新設定 `entropy_coef`、`gae_lambda`、`clip`。
 - 評估：和 NFSP 同一套錦標賽 benchmark 與升級規則；打法 `sample`（依機率，預設）與 `greedy`（最可能的動作），訓練曲線的系列名稱也是這兩個。說明器回傳各動作機率與狀態價值（單位 buy-in）。
 - **MMD 正則化**（magnetic mirror descent）：`magnet_coef`（α）大於 0 時，損失多一項 α·KL(π‖magnet)，只算合法動作；magnet 是另一份策略網路，每 `magnet_every` 次更新（平台上是每幾輪）換成當下的策略。用來防止自我對打在幾種打法之間循環。α = 0 就是一般 PPO：不建立 magnet，checkpoint、payload 與訓練結果和加入 MMD 前位元一致（設定只在不是預設值時寫出）。MMD 的 checkpoint 另存 magnet 權重與更新次數；沒有 magnet 權重的舊 checkpoint 以目前策略當 magnet。
+- **價值網路訓練方式**（`value_mode`）：`shared`（預設，最初的做法）：策略與價值共用一個 Adam 與梯度上限，價值損失是 Huber。`separate`：價值網路有自己的 Adam（`value_learning_rate`，預設 1e-3）、梯度上限（`value_max_grad_norm`，5）與均方誤差損失，每批在策略更新之後另外訓練 `value_epochs` 遍（8）。診斷發現共用時價值網路只解釋 5–15% 的回報，優勢幾乎全是雜訊；分開後約 40%（`docs/status.md` A1）。`separate` 的 checkpoint 另存價值網路的 Adam 狀態（`value_opt.*`）。
+- **診斷**：每次 `learn` 的 `last_diagnostics`（策略變化量 `approx_kl`、被截掉比例 `clip_fraction`、價值網路更新前後的解釋程度、優勢標準差、平均回報、兩個網路的梯度大小）；只讀取，不影響訓練。
 - 尚未支援：League、可剝削程度實驗（從目標模型開始）、HU cash。PSRO 是下一步。
 
 ## 7. 擴展邊界

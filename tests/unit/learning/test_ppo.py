@@ -317,3 +317,38 @@ def test_diagnostics_are_reported_without_changing_training() -> None:
             if os.environ.get("CI"):
                 continue
             assert digest == expected
+
+
+def test_separate_value_network_fits_returns_better_and_round_trips() -> None:
+    rng = np.random.default_rng(5)
+    mask = (True,) * 5
+    states = [tuple(float(value) for value in rng.normal(size=406)) for _ in range(256)]
+    # The return depends on the first feature, plus a lot of noise (like all-in luck).
+    batch = Rollout.of(
+        [
+            Transition(state, mask, 1, 0.3 * (2 * state[0] + float(rng.normal() * 2)), None, None)
+            for state in states
+        ],
+        406,
+        5,
+    )
+
+    def fit(mode: str) -> float:
+        agent = PpoAgent(PpoConfig(seed=3, hidden_size=32, minibatch_size=64, value_mode=mode))
+        for _ in range(6):
+            agent.learn(batch)
+        return agent.last_diagnostics["explained_variance_after"]
+
+    assert fit("separate") > fit("shared")
+
+    agent = PpoAgent(PpoConfig(seed=4, hidden_size=16, minibatch_size=64, value_mode="separate"))
+    agent.learn(batch)
+    bundle = agent.to_bundle()
+    copy = PpoAgent.from_bundle(bundle)
+    assert copy.to_bundle() == bundle
+    assert checkpoint_manifest(bundle)["config"]["value_mode"] == "separate"
+    agent.learn(batch)
+    copy.learn(batch)
+    assert agent.to_bundle() == copy.to_bundle()
+    with pytest.raises(ValueError):
+        PpoConfig(value_mode="other")

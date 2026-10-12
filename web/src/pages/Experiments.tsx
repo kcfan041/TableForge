@@ -62,6 +62,7 @@ const SETTING_ORDER = [
   "clip",
   "magnet_coef",
   "magnet_every",
+  "value_mode",
   "benchmark_deals",
   "evaluation_deals",
   "max_evaluation_deals",
@@ -201,6 +202,17 @@ function CreateExperiment() {
                           {["uniform", "hard", "variance"].map((value) => (
                             <option key={value} value={value}>
                               {t(`pfsp.${value}` as MessageKey)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : name === "value_mode" ? (
+                        <select
+                          value={settings[name]}
+                          onChange={(event) => setSettings({ ...settings, [name]: event.target.value })}
+                        >
+                          {["shared", "separate"].map((value) => (
+                            <option key={value} value={value}>
+                              {t(`valueMode.${value}` as MessageKey)}
                             </option>
                           ))}
                         </select>

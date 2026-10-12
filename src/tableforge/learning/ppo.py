@@ -81,10 +81,25 @@ class PpoConfig:
     plain PPO. The penalty keeps self-play from cycling between strategies."""
     magnet_every: int = 10
     """MMD: the magnet becomes the current policy after this many updates (learn calls)."""
+    value_mode: str = "shared"
+    """``shared``: one optimizer and gradient limit for both networks, Huber value loss (as
+    first implemented). ``separate``: the value network has its own optimizer
+    (`value_learning_rate`, `value_max_grad_norm`), a squared-error loss (it learns the
+    mean return, not a median) and `value_epochs` passes per update. The A1 diagnostics
+    found the shared value net explaining only 5-15% of returns."""
+    value_learning_rate: float = 1e-3
+    value_max_grad_norm: float = 5.0
+    value_epochs: int = 8
 
     def __post_init__(self) -> None:
         if self.hidden_size < 1 or self.minibatch_size < 1 or self.epochs < 1:
             raise ValueError("hidden_size, minibatch_size and epochs must be positive")
+        if self.value_mode not in VALUE_MODES:
+            raise ValueError(f"value_mode must be one of {', '.join(VALUE_MODES)}")
+        if not 0 < self.value_learning_rate <= 1 or self.value_max_grad_norm <= 0:
+            raise ValueError("invalid value network settings")
+        if self.value_epochs < 1:
+            raise ValueError("value_epochs must be positive")
         if self.magnet_coef < 0 or self.magnet_every < 1:
             raise ValueError("magnet_coef cannot be negative and magnet_every must be positive")
         if not 0 < self.learning_rate <= 1 or self.reward_scale <= 0:
@@ -98,14 +113,22 @@ class PpoConfig:
         encoder(self.observation_schema)
 
 
-_MMD_DEFAULTS = {"magnet_coef": 0.0, "magnet_every": 10}
+VALUE_MODES = ("shared", "separate")
+_OPTIONAL_DEFAULTS: dict[str, object] = {
+    "magnet_coef": 0.0,
+    "magnet_every": 10,
+    "value_mode": "shared",
+    "value_learning_rate": 1e-3,
+    "value_max_grad_norm": 5.0,
+    "value_epochs": 8,
+}
 
 
 def _config_dict(config: PpoConfig) -> dict[str, Any]:
-    """The config as stored in checkpoints; MMD settings only when they are not the
-    defaults, so plain PPO checkpoints keep their bytes."""
+    """The config as stored in checkpoints; settings added after the first PPO release are
+    written only when they are not the defaults, so older checkpoints keep their bytes."""
     data = asdict(config)
-    for key, default in _MMD_DEFAULTS.items():
+    for key, default in _OPTIONAL_DEFAULTS.items():
         if data[key] == default:
             del data[key]
     return data
@@ -249,10 +272,19 @@ class PpoAgent:
                 self.device
             )
             self.magnet_network.load_state_dict(self.policy_network.state_dict())
-        self.optimizer = torch.optim.Adam(
-            [*self.policy_network.parameters(), *self.value_network.parameters()],
-            config.learning_rate,
-        )
+        self.value_optimizer: torch.optim.Optimizer | None = None
+        if config.value_mode == "separate":
+            self.optimizer = torch.optim.Adam(
+                self.policy_network.parameters(), config.learning_rate
+            )
+            self.value_optimizer = torch.optim.Adam(
+                self.value_network.parameters(), config.value_learning_rate
+            )
+        else:
+            self.optimizer = torch.optim.Adam(
+                [*self.policy_network.parameters(), *self.value_network.parameters()],
+                config.learning_rate,
+            )
         self.training = True
         self.greedy = False
         self.train_steps = 0
@@ -389,6 +421,9 @@ class PpoAgent:
         clipped_sum = 0.0
         batches = 0
         policy_grad = value_grad = 0.0
+        separate = self.value_optimizer is not None
+        if separate:
+            parameters = list(self.policy_network.parameters())
         for epoch in range(epochs or config.epochs):
             order = torch.randperm(count, generator=generator).to(device)
             for start in range(0, count, config.minibatch_size):
@@ -398,10 +433,16 @@ class PpoAgent:
                 policy_loss = clipped_loss(
                     chosen, old_log_probs[index], advantages[index], config.clip
                 )
-                value_loss = nn.functional.smooth_l1_loss(values, returns[index])
                 legal = masks[index]
                 entropy = -(log_probs.exp() * log_probs).masked_fill(~legal, 0.0).sum(dim=1).mean()
-                loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+                if separate:
+                    value_loss = torch.zeros(())
+                    loss = policy_loss - config.entropy_coef * entropy
+                else:
+                    value_loss = nn.functional.smooth_l1_loss(values, returns[index])
+                    loss = (
+                        policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+                    )
                 kl: Tensor | None = None
                 if magnet_log_probs is not None:
                     kl = magnet_kl(log_probs, magnet_log_probs[index], legal)
@@ -426,6 +467,25 @@ class PpoAgent:
                     metrics["magnet_kl"] = float(kl.item())
             if on_progress is not None:
                 on_progress(epoch + 1)
+        if self.value_optimizer is not None:
+            # The value network on its own: squared error (the mean return), its own
+            # learning rate, gradient limit and number of passes.
+            value_losses = []
+            for _ in range(config.value_epochs):
+                order = torch.randperm(count, generator=generator).to(device)
+                for start in range(0, count, config.minibatch_size):
+                    index = order[start : start + config.minibatch_size]
+                    predicted = self.value_network(states[index]).squeeze(1)
+                    value_loss = nn.functional.mse_loss(predicted, returns[index])
+                    self.value_optimizer.zero_grad()
+                    value_loss.backward()  # type: ignore[no-untyped-call]
+                    value_grad += _grad_norm(self.value_network) / config.value_epochs
+                    nn.utils.clip_grad_norm_(
+                        self.value_network.parameters(), config.value_max_grad_norm
+                    )
+                    self.value_optimizer.step()
+                    value_losses.append(float(value_loss.item()))
+            metrics["value_loss"] = value_losses[-1]
         with torch.no_grad():
             new_log_probs, new_values = self._forward(states, masks)
             # KL(old || new) over legal actions, averaged over states.
@@ -479,6 +539,11 @@ class PpoAgent:
                             if self.magnet_network is not None
                             else {}
                         ),
+                        **(
+                            _optimizer_tensors("value_opt", self.value_optimizer)
+                            if self.value_optimizer is not None
+                            else {}
+                        ),
                     }
                     or {"empty": torch.zeros(1)}
                 ),
@@ -487,6 +552,11 @@ class PpoAgent:
                         "opt_groups": _optimizer_groups(self.optimizer),
                         "rng_state": _rng_state(self.rng),
                         **({"updates": self.updates} if self.magnet_network is not None else {}),
+                        **(
+                            {"value_opt_groups": _optimizer_groups(self.value_optimizer)}
+                            if self.value_optimizer is not None
+                            else {}
+                        ),
                     }
                 ),
             }
@@ -512,6 +582,8 @@ class PpoAgent:
             if key != "empty"
         }
         _load_optimizer(agent.optimizer, "opt", tensors, state["opt_groups"])
+        if agent.value_optimizer is not None:
+            _load_optimizer(agent.value_optimizer, "value_opt", tensors, state["value_opt_groups"])
         agent.rng.setstate(_restore_rng_state(state["rng_state"]))
         if agent.magnet_network is not None:
             magnet = _unprefixed("magnet", tensors)
