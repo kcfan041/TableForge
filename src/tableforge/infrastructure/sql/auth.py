@@ -189,12 +189,17 @@ class SqlAuthRepository:
             ).fetchone()
             if row is not None:
                 return ClusterId(row["cluster_id"])
-            cluster = new_cluster_id()
+            # FOR UPDATE cannot lock a row that does not exist yet, so two first callers can
+            # both get here; only one insert wins and everyone returns the stored identity.
             connection.execute(
-                "INSERT INTO cluster_identity (singleton, cluster_id, created_at) VALUES (1, ?, ?)",
-                (str(cluster), self._db.timestamp(now)),
+                "INSERT INTO cluster_identity (singleton, cluster_id, created_at) VALUES (1, ?, ?)"
+                " ON CONFLICT(singleton) DO NOTHING",
+                (str(new_cluster_id()), self._db.timestamp(now)),
             )
-            return cluster
+            stored = connection.execute(
+                "SELECT cluster_id FROM cluster_identity WHERE singleton = 1"
+            ).fetchone()
+            return ClusterId(stored["cluster_id"])
 
     def create_invite(
         self, scope: InviteScope, now: datetime, ttl: timedelta, label: str = ""
