@@ -46,7 +46,7 @@
 | T2 | PKO bounty 規則與 bounty 指標 | 已完成 | 本階段 |
 | T3 | 錦標賽上的學習 | 第一版已達驗收 | 10 BB PKO：5 個 seed 全部顯著獲利（平均策略 +19%、Q 網路 +51%） |
 
-目前測試：727 個測試全部通過（另有 1 個只在非 Windows 執行）（含 RTX 5070 Ti 實機 GPU 測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
+目前測試：727 個測試全部通過（另有 1 個只在非 Windows 執行）（含 NVIDIA GPU 實機測試、Docker PostgreSQL 17 與 Docker RustFS 上的測試），Ruff、mypy strict 通過。沒有 GPU、PostgreSQL 或 S3 服務時，相關測試會自動略過。
 
 ## 已完成項目與驗收方式
 
@@ -130,7 +130,7 @@
 - **安全**：`node revoke <node-id>` 立即撤銷節點所有 session；`node rotate-session` 換新 session，舊 token 立即失效。Enrollment token 固定以 `tfe_` 開頭，避免被 CLI 誤當成參數（先前約 1/64 機率失敗）。
 - 驗收：單元與 contract tests；實跑 coordinator + 遠端 worker：rotate 後完成 Job、metrics 與 events 正確、revoke 後 worker 被拒（UNAUTHENTICATED）。
 
-### C2/C4 GPU（RTX 2070 8 GB 開發，RTX 5070 Ti 16 GB 重新驗證）
+### C2/C4 GPU（8 GB 與 16 GB NVIDIA GPU 驗證）
 - **CUDA 版 PyTorch**：Windows／Linux 自動從 PyTorch cu130 index 安裝（macOS 仍用一般版本）。安裝：`uv sync --extra learning --extra gpu`。
 - **GPU 偵測**：優先用 NVML，失敗時改用 `nvidia-smi`；讀型號、VRAM 總量與可用量、driver、compute capability。偵測失敗記為警告，不當成 0。`doctor` 顯示每張 GPU。
 - **Windows 記憶體限制**：Windows 上 GPU 配置也會佔用系統 commit（實測每配置 512 MiB，commit 就少約 512 MiB）。本機 page file 較小時，實際能用的 VRAM 比顯示的少，因此可用 VRAM 取「GPU 可用量」與「系統 commit 餘量減 1 GiB」的較小者，並給出 `GPU_MEMORY_LIMITED_BY_SYSTEM_COMMIT` 警告。
@@ -141,14 +141,14 @@
 - Preset：`hu-nfsp-gpu-iterative`（3 輪，hidden 512，batch 8192，learner 用 CUDA）。
 - **GPU 測試分級**：`requires_cuda`、`vram_8gb`、`vram_16gb`、`vram_24gb` marker，依偵測結果自動略過。GPU 測試在子程序中執行，避免與其他測試共用 CUDA 狀態。
 - 驗收：
-  - `doctor` 正確顯示 RTX 2070（8 GiB，compute 7.5）；`hu-nfsp-small-gpu` 依當下餘量降級為較小 batch。
+  - `doctor` 正確顯示 8 GiB 的 GPU（compute 7.5）；`hu-nfsp-small-gpu` 依當下餘量降級為較小 batch。
   - 依計畫的 batch 實際在 GPU 上訓練，峰值不超過預估。
   - GPU 與 CPU 訓練同一份資料，結果在誤差 1e-3 內一致；GPU checkpoint 可在 CPU 載入。
   - `hu-nfsp-gpu-iterative` 實跑：13 個 Job 全部成功，3 個 learner 都以 `cuda:0`、batch 8192 執行，約 6 分鐘。
   - 完整測試連續 3 次全部通過。
-- **換成 RTX 5070 Ti（16 GB，compute 12.0，Blackwell）後重新驗證**：
+- **在 16 GB 的 Blackwell GPU（compute 12.0）上重新驗證**：
   - PyTorch 2.14 cu130 原生支援 sm_120，不需要改程式；GPU 測試全部通過，16 GB 分級測試不再略過。
-  - `doctor` 正確顯示 5070 Ti。GPU 空閒時 `hu-nfsp-small-gpu` 以完整 batch（262,144）執行；同時有其他程式（例如遊戲）佔用 GPU 時，依剩餘 VRAM 自動降為 131,072，實測峰值 2.7 GiB，未超過預估。
+  - `doctor` 正確顯示 GPU。GPU 空閒時 `hu-nfsp-small-gpu` 以完整 batch（262,144）執行；同時有其他程式（例如遊戲）佔用 GPU 時，依剩餘 VRAM 自動降為 131,072，實測峰值 2.7 GiB，未超過預估。
   - 在 Compose 驗收中跑完 `hu-nfsp-gpu-iterative`（見 M3b-3）。
 
 ### M3b-1 PostgreSQL
@@ -190,12 +190,12 @@
 - **自動加入**：Coordinator 啟動時建立 TLS 憑證和一個可多次使用的註冊碼（預設 16 次、24 小時），放在共用 volume；Worker 容器啟動時自動註冊，憑證存在自己的 volume，重啟不需重新註冊。
 - **可重複使用的註冊碼**：`coordinator enrollment-token --max-uses N --output <檔案>`；同一個節點重複註冊不會多算次數，超過上限就拒絕，並行註冊也不會超過（SQLite 與 PostgreSQL 都測過）。`node enroll --token-file`、`--bundle <資料夾>`（資料夾內含註冊碼與憑證）。
 - **多個 storage 位址**：容器內的 Worker 用 `storage:9000`，Windows 上的 Worker 用 `127.0.0.1:59000`。Coordinator 設定 `artifacts.endpoints = "host=http://127.0.0.1:59000"`，Worker 設定 `artifacts.endpoint = "host"`，Coordinator 依名稱用對應位址簽名。只能選 Coordinator 設定檔列出的名稱；把網址改到其他主機會因簽名不符被拒絕。
-- **主機 GPU Worker**：從 Compose 取出註冊碼與憑證，在 Windows 上用 `uv run` 執行 Worker，直接使用 5070 Ti。
+- **主機 GPU Worker**：從 Compose 取出註冊碼與憑證，在 Windows 上用 `uv run` 執行 Worker，直接使用主機的 GPU。
 - **小修正**：
   - 設定只讀取 `TABLEFORGE_<區段>__<名稱>` 格式的環境變數，`TABLEFORGE_ROLE` 等其他變數不再被誤判為錯誤。
   - Worker 閒置時只記錄一次 log，不再每秒一行。
   - log 立即輸出，不被緩衝。
-- 驗收（全新 volume，Compose 的 3 個 CPU Worker + Windows 上 5070 Ti 的 GPU Worker，同時跑 `hu-nfsp-cpu-league` 與 `hu-nfsp-gpu-iterative`，第 26 秒 `docker kill` 一個 CPU Worker 容器）：
+- 驗收（全新 volume，Compose 的 3 個 CPU Worker + Windows 主機上的 GPU Worker，同時跑 `hu-nfsp-cpu-league` 與 `hu-nfsp-gpu-iterative`，第 26 秒 `docker kill` 一個 CPU Worker 容器）：
   - 60 個 Job 全部成功（league 47 個、GPU 13 個），沒有 Job 被完成兩次；被中斷的 Job 由其他 Worker 接手。
   - 3 個 CUDA learner 全部由主機 GPU Worker 執行（`cuda:0`、batch 8192），沒有派給 CPU Worker。
   - Artifact 全部直連 storage：上傳 50 MB、下載 198 MB，經過 Coordinator 的流量為 0。
@@ -229,11 +229,11 @@
   - Compose 以 `.env` 的 `BIND_ADDRESS`、`EXTRA_TLS_HOSTS`、`EXTRA_STORAGE_ENDPOINTS` 設定；預設仍只開放本機。
   - `invite create` 會檢查 `--address` 是否包含在憑證內。
 - **測試**：新增 contract tests（SQLite 與 PostgreSQL）：邀請碼只能兌換一次（含 12 個執行緒同時兌換）、過期與作廢、兩種憑證不能互相代用、操作憑證過期與撤銷、cluster_id 在並行下唯一。整合測試涵蓋完整的 `join` 流程、指紋錯誤時不送出密碼、叢集 ID 不符、重複使用邀請碼、viewer 不能修改、Worker 編號不能跨節點使用，以及 doctor 在各種失敗時停在正確的項目。
-- 驗收（以本機區域網路 IP `192.168.18.1` 模擬另一台電腦；Compose 只開放在這個 IP）：
+- 驗收（以本機的區域網路 IP 模擬另一台電腦；Compose 只開放在這個 IP）：
   - 管理者為這個 IP 產生邀請碼；為憑證沒有包含的位址產生邀請碼時被拒絕。
   - 測試者在新的資料目錄 `join`：候選位址 `storage:9000`、`127.0.0.1:59000` 都連不到，自動選用 `tailnet` 位址；同一個邀請碼第二次使用被拒絕。
   - `doctor --coordinator` 6 項全部 OK，storage 直連上傳下載。
-  - 測試者用 `remote` 指令遠端建立並啟動 `hu-nfsp-gpu-iterative` 與 `hu-nfsp-cpu-league`，由自己電腦的 5070 Ti Worker 和 Compose 內的 3 個 CPU Worker 一起執行：13 個與 47 個 Job 全部成功。3 個 CUDA learner 都在測試者的節點上執行，並記錄了 worker_id。檔案全部直連 storage（上傳 50 MB、下載 197 MB）。
+  - 測試者用 `remote` 指令遠端建立並啟動 `hu-nfsp-gpu-iterative` 與 `hu-nfsp-cpu-league`，由自己電腦的 GPU Worker 和 Compose 內的 3 個 CPU Worker 一起執行：13 個與 47 個 Job 全部成功。3 個 CUDA learner 都在測試者的節點上執行，並記錄了 worker_id。檔案全部直連 storage（上傳 50 MB、下載 197 MB）。
   - viewer 可以列出實驗，停止實驗被拒絕（`ROLE_REQUIRED`），也沒有取得節點憑證。
   - 撤銷測試者的節點與操作憑證後，`doctor` 在 session 項目失敗，`remote` 回傳 `UNAUTHENTICATED`。
 - **尚未完成**：與測試者透過 Tailscale 的兩台實體電腦驗收（需要測試者配合）；每個 Worker 綁定一張 GPU；使用者、專案與隔離（完整版）。
@@ -432,7 +432,7 @@
 - 測試 2 個（模型庫的新增、列出、讀取、損壞偵測、ID 驗證、取代與刪除）。
 
 ### R2 Worker 平均分配到各 CCD
-- **問題**：在多 CCD 的 Windows 電腦（例如 Ryzen 9 9950X3D）上，Windows 會把少數幾個忙碌的單執行緒程序集中排在同一個 CCD，造成局部高溫（使用者以 HWiNFO 觀察到單一 CCD 約 98°C、另一個 70–80°C；平均分散時總功耗較高但最高溫較低）。
+- **問題**：在多 CCD 的 Windows 電腦（例如 Ryzen 9 9950X3D）上，Windows 會把少數幾個忙碌的單執行緒程序集中排在同一個 CCD，造成局部高溫（實測單一 CCD 約 98°C、另一個 70–80°C；平均分散時總功耗較高但最高溫較低）。
 - **做法**：`tableforge ui` 啟動 Worker 時，若 CPU 有多個 L3 快取群組，就把 Worker 綁到目前執行中 Worker 最少的那個 CCD（`cpu_topology.spread_masks`）。`.venv\Scripts\python.exe` 是轉接程式，真正的 Python 是它的子程序，因此兩者都會設定（以 Toolhelp 快照找子程序，不開視窗）。
 - 「這台電腦」頁的 Worker 卡片有開關（預設開啟，設定存在資料位置），Worker 列表顯示每個 Worker 在哪個 CCD；只有一個 L3 群組的 CPU 與非 Windows 系統不顯示、不做任何事。
 - 驗收：
@@ -501,7 +501,6 @@
   - 平均 ROI 都為正是因為 hunter 在每個人的對手中：扣掉對 hunter 的那一格後，只有 c1 與 s12 明顯為正。
   - 對 baseline bot：c1 +8.8%、s12 +13.4%（兩者 95% 信賴區間下限 > 0），其他模型 −1.9% ~ +3.0%（不顯著）；baseline bot 對 c1 +2.0%、對 platform +4.9%（不顯著）。
   - 和 C 階段的結論一致：c1 與 s12 是目前最強的兩個 10 BB 模型；s12 對 s11、s13 顯著為正，platform 對 c1 顯著為負（−11.9%）。
-  - 結果檔在研究結果資料夾（`research-results/p2/comparison.json`）。
 
 ### 新格式：9 人桌、下注尺度、多結構訓練（T4、S2、S3；正式訓練完成，驗收比較待做）
 - 規格見 [architecture/08-tournament.md](architecture/08-tournament.md) 第 10 節。使用者決定：先完成程式並用小型實驗驗證，正式訓練（與算力預算）之後再談。
@@ -526,7 +525,6 @@
   - 新格式可以學習，沒有比現行格式差；20,000 場時平均策略都還在 0 附近（T3 的經驗是需要 10 倍以上的訓練量）。
   - 最佳回應（Q 網路）在新格式明顯較強（+38% ~ +57% 對 +20%），更細的下注尺度給了它更多可利用的選項。
   - 混合結構（C）只有約 1/8 的訓練量落在 6 人 25 BB，在這個 benchmark 上仍和專門訓練的 B 差不多，這是 S3 想要的方向；是否真的「一個模型通吃」要等正式訓練後，在多種規格上和各自的專用模型比較。
-  - 結果檔：研究結果資料夾 `research-results/v3-smoke`。
 - **正式訓練（訓練完成，驗收比較待做）**：三組：M（v3 + 多結構）、S（v3，只訓練 25 BB 6 人）、R（現行 v2，對照組），每組 3 個 seed、各 200,000 場，用 T3 的設定，但 SL 容量從 1,000,000 降為 400,000（記憶體不夠同時跑；三組設定相同，比較仍公平）。每個程序 3.2–4.2 小時。驗收：S 在 25 BB 顯著勝過 R；M 不輸 S；用模型比較，M 另在 10／50 BB 量測。
 
   訓練中的 benchmark（6 人 25 BB PKO 對混合 Rule Bot，每點 1,200 場；平均策略 ROI）：
@@ -539,7 +537,7 @@
 
   - 三組都明顯賺錢，而且比 T3 在 10 BB 的 +15–21% 高（25 BB 對 Rule Bot 的空間較大）。
   - S 平均略高於 R（+36% 對 +27%），但每組 3 個 seed 的區間重疊，這個 benchmark 還看不出顯著差異；M 和 S 差不多（+33% 對 +36%），M 在這個規格只用到約 1/8 的訓練量。
-  - 下一步：用模型比較讓 9 個模型在同一張桌直接對打（每對 200 seed，比 benchmark 更敏感；`scripts/model_matrix.py`），並把 M 拿到 10 BB 與 50 BB 量測；結果出來後判定驗收。原本的模型檔已遺失（見 A1 的「研究結果遺失」），以相同設定重新訓練中，結果放 `H:\tableforge-research\v3-retrain`。
+  - 下一步：用模型比較讓 9 個模型在同一張桌直接對打（每對 200 seed，比 benchmark 更敏感；`scripts/model_matrix.py`），並把 M 拿到 10 BB 與 50 BB 量測；結果出來後判定驗收。
 
 ### A0 演算法介面（完成）
 - 規格見 [architecture/01-system.md](architecture/01-system.md) 6.2。`learning/algorithms.py` 的 `AlgorithmSpec`（打法、說明器、牌桌玩家、Worker executor、checkpoint schema）與 Coordinator 端的 `ORCHESTRATORS`（每個演算法的輪次流程）；NFSP 是第一個實作。
@@ -568,7 +566,6 @@
   - PPO 學得很快：15,000 場就達到 NFSP 在 100,000 場以上才有的 +15–21%（ITM 由 23% 升到約 39%）。
   - 但之後三個 seed 都退回 0 附近，熵回升：典型的自我對打循環（策略在幾種打法之間來回追逐）。這正是下一步 MMD 正則化要解決的問題（把策略拉向一個參考策略，讓自我對打收斂），所以 PPO 暫不正式訓練，先做 MMD，再用同一套成績卡比較 PPO、PPO+MMD 與 NFSP。
   - 15,000 場的模型沒有存下來（腳本只存最後一版）；之後的實驗會在每個檢查點存檔。
-  - 結果檔：研究結果資料夾 `research-results/ppo-a1`。
 - 記憶體估計：`scripts/sweep.py` 依 `--v3` 用正確的輸入大小（v3 每筆 549 個數字）估計；同時把子程序的 OpenMP 設為單執行緒並關閉它自己的親和性設定，避免啟動時偶發的「Cannot set thread affinity mask」。
 
 ### T5 MTT 階段模擬（完成）
@@ -596,7 +593,6 @@
 
   - 四組都在 15,000 場左右最好，之後退回 0 附近或略負；60,000 場時沒有一組的信賴區間下限大於 0。「最可能動作」打法在 60,000 場是 −3% ~ +14%，同樣不穩。
   - MMD 和降低學習率都只是讓高點變低，沒有阻止回落。KL 只有 0.01–0.08，參考策略每隔幾千場就跟著換掉，拉力太弱；而且退步的方向在三組都一樣，比較像是「75% 自我對打」本身讓策略離開對 Rule Bot 有利的打法（對手越來越像自己），而不是單純的循環。
-  - 結果檔：研究結果資料夾 `research-results/mmd-p`、`mmd-m`（每個檢查點都有存檔）。
 - **追加實驗：降低自我對打比例**（使用者選擇；同樣設定，學習率 3e-4，只改自我對打比例）：
 
   | 自我對打比例 | 0 | 15,000 | 30,000 | 45,000 | 60,000 場 |
@@ -607,7 +603,6 @@
 
   - **假設不成立**：自我對打越少結果反而越差；0% 時從來沒有超過 −3%，即使對手完全固定。所以回落不是自我對打造成的。
   - 0% 時每場只有學習者一個座位，每次更新的資料量約是 75% 時的 1/4，可能是學不起來的原因之一；但 75% 時「先升後跌」也說明問題在 PPO 本身的學習（例如更新太大、價值與策略共用梯度裁剪、優勢估計的雜訊），還要進一步診斷。
-  - 結果檔：研究結果資料夾 `research-results/ppo-selfplay`（已遺失，見下）。
 - **診斷**（使用者選擇）：`PpoAgent.learn` 另外回報每次更新的策略變化量（`approx_kl`）、被 clip 截掉的比例、價值網路的解釋程度（更新前／後）、優勢的標準差、兩個網路的梯度大小（只讀取，不影響訓練：同一個訓練的 checkpoint sha256 與加入前相同，有測試）；研究腳本每個檢查點輸出平均與最大值，並另存每次更新的明細（`<名稱>-updates.jsonl`）。實驗：P 組設定，3 個 seed 各 30,000 場，每 5,000 場評估。
 
   | 場數 | ROI（3 個 seed） | 策略變化量 KL（平均） | 被截掉比例 | 價值網路解釋程度（更新前→後） |
@@ -620,7 +615,6 @@
   - **更新幅度不算大**：KL 0.008–0.018，截掉比例最多約 19%，在 PPO 的常見範圍內；退回的那一段 KL 和截掉比例確實最高，但只是一般大小，不像是主因。
   - **主因看起來是價值網路幾乎沒學到東西**：更新前只解釋 5–8% 的回報變化，更新後也只有 10–15%；優勢的標準差約 2.3（獎勵 ÷ 0.3 之後），等於優勢幾乎全是雜訊（全下輸贏的運氣）。PPO 一開始能學到「別做明顯的蠢事」，之後就被雜訊帶著漂移。
   - 另外兩個加重因素：價值損失用 Huber（誤差大於 1 時只學到中位數，NFSP 在 P1-b 遇過同樣的問題），而回報因為除以 0.3 而變大；策略與價值共用同一個梯度上限 0.5，價值網路的梯度（約 0.3）比策略（約 0.5）小。
-  - 結果檔：`H:\tableforge-research\ppo-diag`（含每次更新的明細）。
 - **修正實驗**（使用者選擇：價值網路單獨訓練、每批更多資料）：PPO 新增 `value_mode`：`shared`（原做法，預設，位元不變）或 `separate`（價值網路自己的 Adam 與學習率 1e-3、梯度上限 5、均方誤差、每批 8 遍）；實驗設定、研究腳本 `--value-mode`、`--value-lr`、`--value-epochs`。10 BB PKO，每組 3 個 seed、各 60,000 場，每 5,000 場評估：
 
   | 組 | 5,000 | 15,000 | 30,000 | 45,000 | 60,000 場（依機率出手 ROI） | 最可能動作 ROI（60,000） | 價值網路解釋程度 |
@@ -633,8 +627,6 @@
   - **價值網路單獨訓練有效**：解釋程度由 0.13 升到約 0.40，依機率出手的 ROI 不再掉到負的，大多維持在 +2% ~ +8%；「最可能動作」打法在 60,000 場達到 +24% ~ +44%（原做法約 +5% ~ +14%），比 NFSP 在 10 BB 的 T3 結果（平均策略 +15–21%）更高。
   - 每批更多資料單獨使用反而更差（更新次數變成 1/4）；和價值單獨訓練合用時與 V 差不多。
   - 依機率出手的 ROI 仍不高（60,000 場時信賴區間大多含 0），代表策略本身還很隨機（熵約 1），而最可能的動作已經很好。下一步可以加長訓練或降低熵獎勵；也可以在平台與對打時以「最可能動作」為預設打法。
-  - 結果檔：`H:\tableforge-research\ppo-fix`（每 5,000 場的 checkpoint 與每次更新的明細）。
-- **研究結果遺失**：2026-10-10 05:16 研究結果資料夾（`%TEMP%\opencode\research-results`）裡所有檔案被清空（同一時間、所有子資料夾，資料夾本身還在；看起來是 Windows 暫存檔清理），包括 v3 正式訓練的 9 個模型與各實驗的原始結果。數字都已記在本文件；模型庫（`%LOCALAPPDATA%\TableForge`）沒有受影響。之後研究結果改放 `H:\tableforge-research`（使用者選擇）；v3 的 9 個模型重新訓練中（見上）。
 
 ### H1 匯入 GG／Natural8 牌譜（完成，**尚未用真實匯出檔驗證**）
 - 依 GG 公開的文字牌譜格式（和 PokerStars 相同的版面）撰寫：`poker/hand_history.py` 讀取錦標賽手牌的標頭（賽事、等級、盲注、ante、日期）、座位與籌碼（含座位上的 bounty 金額）、ante 與盲注、發到的手牌、各街動作、公牌、攤牌、未跟注退回與彩池分配。UI 與文件都標明「尚未用真實牌譜驗證」，`verified_against_real_exports` 為 false。
@@ -668,7 +660,6 @@
     - 繼續只和目標訓練 10,000–40,000 場：對目標的最佳回應在 −18% ~ +19% 之間大幅波動（c1 第二組 20,000 場 +18.7%，其他多數點不顯著），沒有超過 round 0；平均策略對目標約 −7% ~ +5%。只打同一個對手時 Q 網路很快過度擬合、忘記原本的優勢，這個訓練設定不適合做為更強的剝削者。
   - **對 ICM Push/Fold Nash baseline bot**：每個決策都要依當下籌碼重新求解，快取命中率低，1 小時只完成 round 0（最佳回應 −15% 與 −54%，兩個 seed 差異大），已停止。量 baseline bot 的可剝削程度需要預先算好的策略表，留待之後。
 - 結論：目前最強的兩個 10 BB 模型，**平均策略可被剝削至少約 16–26% ROI**（以它們自己的最佳回應計），c1 比 s12 更容易被剝削。這和 S1 看到的「面對全下跟注過緊、幾乎不打 push/fold」一致，是之後訓練要改進的方向；PSRO／族群訓練（第 7 項）會直接用這個量值。
-- 結果檔：研究結果資料夾 `research-results/s4`（從零開始）、`research-results/s4-warm`（從目標開始）。
 
 ### C 對強對手的表現（達到驗收，有保留）
 - **驗收條件**（使用者定）：對模型池整體 ROI 的 95% 信賴區間下限 > 0；對混合 Rule Bot 不明顯退化。每個舊模型的對戰結果都記錄，但不要求每一個都不輸（策略之間可能互相剋制）。
@@ -1083,7 +1074,7 @@ P1-a（v2 輸入）→ T1（錦標賽環境）─┬→ P1-b（HU cash 長時間
 ## 延後項目
 
 ### CUDA Worker 容器
-這台電腦的 Docker Desktop 使用 Hyper-V 後端，無法把 GPU 交給容器（只有 WSL2 後端支援 `--gpus`）。另外，Docker 的網路層（gVisor）同時下載多個數百 MB 的 CUDA 套件時會停住，建置 `worker-cuda` 兩次都失敗。目前改在主機上執行 GPU Worker。要驗證 CUDA 容器時：
+Docker Desktop 的 Hyper-V 後端無法把 GPU 交給容器（只有 WSL2 後端支援 `--gpus`）。另外，Docker 的網路層（gVisor）同時下載多個數百 MB 的 CUDA 套件時會停住，建置 `worker-cuda` 兩次都失敗。目前改在主機上執行 GPU Worker。要驗證 CUDA 容器時：
 1. Docker Desktop 改用 WSL2 後端，以 `%USERPROFILE%\.wslconfig` 設定記憶體上限。
 2. 先在主機下載好 CUDA 套件，建置時從本機安裝，不經過 Docker 網路。
 3. `docker run --gpus all tableforge/worker-cuda doctor` 確認看得到 GPU，再加入 Compose 跑一次 GPU 實驗。
@@ -1100,7 +1091,7 @@ uv run tableforge doctor
 確認記憶體偵測正確、沒有 NVIDIA GPU 時 GPU workload 顯示 UNSUPPORTED。另外用相同 seed 在兩台電腦各跑同一個 simulation Job，比對輸出 hash。
 
 ### 兩節點實機驗收
-兩台電腦目前不在同一個網路，Windows 沒有 Wi-Fi，需要先安裝 Tailscale。驗收項目：Mac 領取並完成 Job；中途中斷後由另一個 Worker 接手；結果不重複計入；GPU Job 不派給 Mac。
+需要兩台透過 Tailscale 互連的電腦。驗收項目：Mac 領取並完成 Job；中途中斷後由另一個 Worker 接手；結果不重複計入；GPU Job 不派給 Mac。
 
 ## 與規格的差異
 
