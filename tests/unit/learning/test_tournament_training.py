@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import math
+import random
 
 import pytest
 
@@ -14,10 +16,14 @@ from tableforge.learning.buffers import Transition  # noqa: E402
 from tableforge.learning.nfsp import NfspAgent, NfspConfig  # noqa: E402
 from tableforge.learning.tournament_training import (  # noqa: E402
     FrozenTournamentPlayer,
+    allin_expected_equities,
     frozen_player,
     play_training_tournament,
     tournament_self_play_train,
 )
+from tableforge.poker.betting import Action, LegalActions, Street  # noqa: E402
+from tableforge.poker.cards import full_deck  # noqa: E402
+from tableforge.poker.table import TableHand, TableObservation, TableRunner  # noqa: E402
 from tableforge.poker.tournament import (  # noqa: E402
     BountyConfig,
     Tournament,
@@ -177,3 +183,71 @@ def test_training_runs_and_the_frozen_policy_plays_benchmarks() -> None:
         benchmark.prize_ev.mean + benchmark.bounty_ev.mean - 1.0,
         abs_tol=1e-9,
     )
+
+
+class TurnShover:
+    """Checks or calls until the turn, then moves all in (and calls any all-in)."""
+
+    def act(self, observation: TableObservation, legal: LegalActions) -> Action:
+        if observation.street >= Street.TURN and legal.max_raise_to is not None:
+            return Action.raise_to(legal.max_raise_to)
+        return Action.check() if legal.can_check else Action.call()
+
+
+def test_allin_expected_equity_is_the_average_over_every_river() -> None:
+    tournament = Tournament(pko(), 5)
+    started = tournament.begin_hand([TurnShover()] * 6)
+    result = TableRunner().run(started.hand, started.agents)
+    hand = started.hand
+    info = started.infos[0]
+    players = list(range(6))
+
+    expected = allin_expected_equities(tournament, started, players, 100, random.Random(0))
+
+    # Independently: replay the hand with every possible river and average the equities.
+    assert hand.unseen_board_cards == 1 and expected is not None
+    dealt = {card for pair in hand.hole_cards for card in pair} | set(hand.runout[:4])
+    rivers = [card for card in full_deck() if card not in dealt]
+    totals = [0.0] * 6
+    for river in rivers:
+        replay = TableHand(
+            started.stacks_before,
+            hand.button,
+            info.small_blind,
+            info.big_blind,
+            seed=0,
+            big_blind_ante=info.ante,
+            cards=(hand.hole_cards, (*hand.runout[:4], river)),
+        )
+        for action in hand.action_history:
+            replay.act(action.actor, Action(action.action_type, action.raise_to))
+        assert replay.result is not None
+        branch = copy.deepcopy(tournament)
+        branch.finish_hand(started, replay.result)
+        for player in players:
+            totals[player] += branch.equity(player)
+    for player in players:
+        assert math.isclose(expected[player], totals[player] / len(rivers), abs_tol=1e-9)
+    # The real tournament is untouched until the real result is applied.
+    tournament.finish_hand(started, result)
+    assert len(rivers) == 52 - 12 - 4
+
+
+def test_allin_rewards_keep_the_game_and_change_only_all_in_hands() -> None:
+    changed = 0
+    for seed in range(6):
+        plain = play_training_tournament(agent(seed), pko(), seed, lambda item: None, 0.5)
+        adjusted = play_training_tournament(
+            agent(seed), pko(), seed, lambda item: None, 0.5, allin_samples=16
+        )
+        assert adjusted.results == plain.results
+        assert adjusted.hands == plain.hands and adjusted.lineup == plain.lineup
+        for player in plain.learner_players:
+            assert len(adjusted.rewards[player]) == len(plain.rewards[player])
+            changed += sum(
+                not math.isclose(a, b, abs_tol=1e-12)
+                for a, b in zip(plain.rewards[player], adjusted.rewards[player], strict=True)
+            )
+    assert changed > 0
+    with pytest.raises(ValueError):
+        play_training_tournament(agent(), pko(), 1, lambda item: None, allin_samples=-1)

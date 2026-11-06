@@ -29,6 +29,7 @@ def collect(
     hand_horizon: bool = False,
     opponents: OpponentPool | None = None,
     on_progress: Callable[[int], None] | None = None,
+    allin_samples: int = 0,
 ) -> tuple[list[Transition], int]:
     """Experience of `tournaments` training tournaments, episode by episode; and the hands."""
     transitions: list[Transition] = []
@@ -50,6 +51,7 @@ def collect(
             hand_horizon=hand_horizon,
             opponents=opponents,
             seat_sink=seat_sink,
+            allin_samples=allin_samples,
         )
         hands += episode.hands
         for player in sorted(seats):
@@ -81,6 +83,7 @@ def ppo_self_play_train(
     hand_horizon: bool = False,
     opponents: OpponentPool | None = None,
     on_progress: Callable[[int], None] | None = None,
+    allin_samples: int = 0,
 ) -> PpoTrainingReport:
     """Alternate: play `tournaments_per_update` tournaments, then one PPO update on them."""
     if tournaments_per_update < 1:
@@ -99,6 +102,7 @@ def ppo_self_play_train(
             self_play_share,
             hand_horizon,
             opponents,
+            allin_samples=allin_samples,
         )
         played += batch
         hands += batch_hands

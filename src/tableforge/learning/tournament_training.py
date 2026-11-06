@@ -13,10 +13,20 @@ busting or the end of the tournament is terminal, so one seat's rewards add up t
 final prize plus bounty cash minus its starting equity: the final result plus a constant.
 This is potential-based shaping; it does not change which strategy is best, it only
 reports progress after every hand instead of once per tournament.
+
+All-in expected value (`allin_samples`): when the board cards that decide a showdown were
+dealt after everyone left was all in, the hand's reward uses the equity averaged over those
+cards (`allin_expected_equities`) instead of the equity of the cards that came; the next
+hand starts from the real equity again. The difference has mean zero given the cards
+nobody could act on, so the expected return of every decision is unchanged while most of
+the card luck leaves the rewards (they then no longer add up to the final result exactly).
 """
 
 from __future__ import annotations
 
+import copy
+import itertools
+import math
 import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -26,8 +36,14 @@ from tableforge.learning.buffers import Transition
 from tableforge.learning.nfsp import NfspAgent
 from tableforge.learning.opponents import OpponentPool, PoolMember
 from tableforge.poker.betting import Action, LegalActions
-from tableforge.poker.table import TableAgent, TableObservation, TableRunner
-from tableforge.poker.tournament import Tournament, TournamentConfig, TournamentHandInfo
+from tableforge.poker.cards import full_deck
+from tableforge.poker.table import TableAgent, TableObservation, TableResult, TableRunner
+from tableforge.poker.tournament import (
+    StartedHand,
+    Tournament,
+    TournamentConfig,
+    TournamentHandInfo,
+)
 from tableforge.poker.tournament_sampler import TournamentSampler
 from tableforge.worker.tournament import rule_bot
 
@@ -78,8 +94,9 @@ class LearningSeat:
         self.pending = _Pending(state, mask, int(self.agent.last_choice))
         return action
 
-    def after_hand(self, equity: float, finished: bool) -> None:
-        self.reward += equity - self.equity
+    def after_hand(self, equity: float, finished: bool, expected: float | None = None) -> None:
+        """`expected`: the all-in expected equity to reward instead of `equity`."""
+        self.reward += (equity if expected is None else expected) - self.equity
         self.equity = equity
         if self.hand_horizon and not finished and self.pending is not None:
             self._emit(None, None)
@@ -132,12 +149,14 @@ def play_training_tournament(
     hand_horizon: bool = False,
     opponents: OpponentPool | None = None,
     seat_sink: Callable[[int], Callable[[Transition], None]] | None = None,
+    allin_samples: int = 0,
 ) -> TournamentEpisode:
     """Play one tournament with the learning agent in one or more seats.
 
     With a `TournamentSampler` the tournament of this seed is drawn from it (S3).
     `seat_sink(player)` gives each learning seat its own sink (PPO needs every seat's
-    decisions in order); otherwise all seats share `sink`.
+    decisions in order); otherwise all seats share `sink`. `allin_samples` > 0 rewards
+    all-in showdowns by their expected value over that many board runouts (see above).
     """
     if isinstance(config, TournamentSampler):
         config = config.config(seed)
@@ -147,6 +166,8 @@ def play_training_tournament(
         raise ValueError("self_play_share must be between 0 and 1")
     if not agent.encoder.supports_tables:
         raise ValueError(f"{agent.encoder.schema} cannot play tournaments")
+    if allin_samples < 0:
+        raise ValueError("allin_samples must not be negative")
     rng = random.Random(f"{seed}:lineup")
     learner = seed % config.players
     lineup: list[str] = []
@@ -179,14 +200,29 @@ def play_training_tournament(
     starting_equity = seats[0].equity
     runner = TableRunner()
     agent.training = True
+    expected: dict[int, float] | None = None
     while not tournament.complete:
         agent.start_hand()
-        tournament.play_hand(agents, runner)
+        if allin_samples:
+            started = tournament.begin_hand(agents)
+            hand_result = runner.run(started.hand, started.agents)
+            expected = allin_expected_equities(
+                tournament,
+                started,
+                [seat.player for seat in seats if not seat.done],
+                allin_samples,
+                random.Random(f"{seed}:{tournament.hand_number}:allin"),
+            )
+            tournament.finish_hand(started, hand_result)
+        else:
+            tournament.play_hand(agents, runner)
         if not tournament.complete:
             for seat in seats:
                 if not seat.done:
                     seat.after_hand(
-                        tournament.equity(seat.player), tournament.stacks[seat.player] == 0
+                        tournament.equity(seat.player),
+                        tournament.stacks[seat.player] == 0,
+                        None if expected is None else expected[seat.player],
                     )
         if after_hand is not None:
             after_hand()
@@ -194,7 +230,11 @@ def play_training_tournament(
     result = tournament.finish()
     for seat in seats:
         if not seat.done:
-            seat.after_hand(tournament.equity(seat.player), True)
+            seat.after_hand(
+                tournament.equity(seat.player),
+                True,
+                None if expected is None else expected[seat.player],
+            )
     agent.hand_info = None
     if opponents is not None:
         for player, member in drawn.items():
@@ -207,6 +247,47 @@ def play_training_tournament(
         rewards={seat.player: tuple(seat.rewards) for seat in seats},
         starting_equity=starting_equity,
     )
+
+
+def allin_expected_equities(
+    tournament: Tournament,
+    started: StartedHand,
+    players: Sequence[int],
+    samples: int,
+    rng: random.Random,
+) -> dict[int, float] | None:
+    """Each player's equity after this hand, averaged over the board cards nobody could act
+    on; None when the hand had no such cards (a fold, or the betting reached the river).
+
+    Call after the hand is played and before `tournament.finish_hand`. Every runout of the
+    unseen cards (from the cards no player holds) is enumerated when there are at most
+    `samples` of them, otherwise `samples` runouts are drawn: either way the average is an
+    unbiased estimate. Runouts with the same chips and pot winners are applied once.
+    """
+    hand = started.hand
+    unseen = hand.unseen_board_cards
+    if unseen == 0 or not players:
+        return None
+    known = hand.runout[: 5 - unseen]
+    dealt = {card for pair in hand.hole_cards for card in pair} | set(known)
+    deck = [card for card in full_deck() if card not in dealt]
+    if math.comb(len(deck), unseen) <= samples:
+        boards = [known + combo for combo in itertools.combinations(deck, unseen)]
+    else:
+        boards = [known + tuple(rng.sample(deck, unseen)) for _ in range(samples)]
+    outcomes: dict[object, tuple[TableResult, int]] = {}
+    for board in boards:
+        outcome = hand.showdown_with(board)
+        key = (outcome.final_stacks, tuple(pot.winners for pot in outcome.pots))
+        previous = outcomes.get(key)
+        outcomes[key] = (outcome, 1 if previous is None else previous[1] + 1)
+    totals = dict.fromkeys(players, 0.0)
+    for outcome, count in outcomes.values():
+        branch = copy.deepcopy(tournament)
+        branch.finish_hand(started, outcome)
+        for player in players:
+            totals[player] += count * branch.equity(player)
+    return {player: total / len(boards) for player, total in totals.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +311,7 @@ def tournament_self_play_train(
     hand_horizon: bool = False,
     opponents: OpponentPool | None = None,
     history_every: int = 0,
+    allin_samples: int = 0,
 ) -> TournamentTrainingReport:
     """Play `tournaments` training tournaments, training after every few hands.
 
@@ -258,6 +340,7 @@ def tournament_self_play_train(
             after_hand,
             hand_horizon=hand_horizon,
             opponents=opponents,
+            allin_samples=allin_samples,
         )
         if (
             opponents is not None

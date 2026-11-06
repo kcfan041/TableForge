@@ -470,6 +470,31 @@ class TableHand:
     def _settle_if_complete(self) -> None:
         if self.betting.status is BettingStatus.ACTIVE:
             return
+        self.result = self._settlement((*self._flop, self._turn, self._river))
+
+    @property
+    def unseen_board_cards(self) -> int:
+        """Board cards dealt after the last decision of a finished showdown (0 to 5).
+
+        Those cards alone decide the showdown: nobody could act on them (everyone left was
+        all in). 0 when the hand ended by a fold or the betting reached the river."""
+        if self.betting.status is not BettingStatus.SHOWDOWN:
+            return 0
+        if not self.action_history:
+            return 5
+        return {Street.PREFLOP: 5, Street.FLOP: 2, Street.TURN: 1}.get(
+            self.action_history[-1].street, 0
+        )
+
+    def showdown_with(self, board: Sequence[Card]) -> TableResult:
+        """The result of this showdown had the board been `board` (all-in expected value).
+
+        Only the cards in `unseen_board_cards` may differ from the real board."""
+        if self.betting.status is not BettingStatus.SHOWDOWN:
+            raise ValueError("only a finished showdown can be run out again")
+        return self._settlement(tuple(board))
+
+    def _settlement(self, board: tuple[Card, ...]) -> TableResult:
         seats = self.betting.seats
         contributions = [state.total_contribution for state in seats]
         dead_money = self.betting.dead_money
@@ -487,7 +512,6 @@ class TableHand:
             winners: tuple[int, ...] = (winner,)
             ended_by_fold = True
         else:
-            board = (*self._flop, self._turn, self._river)
             live = [index for index, state in enumerate(seats) if not state.folded]
             for index in live:
                 ranks[index] = evaluate((*self.hole_cards[index], *board))
@@ -526,7 +550,7 @@ class TableHand:
             raise AssertionError("chip conservation violated")
         if sum(payouts) != sum(contributions) + dead_money:
             raise AssertionError("payouts do not match the pot")
-        self.result = TableResult(
+        return TableResult(
             payouts=tuple(payouts),
             final_stacks=final_stacks,
             winners=winners,

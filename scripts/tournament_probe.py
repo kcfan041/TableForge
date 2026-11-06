@@ -76,6 +76,12 @@ def main() -> None:
     parser.add_argument("--save", default="", help="write the final checkpoint here")
     parser.add_argument("--sl-capacity", type=int, default=100_000)
     parser.add_argument("--hand-horizon", action="store_true")
+    parser.add_argument(
+        "--allin-samples",
+        type=int,
+        default=0,
+        help="reward all-in showdowns by their expected value over this many runouts",
+    )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--tag", default="")
@@ -226,6 +232,7 @@ def main() -> None:
                 hand_horizon=args.hand_horizon,
                 opponents=opponents,
                 history_every=args.history_every,
+                allin_samples=args.allin_samples,
             )
             trained += per_stage
             hands += report.hands
@@ -370,6 +377,7 @@ def _ppo(args: argparse.Namespace, config: object) -> None:
                 tournaments_per_update=args.ppo_tournaments,
                 self_play_share=args.self_play,
                 hand_horizon=args.hand_horizon,
+                allin_samples=args.allin_samples,
             )
             trained += per_stage
             hands += report.hands

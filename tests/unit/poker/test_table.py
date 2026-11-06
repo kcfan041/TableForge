@@ -391,3 +391,30 @@ def test_replay_is_deterministic(case: TableCase) -> None:
 
     assert first.action_history == second.action_history
     assert a == b
+
+
+# --- all-in runouts ----------------------------------------------------------------------
+
+
+def test_cards_dealt_after_an_all_in_can_be_run_out_again() -> None:
+    hand = TableHand([100] * 3, 0, 1, 2, seed=8)
+    play(hand, [(0, Action.raise_to(100)), (1, Action.call()), (2, Action.call())])
+
+    assert hand.unseen_board_cards == 5
+    assert hand.showdown_with(hand.runout) == hand.result
+    other = hand.showdown_with((*hand.runout[:3], *reversed(hand.runout[3:])))
+    assert sum(other.final_stacks) == 300
+
+
+def test_no_cards_are_unseen_after_a_fold_or_river_betting() -> None:
+    folded = TableHand([100] * 4, 0, 1, 2, seed=8)
+    play(folded, [(3, Action.fold()), (0, Action.fold()), (1, Action.fold())])
+    checked = TableHand([100, 100], 0, 1, 2, seed=3)
+    play(checked, [(0, Action.call()), (1, Action.check())])
+    for _ in range(3):
+        play(checked, [(1, Action.check()), (0, Action.check())])
+
+    assert folded.unseen_board_cards == 0
+    assert checked.result is not None and checked.unseen_board_cards == 0
+    with pytest.raises(ValueError):
+        folded.showdown_with(folded.runout)
