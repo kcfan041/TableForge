@@ -70,10 +70,13 @@ def test_a_new_algorithm_plugs_in_without_core_changes(fake: AlgorithmSpec, tmp_
 
     explainer = ModelSeats(lambda: library)(SeatChoice("model", "tight-fake"), 0)
     member = model_member("model:tight-fake", b"tight", algorithm="fake", mode="default")
+    # Without a mode the algorithm's own default is used (not NFSP's "average").
+    unnamed = model_member("model:tight-fake", b"tight", algorithm="fake")
 
     assert play_modes("fake") == [{"key": "default", "label": "Default", "description": ""}]
     assert explainer.play_modes[0].key == "rule"
     assert member.build(3).__class__.__name__ == "TightBot"
+    assert unnamed.build(3).__class__.__name__ == "TightBot"
     assert "tableforge.v1.FakeJobPayload" in all_executors(lambda artifact: b"")
 
 

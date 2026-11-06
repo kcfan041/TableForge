@@ -114,10 +114,12 @@ def model_member(
     name: str,
     bundle: bytes,
     kind: str = "model",
-    mode: str = "average",
+    mode: str = "",
     algorithm: str = "nfsp",
 ) -> PoolMember:
-    """A frozen model; every seat shares one set of weights (acting is stateless per seat)."""
+    """A frozen model; every seat shares one set of weights (acting is stateless per seat).
+
+    An empty `mode` is the algorithm's default play mode (NFSP average, PPO sample)."""
     from tableforge.learning.algorithms import algorithm as spec_for
 
     spec = spec_for(algorithm)

@@ -225,7 +225,7 @@ def build_members(
             member = model_member(
                 competitor.name,
                 fetch(competitor),
-                mode=competitor.mode or "average",
+                mode=competitor.mode,
                 algorithm=competitor.algorithm,
             )
         member.name = competitor.label
